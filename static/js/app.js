@@ -374,43 +374,60 @@ async function renderDevelopmentCreate() {
   panel.innerHTML = `
     <h2>Development / Create</h2>
 
-    <div class="field" id="dev-company-field">
-      <label for="dev-company">Company</label>
-      <div class="combobox" id="dev-company-wrap">
-        <input id="dev-company" type="text" autocomplete="off"
-               placeholder="Type ≥ 3 letters to search…" disabled />
-        <input type="hidden" id="dev-company-id" />
-        <ul class="combobox-list" id="dev-company-list" role="listbox" hidden></ul>
+    <div class="dev-2col">
+      <!-- 1st part: company + member -->
+      <div class="dev-part" id="dev-part1">
+        <h3 class="subhead">1 · Company &amp; Member</h3>
+
+        <div class="field" id="dev-company-field">
+          <label for="dev-company">
+            Company
+            <button class="icon-btn" id="dev-refresh" type="button" title="Refresh customer database">⟳</button>
+          </label>
+          <div class="combobox" id="dev-company-wrap">
+            <input id="dev-company" type="text" autocomplete="off"
+                   placeholder="Type ≥ 3 letters to search…" disabled />
+            <input type="hidden" id="dev-company-id" />
+            <ul class="combobox-list" id="dev-company-list" role="listbox" hidden></ul>
+          </div>
+        </div>
+
+        <div class="field" id="dev-member-field">
+          <label for="dev-member">Member</label>
+          <select id="dev-member" disabled>
+            <option value="">— select a company first —</option>
+          </select>
+        </div>
+
+        <p class="muted small" id="dev-part1-note">Pick a company and member to unlock the next part.</p>
       </div>
-      <p class="ctx" id="dev-company-link" hidden></p>
-    </div>
 
-    <div class="field" id="dev-member-field">
-      <label for="dev-member">Member</label>
-      <select id="dev-member" disabled>
-        <option value="">— select a company first —</option>
-      </select>
-    </div>
+      <!-- 2nd part: product type (locked until 1st part is complete) -->
+      <div class="dev-part locked" id="dev-part2">
+        <h3 class="subhead">2 · Product Type</h3>
 
-    <div class="field">
-      <label for="dev-product">Product type</label>
-      <select id="dev-product">
-        ${PRODUCT_TYPES.map((p) => `<option value="${escapeHtml(p)}">${escapeHtml(p)}</option>`).join("")}
-      </select>
-    </div>
+        <div class="field">
+          <label for="dev-product">Product type</label>
+          <select id="dev-product" disabled>
+            ${PRODUCT_TYPES.map((p) => `<option value="${escapeHtml(p)}">${escapeHtml(p)}</option>`).join("")}
+          </select>
+        </div>
 
-    <div class="actions">
-      <button class="btn ghost" id="dev-reset" type="button">Reset</button>
-      <button class="btn primary" id="dev-next" type="button" disabled>Next</button>
-    </div>
+        <div class="actions">
+          <button class="btn ghost" id="dev-reset" type="button">Reset</button>
+          <button class="btn primary" id="dev-next" type="button" disabled>Next</button>
+        </div>
 
-    <p class="muted small" id="dev-note">Lower part to be advised.</p>
+        <p class="muted small" id="dev-note">Complete part 1 to enable.</p>
+      </div>
+    </div>
   `;
 
+  const part1 = panel.querySelector("#dev-part1");
+  const part2 = panel.querySelector("#dev-part2");
   const searchEl = panel.querySelector("#dev-company");
   const hiddenEl = panel.querySelector("#dev-company-id");
   const listEl   = panel.querySelector("#dev-company-list");
-  const linkEl   = panel.querySelector("#dev-company-link");
   const memberEl = panel.querySelector("#dev-member");
   const productEl = panel.querySelector("#dev-product");
   const nextBtn  = panel.querySelector("#dev-next");
@@ -426,22 +443,59 @@ async function renderDevelopmentCreate() {
   }
   searchEl.disabled = false;
 
+  // refresh = re-fetch latest companies + members from the customer database
+  panel.querySelector("#dev-refresh").addEventListener("click", async (e) => {
+    const btn = e.currentTarget;
+    btn.disabled = true;
+    btn.classList.add("spinning");
+    const prevId = hiddenEl.value;
+    try {
+      companies = await fetchJson(API + "/api/companies");
+      // if a company was chosen, reload its members so the list is current
+      if (prevId !== "") {
+        const stillThere = companies.some((c) => String(c.id) === String(prevId));
+        if (stillThere) {
+          await loadMembers(Number(prevId));
+        } else {
+          resetCompanySelection();
+        }
+      }
+      // re-run the current search to refresh matches
+      const q = searchEl.value.trim().toLowerCase();
+      const matches = companies.filter((c) => fuzzyMatch(c.name, q)).slice(0, 12);
+      renderOptions(matches);
+      listEl.hidden = false;
+      updateNextState();
+    } catch (err) {
+      alert("Refresh failed: " + err.message);
+    } finally {
+      btn.disabled = false;
+      btn.classList.remove("spinning");
+    }
+  });
+
   // -- helpers --
   const updateNextState = () => {
-    const ok = hiddenEl.value !== "" && memberEl.value !== "" && productEl.value !== "";
+    const part1Done = hiddenEl.value !== "" && memberEl.value !== "";
+    // unlock part 2 once part 1 is complete
+    part2.classList.toggle("locked", !part1Done);
+    productEl.disabled = !part1Done;
+    if (part1Done) {
+      panel.querySelector("#dev-part1-note").textContent = "Part 1 complete ✓";
+      panel.querySelector("#dev-note").textContent = "Ready — press Next to continue.";
+    } else {
+      panel.querySelector("#dev-part1-note").textContent = "Pick a company and member to unlock the next part.";
+      panel.querySelector("#dev-note").textContent = "Complete part 1 to enable.";
+    }
+    const ok = part1Done && productEl.value !== "";
     nextBtn.disabled = !ok;
   };
 
-  const showLink = (company) => {
-    linkEl.hidden = false;
-    linkEl.innerHTML =
-      `Selected: <strong>${escapeHtml(company.name)}</strong> ` +
-      `<a class="inline-link" href="#" data-view="${company.id}">` +
-      `view in customer database →</a>`;
-    linkEl.querySelector("[data-view]").addEventListener("click", (e) => {
-      e.preventDefault();
-      openTab("customer-view");
-    });
+  const resetCompanySelection = () => {
+    hiddenEl.value = "";
+    memberEl.value = "";
+    memberEl.disabled = true;
+    memberEl.innerHTML = `<option value="">— select a company first —</option>`;
   };
 
   const loadMembers = async (companyId) => {
@@ -480,7 +534,6 @@ async function renderDevelopmentCreate() {
     hiddenEl.value = id;
     searchEl.value = name;
     listEl.hidden = true;
-    showLink(companies.find((c) => c.id === id) || { name });
     memberEl.value = "";
     loadMembers(id);
     updateNextState();
@@ -489,7 +542,6 @@ async function renderDevelopmentCreate() {
   searchEl.addEventListener("input", () => {
     const q = searchEl.value.trim().toLowerCase();
     hiddenEl.value = "";
-    linkEl.hidden = true;
     memberEl.value = "";
     memberEl.disabled = true;
     memberEl.innerHTML = `<option value="">— select a company first —</option>`;
@@ -562,9 +614,11 @@ async function fetchAnchoredCompany(id) {
 // View state
 let viewCustomers = [];      // raw data from /api/customers
 let viewFilters = {};         // {company, name, email, title, tel}
+let viewSelected = new Set(); // selected company ids (batch delete)
 
 async function renderCustomerView() {
   panel.innerHTML = '<h2>Customer / View</h2><p class="empty">Loading…</p>';
+  viewSelected.clear();
   try {
     viewCustomers = await fetchJson(API + "/api/customers");
     if (!viewCustomers.length) {
@@ -629,6 +683,19 @@ function paintView() {
   const filtersActive = Object.values(viewFilters).some((v) => v && v.trim());
   const shown = filtersActive ? filtered : rows;
 
+  // Company rows: one per company, with member count.
+  const companyRows = viewCustomers
+    .map((c) => ({
+      id: c.id,
+      name: c.name,
+      emailSuffix: c.email_suffix,
+      memberCount: (c.members || []).length,
+    }))
+    .filter((c) =>
+      fuzzyMatch(c.name, viewFilters.company) &&
+      fuzzyMatch(c.emailSuffix, viewFilters.email)
+    );
+
   const searchRow = cols.map((c) =>
     `<th class="search-th">
        <input class="col-search" data-key="${c.key}" type="text"
@@ -653,11 +720,58 @@ function paintView() {
       </tr>`;
   }).join("") || `<tr><td colspan="6" class="muted">No matches.</td></tr>`;
 
+  const companyBody = companyRows.map((c) => {
+    const checked = viewSelected.has(c.id);
+    return `
+      <tr data-company="${c.id}" class="${checked ? "selected" : ""}">
+        <td>
+          <label class="cb-cell">
+            <input type="checkbox" class="row-select" data-id="${c.id}" ${checked ? "checked" : ""} />
+            <strong>${escapeHtml(c.name)}</strong>
+            <span class="muted">@${escapeHtml(c.emailSuffix)}</span>
+          </label>
+        </td>
+        <td>${c.memberCount} member${c.memberCount === 1 ? "" : "s"}</td>
+        <td class="row-actions">
+          <button class="icon-btn" data-edit="${c.id}" title="Edit">✎</button>
+          <button class="icon-btn danger" data-del-company="${c.id}" title="Delete company">🗑</button>
+        </td>
+      </tr>`;
+  }).join("") || `<tr><td colspan="3" class="muted">No companies.</td></tr>`;
+
+  const allCompanyIds = companyRows.map((c) => c.id);
+  const allChecked = allCompanyIds.length > 0 && allCompanyIds.every((id) => viewSelected.has(id));
+
   panel.innerHTML = `
     <div class="view-head">
       <h2>Customer / View</h2>
-      <button class="btn ghost" id="export-xlsx" type="button">Export Excel</button>
+      <div class="view-actions">
+        <button class="btn ghost" id="export-xlsx" type="button">Export Excel</button>
+      </div>
     </div>
+
+    <div class="batch-bar" id="batch-bar">
+      <label class="cb-cell">
+        <input type="checkbox" id="select-all" ${allChecked ? "checked" : ""} />
+        <span>Select all (${companyRows.length})</span>
+      </label>
+      <span class="muted batch-count" id="batch-count">${viewSelected.size} selected</span>
+      <button class="btn danger" id="batch-delete" type="button" disabled>Delete selected</button>
+    </div>
+
+    <h3 class="subhead">Companies</h3>
+    <table class="grid company-grid" id="company-grid">
+      <thead>
+        <tr class="head-row">
+          <th>Company</th>
+          <th>Members</th>
+          <th class="actions-th">Actions</th>
+        </tr>
+      </thead>
+      <tbody>${companyBody}</tbody>
+    </table>
+
+    <h3 class="subhead">Members</h3>
     <table class="grid" id="customer-grid">
       <thead>
         <tr class="head-row">${cols.map((c) => `<th>${c.label}</th>`).join("")}<th></th></tr>
@@ -677,12 +791,87 @@ function paintView() {
 
   panel.querySelector("#export-xlsx").addEventListener("click", () => exportExcel(shown));
 
+  // --- batch selection ---
+  const selectAll = panel.querySelector("#select-all");
+  const batchDelete = panel.querySelector("#batch-delete");
+  const batchCount = panel.querySelector("#batch-count");
+
+  const syncBatchUI = () => {
+    batchCount.textContent = viewSelected.size + " selected";
+    batchDelete.disabled = viewSelected.size === 0;
+    const ids = companyRows.map((c) => c.id);
+    selectAll.checked = ids.length > 0 && ids.every((id) => viewSelected.has(id));
+  };
+
+  panel.querySelectorAll(".row-select").forEach((cb) => {
+    cb.addEventListener("change", () => {
+      const id = Number(cb.dataset.id);
+      if (cb.checked) viewSelected.add(id);
+      else viewSelected.delete(id);
+      const tr = cb.closest("tr");
+      if (tr) tr.classList.toggle("selected", cb.checked);
+      syncBatchUI();
+    });
+  });
+
+  selectAll.addEventListener("change", () => {
+    if (selectAll.checked) {
+      companyRows.forEach((c) => viewSelected.add(c.id));
+    } else {
+      companyRows.forEach((c) => viewSelected.delete(c.id));
+    }
+    panel.querySelectorAll(".row-select").forEach((cb) => {
+      cb.checked = selectAll.checked;
+      const tr = cb.closest("tr");
+      if (tr) tr.classList.toggle("selected", selectAll.checked);
+    });
+    syncBatchUI();
+  });
+
+  batchDelete.addEventListener("click", () => batchDeleteCompanies());
+
   panel.querySelectorAll("[data-edit]").forEach((b) => {
     b.addEventListener("click", () => openEditModal(Number(b.dataset.edit)));
+  });
+  panel.querySelectorAll("[data-del-company]").forEach((b) => {
+    b.addEventListener("click", () => deleteCompany(Number(b.dataset.delCompany)));
   });
   panel.querySelectorAll("[data-remove]").forEach((b) => {
     b.addEventListener("click", () => removeMember(Number(b.dataset.remove)));
   });
+}
+
+async function deleteCompany(companyId) {
+  const company = viewCustomers.find((c) => c.id === companyId);
+  const name = company ? company.name : ("#" + companyId);
+  const count = company ? (company.members || []).length : 0;
+  if (!confirm(`Delete company "${name}"${count ? ` and its ${count} member(s)` : ""}?`)) return;
+  try {
+    await fetchJson(API + `/api/companies/${companyId}`, { method: "DELETE" });
+    viewSelected.delete(companyId);
+    await renderCustomerView();
+  } catch (err) {
+    alert("Delete failed: " + err.message);
+  }
+}
+
+async function batchDeleteCompanies() {
+  const ids = [...viewSelected];
+  if (!ids.length) return;
+  if (!confirm(`Delete ${ids.length} selected compan${ids.length === 1 ? "y" : "ies"} and all their members?`)) return;
+  const btn = panel.querySelector("#batch-delete");
+  if (btn) { btn.disabled = true; btn.textContent = "Deleting…"; }
+  let failed = 0;
+  for (const id of ids) {
+    try {
+      await fetchJson(API + `/api/companies/${id}`, { method: "DELETE" });
+    } catch (err) {
+      failed++;
+    }
+  }
+  if (failed) alert(`${failed} deletion(s) failed.`);
+  viewSelected.clear();
+  await renderCustomerView();
 }
 
 // ---------------------------------------------------------------------------
