@@ -16,4 +16,14 @@ echo.
 echo Press CTRL+C to stop.
 echo.
 
-%PYTHON% "%~dp0server.py"
+REM Start server in background, wait for it to boot, then open browser
+start "" /B %PYTHON% "%~dp0server.py"
+
+REM Give the server a moment to start listening
+timeout /t 2 /nobreak >nul
+
+start "" "http://localhost:%PORT%"
+
+REM Keep this window open (server runs in background above)
+echo Server is running. Close this window or press CTRL+C to stop.
+pause >nul

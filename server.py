@@ -7,7 +7,10 @@ Endpoints
 POST   /api/companies         body: {name, email_suffix}            -> create company
 GET    /api/companies         -> [{id, name, email_suffix, created_at}]
 GET    /api/companies/<id>    -> {id, name, email_suffix, members:[...]}
+PUT    /api/companies/<id>    body: {name, email_suffix}            -> edit company
 POST   /api/companies/<id>/members   body: {name, email_prefix, title, tel} -> add member
+PUT    /api/members/<id>      body: {name, email_prefix, title, tel}-> edit member
+DELETE /api/members/<id>      -> remove member
 GET    /api/customers         -> flat list (company + its members) for the View page
 
 Run:  python server.py   (default port 8088)
@@ -65,7 +68,7 @@ def json_response(handler, payload, status=200):
     handler.send_header("Content-Type", "application/json; charset=utf-8")
     handler.send_header("Content-Length", str(len(body)))
     handler.send_header("Access-Control-Allow-Origin", "*")
-    handler.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+    handler.send_header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
     handler.send_header("Access-Control-Allow-Headers", "Content-Type")
     handler.end_headers()
     handler.wfile.write(body)
@@ -158,6 +161,66 @@ def api_add_member(handler, cid):
     )
 
 
+def api_update_company(handler, cid):
+    conn = db()
+    comp = conn.execute("SELECT * FROM companies WHERE id = ?", (cid,)).fetchone()
+    if not comp:
+        conn.close()
+        return json_response(handler, {"error": "company not found"}, 404)
+    data = read_json_body(handler)
+    name = (data.get("name") or "").strip()
+    suffix = (data.get("email_suffix") or "").strip().lstrip("@")
+    if not name or not suffix:
+        conn.close()
+        return json_response(handler, {"error": "name and email_suffix are required"}, 400)
+    conn.execute(
+        "UPDATE companies SET name = ?, email_suffix = ? WHERE id = ?",
+        (name, suffix, cid),
+    )
+    conn.commit()
+    conn.close()
+    return json_response(handler, {"id": cid, "name": name, "email_suffix": suffix}, 200)
+
+
+def api_update_member(handler, mid):
+    conn = db()
+    mem = conn.execute("SELECT * FROM members WHERE id = ?", (mid,)).fetchone()
+    if not mem:
+        conn.close()
+        return json_response(handler, {"error": "member not found"}, 404)
+    data = read_json_body(handler)
+    name = (data.get("name") or "").strip()
+    prefix = (data.get("email_prefix") or "").strip()
+    title = (data.get("title") or "").strip()
+    tel = (data.get("tel") or "").strip()
+    if not (name and prefix and title and tel):
+        conn.close()
+        return json_response(handler, {"error": "name, email_prefix, title, tel are required"}, 400)
+    conn.execute(
+        "UPDATE members SET name = ?, email_prefix = ?, title = ?, tel = ? WHERE id = ?",
+        (name, prefix, title, tel, mid),
+    )
+    conn.commit()
+    conn.close()
+    return json_response(
+        handler,
+        {"id": mid, "name": name, "email_prefix": prefix, "title": title, "tel": tel},
+        200,
+    )
+
+
+def api_delete_member(handler, mid):
+    conn = db()
+    mem = conn.execute("SELECT * FROM members WHERE id = ?", (mid,)).fetchone()
+    if not mem:
+        conn.close()
+        return json_response(handler, {"error": "member not found"}, 404)
+    conn.execute("DELETE FROM members WHERE id = ?", (mid,))
+    conn.commit()
+    conn.close()
+    return json_response(handler, {"ok": True, "id": mid}, 200)
+
+
 def api_list_customers(handler):
     """Flat join for the View page: one row per (company) with members nested."""
     conn = db()
@@ -188,7 +251,7 @@ class Handler(SimpleHTTPRequestHandler):
         if method == "OPTIONS":
             self.send_response(204)
             self.send_header("Access-Control-Allow-Origin", "*")
-            self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+            self.send_header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
             self.send_header("Access-Control-Allow-Headers", "Content-Type")
             self.end_headers()
             return True
@@ -199,6 +262,15 @@ class Handler(SimpleHTTPRequestHandler):
             api_list_companies(self); return True
         if path == "/api/customers" and method == "GET":
             api_list_customers(self); return True
+        if path.startswith("/api/members/"):
+            rest = path[len("/api/members/"):]
+            if rest.isdigit():
+                mid = int(rest)
+                if method == "PUT":
+                    api_update_member(self, mid); return True
+                if method == "DELETE":
+                    api_delete_member(self, mid); return True
+            return False
 
         if path.startswith("/api/companies/"):
             rest = path[len("/api/companies/"):]
@@ -206,6 +278,8 @@ class Handler(SimpleHTTPRequestHandler):
                 cid = int(rest)
                 if method == "GET":
                     api_get_company(self, cid); return True
+                if method == "PUT":
+                    api_update_company(self, cid); return True
             else:
                 # /api/companies/<id>/members
                 parts = rest.split("/")
@@ -224,6 +298,16 @@ class Handler(SimpleHTTPRequestHandler):
         if self._route():
             return
         super().do_POST()
+
+    def do_PUT(self):
+        if self._route():
+            return
+        super().do_PUT()
+
+    def do_DELETE(self):
+        if self._route():
+            return
+        super().do_DELETE()
 
     def do_OPTIONS(self):
         if self._route():
