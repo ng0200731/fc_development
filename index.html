@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>App</title>
+  <link rel="stylesheet" href="css/style.css" />
+</head>
+<body>
+  <div class="layout">
+    <!-- LEFT MENU — 30% -->
+    <nav class="sidebar" id="sidebar" aria-label="Sidebar">
+      <div class="group" data-group="customer">
+        <button class="group-toggle" aria-expanded="true">
+          <span class="caret">▾</span> Customer
+        </button>
+        <ul class="group-items">
+          <li><a class="nav-item" data-target="customer-create" href="#">Create</a></li>
+          <li><a class="nav-item" data-target="customer-view" href="#">View</a></li>
+        </ul>
+      </div>
+
+      <div class="group" data-group="development">
+        <button class="group-toggle" aria-expanded="true">
+          <span class="caret">▾</span> Development
+        </button>
+        <ul class="group-items">
+          <li><a class="nav-item" data-target="development-create" href="#">Create</a></li>
+          <li><a class="nav-item" data-target="development-view" href="#">View</a></li>
+        </ul>
+      </div>
+    </nav>
+
+    <!-- RIGHT MENU — 70% -->
+    <main class="content" aria-label="Content">
+      <div class="tabs" id="tabs" role="tablist"><!-- mini tabs injected here --></div>
+      <section class="panel" id="panel">
+        <p class="empty">Select an item from the left menu.</p>
+      </section>
+    </main>
+  </div>
+
+  <script src="js/app.js"></script>
+</body>
+</html>
