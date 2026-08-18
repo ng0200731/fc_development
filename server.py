@@ -24,7 +24,8 @@ from http.server import HTTPServer, SimpleHTTPRequestHandler
 from urllib.parse import urlparse
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-DB_PATH = os.path.join(BASE_DIR, "fc.db")
+DB_PATH = os.path.join(BASE_DIR, "data", "fc.db")
+STATIC_DIR = os.path.join(BASE_DIR, "static")
 PORT = int(os.environ.get("PORT", "8088"))
 
 
@@ -241,7 +242,7 @@ def api_list_customers(handler):
 
 class Handler(SimpleHTTPRequestHandler):
     def __init__(self, *args, **kwargs):
-        super().__init__(*args, directory=BASE_DIR, **kwargs)
+        super().__init__(*args, directory=STATIC_DIR, **kwargs)
 
     def _route(self):
         parsed = urlparse(self.path)
