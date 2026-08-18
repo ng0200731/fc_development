@@ -34,6 +34,12 @@ const labels = {
   "development-view":   "Development / View",
 };
 
+const PRODUCT_TYPES = [
+  "flat heat transfer",
+  "raised silicon label",
+  "woven tape",
+];
+
 const sidebar = document.getElementById("sidebar");
 const tabsEl  = document.getElementById("tabs");
 const panel   = document.getElementById("panel");
@@ -117,6 +123,10 @@ async function renderPanel() {
   }
   if (activeTarget === "customer-view") {
     await renderCustomerView();
+    return;
+  }
+  if (activeTarget === "development-create") {
+    await renderDevelopmentCreate();
     return;
   }
 
@@ -351,6 +361,198 @@ function validateMemberStep() {
              sec.querySelector("#mbr-tel").value.trim();
   const addBtn = sec.querySelector("#mbr-add");
   if (addBtn) addBtn.disabled = !ok;
+}
+
+// ---------------------------------------------------------------------------
+// Development / Create  (upper part)
+//   - company fuzzy search (>=3 letters) -> link to customer view
+//   - member dropdown (members of the selected company)
+//   - product type dropdown
+// ---------------------------------------------------------------------------
+
+async function renderDevelopmentCreate() {
+  panel.innerHTML = `
+    <h2>Development / Create</h2>
+
+    <div class="field" id="dev-company-field">
+      <label for="dev-company">Company</label>
+      <div class="combobox" id="dev-company-wrap">
+        <input id="dev-company" type="text" autocomplete="off"
+               placeholder="Type ≥ 3 letters to search…" disabled />
+        <input type="hidden" id="dev-company-id" />
+        <ul class="combobox-list" id="dev-company-list" role="listbox" hidden></ul>
+      </div>
+      <p class="ctx" id="dev-company-link" hidden></p>
+    </div>
+
+    <div class="field" id="dev-member-field">
+      <label for="dev-member">Member</label>
+      <select id="dev-member" disabled>
+        <option value="">— select a company first —</option>
+      </select>
+    </div>
+
+    <div class="field">
+      <label for="dev-product">Product type</label>
+      <select id="dev-product">
+        ${PRODUCT_TYPES.map((p) => `<option value="${escapeHtml(p)}">${escapeHtml(p)}</option>`).join("")}
+      </select>
+    </div>
+
+    <div class="actions">
+      <button class="btn ghost" id="dev-reset" type="button">Reset</button>
+      <button class="btn primary" id="dev-next" type="button" disabled>Next</button>
+    </div>
+
+    <p class="muted small" id="dev-note">Lower part to be advised.</p>
+  `;
+
+  const searchEl = panel.querySelector("#dev-company");
+  const hiddenEl = panel.querySelector("#dev-company-id");
+  const listEl   = panel.querySelector("#dev-company-list");
+  const linkEl   = panel.querySelector("#dev-company-link");
+  const memberEl = panel.querySelector("#dev-member");
+  const productEl = panel.querySelector("#dev-product");
+  const nextBtn  = panel.querySelector("#dev-next");
+
+  // enable search once we have the company list
+  let companies = [];
+  try {
+    companies = await fetchJson(API + "/api/companies");
+  } catch (err) {
+    searchEl.placeholder = "Failed to load companies: " + err.message;
+    searchEl.disabled = true;
+    return;
+  }
+  searchEl.disabled = false;
+
+  // -- helpers --
+  const updateNextState = () => {
+    const ok = hiddenEl.value !== "" && memberEl.value !== "" && productEl.value !== "";
+    nextBtn.disabled = !ok;
+  };
+
+  const showLink = (company) => {
+    linkEl.hidden = false;
+    linkEl.innerHTML =
+      `Selected: <strong>${escapeHtml(company.name)}</strong> ` +
+      `<a class="inline-link" href="#" data-view="${company.id}">` +
+      `view in customer database →</a>`;
+    linkEl.querySelector("[data-view]").addEventListener("click", (e) => {
+      e.preventDefault();
+      openTab("customer-view");
+    });
+  };
+
+  const loadMembers = async (companyId) => {
+    try {
+      const comp = await fetchAnchoredCompany(companyId);
+      const members = comp.members || [];
+      memberEl.innerHTML = members.length
+        ? `<option value="">— select a member —</option>` +
+          members.map((m) =>
+            `<option value="${m.id}">${escapeHtml(m.name)}</option>`).join("")
+        : `<option value="">— no members —</option>`;
+      memberEl.disabled = !members.length;
+    } catch (err) {
+      memberEl.innerHTML = `<option value="">— load failed —</option>`;
+      memberEl.disabled = true;
+    }
+    updateNextState();
+  };
+
+  // -- typeahead --
+  const renderOptions = (matches) => {
+    if (!matches.length) {
+      listEl.innerHTML = `<li class="combobox-empty">No matches</li>`;
+    } else {
+      listEl.innerHTML = matches.map((c, i) =>
+        `<li class="combobox-item" role="option" data-id="${c.id}" data-name="${escapeHtml(c.name)}" data-idx="${i}">` +
+        `${escapeHtml(c.name)}</li>`).join("");
+      listEl.querySelectorAll(".combobox-item").forEach((li) => {
+        li.addEventListener("click", () => selectCompany(Number(li.dataset.id), li.dataset.name));
+      });
+    }
+    listEl.hidden = false;
+  };
+
+  const selectCompany = (id, name) => {
+    hiddenEl.value = id;
+    searchEl.value = name;
+    listEl.hidden = true;
+    showLink(companies.find((c) => c.id === id) || { name });
+    memberEl.value = "";
+    loadMembers(id);
+    updateNextState();
+  };
+
+  searchEl.addEventListener("input", () => {
+    const q = searchEl.value.trim().toLowerCase();
+    hiddenEl.value = "";
+    linkEl.hidden = true;
+    memberEl.value = "";
+    memberEl.disabled = true;
+    memberEl.innerHTML = `<option value="">— select a company first —</option>`;
+    if (q.length < 3) {
+      listEl.hidden = true;
+      updateNextState();
+      return;
+    }
+    const matches = companies.filter((c) => fuzzyMatch(c.name, q)).slice(0, 12);
+    renderOptions(matches);
+    updateNextState();
+  });
+
+  searchEl.addEventListener("blur", () => {
+    // delay so click on option registers
+    setTimeout(() => { listEl.hidden = true; }, 120);
+  });
+
+  searchEl.addEventListener("keydown", (e) => {
+    if (listEl.hidden) return;
+    const items = [...listEl.querySelectorAll(".combobox-item")];
+    const active = listEl.querySelector(".combobox-item.active");
+    let idx = items.indexOf(active);
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      idx = Math.min(items.length - 1, idx + 1);
+      items.forEach((it) => it.classList.remove("active"));
+      if (items[idx]) { items[idx].classList.add("active"); items[idx].scrollIntoView({ block: "nearest" }); }
+    } else if (e.key === "ArrowUp") {
+      e.preventDefault();
+      idx = Math.max(0, idx - 1);
+      items.forEach((it) => it.classList.remove("active"));
+      if (items[idx]) { items[idx].classList.add("active"); items[idx].scrollIntoView({ block: "nearest" }); }
+    } else if (e.key === "Enter") {
+      e.preventDefault();
+      if (items[idx]) selectCompany(Number(items[idx].dataset.id), items[idx].dataset.name);
+    } else if (e.key === "Escape") {
+      listEl.hidden = true;
+    }
+  });
+
+  memberEl.addEventListener("change", updateNextState);
+  productEl.addEventListener("change", updateNextState);
+
+  panel.querySelector("#dev-reset").addEventListener("click", renderDevelopmentCreate);
+
+  nextBtn.addEventListener("click", () => {
+    if (nextBtn.disabled) return;
+    const companyId = hiddenEl.value;
+    const memberId  = memberEl.value;
+    const product   = productEl.value;
+    // Lower part to be advised — for now just show what was collected.
+    panel.querySelector("#dev-note").innerHTML =
+      `<strong>Collected:</strong> company #${companyId}, member #${memberId}, product: ${escapeHtml(product)}. ` +
+      `Lower part to be advised.`;
+  });
+
+  updateNextState();
+}
+
+// Fetch a single company with its members (reuses /api/companies/<id>).
+async function fetchAnchoredCompany(id) {
+  return fetchJson(API + `/api/companies/${id}`);
 }
 
 // ---------------------------------------------------------------------------

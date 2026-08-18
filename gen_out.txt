@@ -1,0 +1,495 @@
+==============================================================================
+1. static/index.html — paste after the Customer group
+==============================================================================
+  <div class="group" data-group="development">
+    <button class="group-toggle" aria-expanded="true">
+      <span class="caret">&#9662;</span> Development
+    </button>
+    <ul class="group-items">
+      <li><a class="nav-item" data-target="development-create" href="#">Create</a></li>
+      <li><a class="nav-item" data-target="development-view" href="#">View</a></li>
+    </ul>
+  </div>
+
+==============================================================================
+2. static/js/app.js — labels map (near other labels)
+==============================================================================
+  "development-create": "Development / Create",
+  "development-view":   "Development / View",
+
+==============================================================================
+3. static/js/app.js — renderPanel branches
+==============================================================================
+  if (activeTarget === "development-create") {
+    renderDevelopmentCreate();
+    return;
+  }
+  if (activeTarget === "development-view") {
+    await renderDevelopmentView();
+    return;
+  }
+
+==============================================================================
+4. static/js/app.js — Create + View functions (append)
+==============================================================================
+// ---------------------------------------------------------------------------
+// Development / Create  — two-step wizard (Parent -> Child)
+// ---------------------------------------------------------------------------
+
+function renderDevelopmentCreate() {
+  panel.innerHTML = `
+    <h2>Development / Create</h2>
+    <div class="subtabs" id="createSubtabs" role="tablist">
+      <button class="subtab active" data-step="parent" role="tab">Parent</button>
+      <button class="subtab locked" data-step="child" role="tab" disabled>Child</button>
+    </div>
+
+    <!-- PARENT STEP -->
+    <div class="subpanel" id="step-parent">
+            <div class="field">
+        <label for="cmp-name">Name</label>
+        <input id="cmp-name" type="text" placeholder="Name" autocomplete="off" />
+      </div>
+            <div class="field">
+        <label for="cmp-email_suffix">Email suffix</label>
+        <input id="cmp-email_suffix" type="text" placeholder="Email suffix" autocomplete="off" />
+      </div>
+      <div class="actions">
+        <button class="btn ghost" id="cmp-dummy" type="button">Dummy</button>
+        <button class="btn primary" id="cmp-next" type="button" disabled>Next</button>
+      </div>
+    </div>
+  `;
+
+  const cmpNameEl = panel.querySelector("#cmp-name");
+  const cmpEmail_suffixEl = panel.querySelector("#cmp-email_suffix");
+  const nextBtn = panel.querySelector("#cmp-next");
+
+  const validateParent = () => {
+    nextBtn.disabled = !(cmpNameEl.value.trim() && cmpEmail_suffixEl.value.trim());
+  };
+  [cmpNameEl, cmpEmail_suffixEl].forEach((el) => el.addEventListener("input", validateParent));
+
+  panel.querySelector("#cmp-dummy").addEventListener("click", () => {
+    const d = dummyDevelopment();
+    cmpNameEl.value = d.name;
+    cmpEmail_suffixEl.value = d.emailSuffix;
+    validateParent();
+  });
+
+  panel.querySelector("#cmp-next").addEventListener("click", () => {
+    if (!(cmpNameEl.value.trim() && cmpEmail_suffixEl.value.trim())) return;
+    const parentData = {
+        name: cmpNameEl.value.trim(),
+        email_suffix: cmpEmail_suffixEl.value.trim()
+    };
+    showTaskStep(parentData);
+  });
+
+  validateParent();
+}
+
+function showTaskStep(parentData) {
+  const subtabs = panel.querySelector("#createSubtabs");
+  subtabs.querySelector('[data-step="parent"]').classList.add("done");
+  const childTab = subtabs.querySelector('[data-step="child"]');
+  childTab.classList.remove("locked");
+  childTab.disabled = false;
+
+  subtabs.querySelectorAll(".subtab").forEach((t) => {
+    t.classList.toggle("active", t.dataset.step === "child");
+    t.onclick = () => {
+      subtabs.querySelectorAll(".subtab").forEach((x) => x.classList.toggle("active", x === t));
+      panel.querySelector("#step-parent").style.display = t.dataset.step === "parent" ? "" : "none";
+      panel.querySelector("#step-child").style.display = t.dataset.step === "child" ? "" : "none";
+    };
+  });
+
+  panel.dataset.parent = JSON.stringify(parentData);
+
+  let childSec = panel.querySelector("#step-child");
+  if (!childSec) {
+    childSec = document.createElement("div");
+    childSec.className = "subpanel";
+    childSec.id = "step-child";
+    childSec.innerHTML = `
+      <p class="ctx">Parent: <strong>${escapeHtml(parentData.name)}</strong>
+         (email suffix <strong>@${escapeHtml(parentData.emailSuffix)}</strong>)</p>
+      <div class="member-list" id="mbr-list"></div>
+      <div class="member-form">
+        <h3 class="subhead">Add Task</h3>
+              <div class="field">
+        <label for="mbr-name">Name</label>
+        <input id="mbr-name" type="text" placeholder="Name" autocomplete="off" />
+      </div>
+              <div class="field">
+        <label for="mbr-email_prefix">Email prefix</label>
+        <input id="mbr-email_prefix" type="text" placeholder="Email prefix" autocomplete="off" />
+      </div>
+              <div class="field">
+        <label for="mbr-title">Title</label>
+        <input id="mbr-title" type="text" placeholder="Title" autocomplete="off" />
+      </div>
+              <div class="field">
+        <label for="mbr-tel">Tel</label>
+        <input id="mbr-tel" type="text" placeholder="Tel" autocomplete="off" />
+      </div>
+        <div class="actions">
+          <button class="btn ghost" id="mbr-dummy" type="button">Dummy</button>
+          <button class="btn" id="mbr-add" type="button" disabled>Add Task</button>
+        </div>
+      </div>
+      <div class="actions create-final">
+        <button class="btn ghost" id="cmp-reset" type="button">Reset</button>
+        <button class="btn primary" id="cmp-create" type="button" disabled>Create development</button>
+      </div>
+    `;
+    panel.querySelector("#step-parent").after(childSec);
+
+    const mbrNameEl = childSec.querySelector("#mbr-name");
+    const mbrEmail_prefixEl = childSec.querySelector("#mbr-email_prefix");
+    const mbrTitleEl = childSec.querySelector("#mbr-title");
+    const mbrTelEl = childSec.querySelector("#mbr-tel");
+    const addBtn = childSec.querySelector("#mbr-add");
+    const createBtn = childSec.querySelector("#cmp-create");
+    const listEl = childSec.querySelector("#mbr-list");
+
+    const pending = [];
+
+    const validateChildForm = () => {
+      addBtn.disabled = !(mbrNameEl.value.trim() && mbrEmail_prefixEl.value.trim() && mbrTitleEl.value.trim() && mbrTelEl.value.trim());
+    };
+    [mbrNameEl, mbrEmail_prefixEl, mbrTitleEl, mbrTelEl].forEach((el) => el.addEventListener("input", validateChildForm));
+
+    const renderMemberList = () => {
+      if (!pending.length) {
+        listEl.innerHTML = '<p class="muted small">No tasks added yet.</p>';
+      } else {
+        listEl.innerHTML = pending.map((m, i) => `
+          <div class="member-row">
+            <span><strong>${escapeHtml(m.name)}</strong></span>
+            <button class="icon-btn danger" data-rm="${i}" title="Remove">&#10005;</button>
+          </div>`).join("");
+        listEl.querySelectorAll("[data-rm]").forEach((b) => {
+          b.addEventListener("click", () => {
+            pending.splice(Number(b.dataset.rm), 1);
+            renderMemberList();
+            updateCreateBtn();
+          });
+        });
+      }
+      updateCreateBtn();
+    };
+
+    const updateCreateBtn = () => { createBtn.disabled = pending.length === 0; };
+
+    childSec.querySelector("#mbr-dummy").addEventListener("click", () => {
+      const d = dummyTask();
+      mbrNameEl.value = d.name;
+      mbrEmail_prefixEl.value = d.emailPrefix;
+      mbrTitleEl.value = d.title;
+      mbrTelEl.value = d.tel;
+      validateChildForm();
+    });
+
+    addBtn.addEventListener("click", () => {
+      if (addBtn.disabled) return;
+      pending.push({
+        name: mbrNameEl.value.trim(),
+        email_prefix: mbrEmail_prefixEl.value.trim(),
+        title: mbrTitleEl.value.trim(),
+        tel: mbrTelEl.value.trim()
+      });
+      mbrNameEl.value = mbrEmail_prefixEl.value = mbrTitleEl.value = mbrTelEl.value = "";
+      validateChildForm();
+      renderMemberList();
+      mbrNameEl.focus();
+    });
+
+    childSec.querySelector("#cmp-reset").addEventListener("click", renderDevelopmentCreate);
+
+    createBtn.addEventListener("click", async () => {
+      if (createBtn.disabled) return;
+      createBtn.disabled = true;
+      createBtn.textContent = "Creating…";
+      try {
+        await saveDevelopmentWithTasks(parentData, pending);
+        createBtn.textContent = "Created &#10003;";
+        setTimeout(renderDevelopmentCreate, 800);
+      } catch (err) {
+        createBtn.textContent = "Create failed — retry";
+        createBtn.disabled = false;
+        alert("Create failed: " + err.message);
+      }
+    });
+
+    renderMemberList();
+  }
+
+  panel.querySelector("#step-parent").style.display = "none";
+  childSec.style.display = "";
+}
+
+// ---------------------------------------------------------------------------
+// Development / View
+// ---------------------------------------------------------------------------
+
+let viewDevelopments = [];
+let viewDevelopmentFilters = {};
+
+async function renderDevelopmentView() {
+  panel.innerHTML = '<h2>Development / View</h2><p class="empty">Loading…</p>';
+  try {
+    viewDevelopments = await fetchJson(API + "/api/developments");
+    if (!viewDevelopments.length) {
+      panel.innerHTML = '<h2>Development / View</h2><p class="empty">No developments saved yet.</p>';
+      return;
+    }
+    paintDevelopmentView();
+  } catch (err) {
+    panel.innerHTML = `<h2>Development / View</h2><p class="empty">Failed to load: ${escapeHtml(err.message)}</p>`;
+  }
+}
+
+function flattenDevelopmentRows(items) {
+  const rows = [];
+  items.forEach((it) => {
+    const children = it.tasks && it.tasks.length ? it.tasks : [null];
+    children.forEach((ch) => {
+      rows.push({
+        company: it.name,
+        suffix: it.emailSuffix,
+        childId: ch ? ch.id : null,
+        name: ch ? ch.name : "",
+        email_prefix: ch ? ch.email_prefix : "",
+        title: ch ? ch.title : "",
+        tel: ch ? ch.tel : "",
+      });
+    });
+  });
+  return rows;
+}
+
+function paintDevelopmentView() {
+  const rows = flattenDevelopmentRows(viewDevelopments);
+  const cols = [
+    { key: "company", label: "Name" },
+    { key: "email_prefix", label: "Email_prefix" },
+    { key: "title", label: "Title" },
+    { key: "tel", label: "Tel" }
+  ];
+
+  const filtered = rows.filter((r) =>
+    cols.every((c) => fuzzyMatch(r[c.key], viewDevelopmentFilters[c.key]))
+  );
+  const filtersActive = Object.values(viewDevelopmentFilters).some((v) => v && v.trim());
+  const shown = filtersActive ? filtered : rows;
+
+  const searchRow = cols.map((c) =>
+    `<th class="search-th">
+       <input class="col-search" data-key="${c.key}" type="text"
+              placeholder="Search ${c.label}…" value="${escapeHtml(viewDevelopmentFilters[c.key] || "")}" />
+     </th>`).join("") +
+    `<th class="search-th actions-th"></th>`;
+
+  const body = shown.map((r) => `
+      <tr>
+
+        <td>${escapeHtml(r.company)}</td>
+        <td>${escapeHtml(r.email_prefix)}</td>
+        <td>${escapeHtml(r.title)}</td>
+        <td>${escapeHtml(r.tel)}</td>
+        <td class="row-actions">
+          <button class="icon-btn" data-edit="${r.id}" title="Edit">&#9998;</button>
+          ${ r.childId != null ? `<button class="icon-btn danger" data-remove="${r.childId}" title="Remove">&#128465;</button>` : "" }
+        </td>
+      </tr>`).join("") || `<tr><td colspan="${cols.length+1}" class="muted">No matches.</td></tr>`;
+
+  panel.innerHTML = `
+    <div class="view-head">
+      <h2>Development / View</h2>
+      <button class="btn ghost" id="export-xlsx" type="button">Export Excel</button>
+    </div>
+    <table class="grid" id="development-grid">
+      <thead>
+        <tr class="head-row">${cols.map((c) => `<th>${c.label}</th>`).join("")}<th></th></tr>
+        <tr class="search-row">${searchRow}</tr>
+      </thead>
+      <tbody>${body}</tbody>
+    </table>
+  `;
+
+  panel.querySelectorAll(".col-search").forEach((inp) => {
+    inp.addEventListener("input", () => {
+      viewDevelopmentFilters[inp.dataset.key] = inp.value;
+      paintDevelopmentView();
+    });
+  });
+  panel.querySelector("#export-xlsx").addEventListener("click", () => exportExcel(shown));
+  panel.querySelectorAll("[data-edit]").forEach((b) => {
+    b.addEventListener("click", () => openDevelopmentEditModal(Number(b.dataset.edit)));
+  });
+  panel.querySelectorAll("[data-remove]").forEach((b) => {
+    b.addEventListener("click", () => removeDevelopmentTask(Number(b.dataset.remove)));
+  });
+}
+
+function openDevelopmentEditModal(id) {
+  const item = viewDevelopments.find((x) => x.id === id);
+  if (!item) return;
+  const children = item.tasks || [];
+  const overlay = document.createElement("div");
+  overlay.className = "modal-overlay";
+  overlay.innerHTML = `
+    <div class="modal" role="dialog" aria-modal="true">
+      <h3>Edit development</h3>
+      <div class="field">
+        <label for="ed-name">Name</label>
+        <input id="ed-name" type="text" value="${escapeHtml(item.name)}" />
+      </div>
+      <div class="field">
+        <label for="ed-email_suffix">Email suffix</label>
+        <input id="ed-email_suffix" type="text" value="${escapeHtml(item.emailSuffix)}" />
+      </div>
+      <h4 class="subhead">Tasks</h4>
+      <div class="member-list" id="ed-children"></div>
+      <div class="actions modal-actions">
+        <button class="btn ghost" id="ed-cancel" type="button">Cancel</button>
+        <button class="btn primary" id="ed-save" type="button">Save</button>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+  const renderChildren = () => {
+    const list = overlay.querySelector("#ed-children");
+    if (!children.length) list.innerHTML = '<p class="muted small">No tasks.</p>';
+    else list.innerHTML = children.map((ch) => `
+        <div class="member-row"><span><strong>${escapeHtml(ch.name)}</strong></span>
+        <button class="icon-btn danger" data-del="${ch.id}" title="Remove">&#10005;</button></div>`).join("");
+    list.querySelectorAll("[data-del]").forEach((b) => {
+      b.addEventListener("click", () => {
+        const cid = Number(b.dataset.del);
+        children.splice(children.findIndex((ch) => ch.id === cid), 1);
+        renderChildren();
+      });
+    });
+  };
+  renderChildren();
+  overlay.querySelector("#ed-cancel").addEventListener("click", () => overlay.remove());
+  overlay.addEventListener("click", (e) => { if (e.target === overlay) overlay.remove(); });
+  overlay.querySelector("#ed-save").addEventListener("click", async () => {
+    const saveBtn = overlay.querySelector("#ed-save");
+    saveBtn.disabled = true; saveBtn.textContent = "Saving…";
+    try {
+      await apiPutDevelopment(id, { name: overlay.querySelector("#ed-name").value.trim(), email_suffix: overlay.querySelector("#ed-email_suffix").value.trim() });
+      overlay.remove();
+      await renderDevelopmentView();
+    } catch (err) {
+      saveBtn.disabled = false; saveBtn.textContent = "Save";
+      alert("Save failed: " + err.message);
+    }
+  });
+}
+
+async function removeDevelopmentTask(childId) {
+  if (!confirm("Remove this task?")) return;
+  try {
+    await fetchJson(API + `/api/tasks/${childId}`, { method: "DELETE" });
+    await renderDevelopmentView();
+  } catch (err) { alert("Remove failed: " + err.message); }
+}
+
+async function saveDevelopmentWithTasks(parentData, children) {
+  const res = await fetchJson(API + "/api/developments", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(parentData),
+  });
+  for (const ch of children) {
+    await fetchJson(API + `/api/developments/${res.id}/tasks`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(ch),
+    });
+  }
+  return res;
+}
+
+async function apiPutDevelopment(id, data) {
+  return fetchJson(API + `/api/developments/${id}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(data),
+  });
+}
+
+// ---- Dummy generators ----
+function dummyDevelopment() {
+  return {
+    name: rnd(COMP) + " " + rnd(["Inc","LLC","Corp","Group","Labs"]),
+    emailSuffix: rnd(SUFFIX)
+  };
+}
+function dummyTask() {
+  const first = rnd(FIRST), last = rnd(LAST);
+  return {
+    name: first + " " + last,
+    emailPrefix: rnd(TITLE),
+    title: rnd(TITLE),
+    tel: "+\" + (Math.floor(Math.random()*90)+10) + " " + (Math.floor(Math.random()*900)+100) + " " + (Math.floor(Math.random()*9000)+1000)
+  };
+}
+
+==============================================================================
+5. server.py — schema, handlers, router notes
+==============================================================================
+# --- Development schema (add to init_db) ---
+cur.execute("""
+    CREATE TABLE IF NOT EXISTS developments (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL, email_suffix TEXT NOT NULL,
+        created_at TEXT NOT NULL
+    )
+""")
+cur.execute("""
+    CREATE TABLE IF NOT EXISTS tasks (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        developments_id INTEGER NOT NULL REFERENCES developments(id) ON DELETE CASCADE,
+        name TEXT NOT NULL, email_prefix TEXT NOT NULL, title TEXT NOT NULL, tel TEXT NOT NULL,
+        created_at TEXT NOT NULL
+    )
+""")
+
+# --- Development API handlers (add near the other api_* funcs) ---
+def api_create_development(handler):
+    data = read_json_body(handler)
+    conn = db(); cur = conn.cursor()
+    cur.execute("INSERT INTO developments (name, email_suffix, created_at) VALUES (?, ?, ?)",
+                ((data.get("name") or "").strip(), (data.get("email_suffix") or "").strip(), now_iso()))
+    pid = cur.lastrowid; conn.commit(); conn.close()
+    return json_response(handler, {"id": pid}, 201)
+
+def api_list_developments(handler):
+    conn = db()
+    rows = conn.execute("SELECT * FROM developments ORDER BY id DESC").fetchall()
+    out = []
+    for it in rows:
+        ch = conn.execute("SELECT * FROM tasks WHERE developments_id = ? ORDER BY id", (it["id"],)).fetchall()
+        d = dict(it); d["tasks"] = [dict(x) for x in ch]; out.append(d)
+    conn.close()
+    return json_response(handler, out)
+
+def api_add_task(handler, pid):
+    data = read_json_body(handler)
+    conn = db(); cur = conn.cursor()
+    cur.execute("INSERT INTO tasks (name, email_prefix, title, tel, created_at) VALUES (?, ?, ?, ?, ?)",
+                ((data.get("name") or "").strip(), (data.get("email_prefix") or "").strip(), (data.get("title") or "").strip(), (data.get("tel") or "").strip(), now_iso()))
+    conn.commit(); conn.close()
+    return json_response(handler, {"ok": True}, 201)
+
+# --- Router additions (inside Handler._route) ---
+# if path == "/api/developments" and method == "POST": api_create_development(self); return True
+# if path == "/api/developments" and method == "GET":  api_list_developments(self); return True
+# if path.startswith("/api/tasks/") and rest.isdigit() and method == "DELETE":
+#     api_delete_task(self, int(rest)); return True
+# /api/developments/<id>/tasks  -> POST api_add_task
+
