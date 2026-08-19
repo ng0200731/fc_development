@@ -370,6 +370,23 @@ function validateMemberStep() {
 //   - product type dropdown
 // ---------------------------------------------------------------------------
 
+// Persistent state for the Development / Create tab. Hoisted to module scope so
+// switching to another mini-tab and back does NOT lose what the user entered
+// (company / member / product / dimensions / pasted images / dropped docs).
+let devState = {
+  companyId: "",
+  companyName: "",
+  memberId: "",
+  product: "",
+  height: "",
+  width: "",
+  images: [],   // [{ id, name, url }]
+  docs: [],     // [{ id, name, file }]
+};
+
+// One-time cache of the company master list so we don't refetch on every repaint.
+let devCompaniesCache = null;
+
 async function renderDevelopmentCreate() {
   panel.innerHTML = `
     <h2>Development / Create</h2>
@@ -411,20 +428,13 @@ async function renderDevelopmentCreate() {
             ${PRODUCT_TYPES.map((p) => `<option value="${escapeHtml(p)}">${escapeHtml(p)}</option>`).join("")}
           </select>
         </div>
-
-        <div class="actions">
-          <button class="btn ghost" id="dev-reset" type="button">Reset</button>
-          <button class="btn primary" id="dev-next" type="button" disabled>Next</button>
-        </div>
-
-        <p class="muted small" id="dev-note">Complete part 1 to enable.</p>
       </div>
     </div>
 
     <div class="dev-2col grid-below">
       <!-- 3rd part: dimensions -->
       <div class="dev-part" id="dev-part3">
-        <h3 class="subhead">3 · Dimensions</h3>
+        <h3 class="subhead">3 · Details</h3>
         <div class="dim-row">
           <div class="field">
             <label for="dev-height">Height (mm)</label>
@@ -462,18 +472,53 @@ async function renderDevelopmentCreate() {
   const listEl   = panel.querySelector("#dev-company-list");
   const memberEl = panel.querySelector("#dev-member");
   const productEl = panel.querySelector("#dev-product");
+  const heightEl = panel.querySelector("#dev-height");
+  const widthEl  = panel.querySelector("#dev-width");
+  // part 2 no longer has Reset/Next buttons; nextBtn may be null
   const nextBtn  = panel.querySelector("#dev-next");
+
+  // restore saved dimensions + wire persistence
+  heightEl.value = devState.height;
+  widthEl.value  = devState.width;
+  heightEl.addEventListener("input", () => { devState.height = heightEl.value; });
+  widthEl.addEventListener("input",  () => { devState.width  = widthEl.value;  });
 
   // enable search once we have the company list
   let companies = [];
   try {
-    companies = await fetchJson(API + "/api/companies");
+    if (devCompaniesCache) {
+      companies = devCompaniesCache;
+    } else {
+      companies = await fetchJson(API + "/api/companies");
+      devCompaniesCache = companies;
+    }
   } catch (err) {
     searchEl.placeholder = "Failed to load companies: " + err.message;
     searchEl.disabled = true;
     return;
   }
   searchEl.disabled = false;
+
+  // restore previously selected company into the search box
+  let needMemberRestore = false;
+  if (devState.companyId) {
+    const stillThere = companies.some((c) => String(c.id) === String(devState.companyId));
+    if (stillThere) {
+      hiddenEl.value = devState.companyId;
+      searchEl.value = devState.companyName || devState.companyId;
+      needMemberRestore = devState.memberId !== "";
+      // reload members now (and restore the chosen member) so the dropdown is populated
+      loadMembers(Number(devState.companyId), devState.memberId);
+    } else {
+      // company vanished from DB since last visit — drop the selection
+      devState.companyId = "";
+      devState.companyName = "";
+      devState.memberId = "";
+    }
+  }
+
+  // restore product selection
+  if (devState.product) productEl.value = devState.product;
 
   // refresh = re-fetch latest companies + members from the customer database
   panel.querySelector("#dev-refresh").addEventListener("click", async (e) => {
@@ -483,6 +528,7 @@ async function renderDevelopmentCreate() {
     const prevId = hiddenEl.value;
     try {
       companies = await fetchJson(API + "/api/companies");
+      devCompaniesCache = companies;
       // if a company was chosen, reload its members so the list is current
       if (prevId !== "") {
         const stillThere = companies.some((c) => String(c.id) === String(prevId));
@@ -514,13 +560,9 @@ async function renderDevelopmentCreate() {
     productEl.disabled = !part1Done;
     if (part1Done) {
       panel.querySelector("#dev-part1-note").textContent = "Part 1 complete ✓";
-      panel.querySelector("#dev-note").textContent = "Ready — press Next to continue.";
     } else {
       panel.querySelector("#dev-part1-note").textContent = "Pick a company and member to unlock the next part.";
-      panel.querySelector("#dev-note").textContent = "Complete part 1 to enable.";
     }
-    const ok = part1Done && productEl.value !== "";
-    nextBtn.disabled = !ok;
   };
 
   const resetCompanySelection = () => {
@@ -528,9 +570,13 @@ async function renderDevelopmentCreate() {
     memberEl.value = "";
     memberEl.disabled = true;
     memberEl.innerHTML = `<option value="">— select a company first —</option>`;
+    devState.companyId = "";
+    devState.companyName = "";
+    devState.memberId = "";
+    updateNextState();
   };
 
-  const loadMembers = async (companyId) => {
+  const loadMembers = async (companyId, restoreMemberId) => {
     try {
       const comp = await fetchAnchoredCompany(companyId);
       const members = comp.members || [];
@@ -540,6 +586,10 @@ async function renderDevelopmentCreate() {
             `<option value="${m.id}">${escapeHtml(m.name)}</option>`).join("")
         : `<option value="">— no members —</option>`;
       memberEl.disabled = !members.length;
+      // restore previously selected member if it still exists
+      if (restoreMemberId != null && members.some((m) => String(m.id) === String(restoreMemberId))) {
+        memberEl.value = String(restoreMemberId);
+      }
     } catch (err) {
       memberEl.innerHTML = `<option value="">— load failed —</option>`;
       memberEl.disabled = true;
@@ -571,6 +621,9 @@ async function renderDevelopmentCreate() {
     searchEl.value = name;
     listEl.hidden = true;
     memberEl.value = "";
+    devState.companyId = String(id);
+    devState.companyName = name;
+    devState.memberId = "";
     loadMembers(id);
     updateNextState();
   };
@@ -581,6 +634,9 @@ async function renderDevelopmentCreate() {
     memberEl.value = "";
     memberEl.disabled = true;
     memberEl.innerHTML = `<option value="">— select a company first —</option>`;
+    devState.companyId = "";
+    devState.companyName = "";
+    devState.memberId = "";
     if (q.length < 3) {
       listEl.hidden = true;
       updateNextState();
@@ -623,21 +679,11 @@ async function renderDevelopmentCreate() {
     }
   });
 
-  memberEl.addEventListener("change", updateNextState);
-  productEl.addEventListener("change", updateNextState);
-
-  panel.querySelector("#dev-reset").addEventListener("click", renderDevelopmentCreate);
-
-  nextBtn.addEventListener("click", () => {
-    if (nextBtn.disabled) return;
-    const companyId = hiddenEl.value;
-    const memberId  = memberEl.value;
-    const product   = productEl.value;
-    // Lower part to be advised — for now just show what was collected.
-    panel.querySelector("#dev-note").innerHTML =
-      `<strong>Collected:</strong> company #${companyId}, member #${memberId}, product: ${escapeHtml(product)}. ` +
-      `Lower part to be advised.`;
+  memberEl.addEventListener("change", () => {
+    devState.memberId = memberEl.value;
+    updateNextState();
   });
+  productEl.addEventListener("change", () => { devState.product = productEl.value; updateNextState(); });
 
   // ===== 4th part: image dropzone + documents =====
   const imageDrop = panel.querySelector("#dev-image-drop");
@@ -645,9 +691,9 @@ async function renderDevelopmentCreate() {
   const docDrop = panel.querySelector("#dev-doc-drop");
   const docList = panel.querySelector("#dev-doc-list");
 
-  // in-memory stores (not yet persisted to any backend)
-  const images = [];   // { id, name, url }
-  const docs = [];     // { id, name, file }
+  // use the persisted stores so pasted images / dropped docs survive tab switches
+  const images = devState.images;
+  const docs = devState.docs;
 
   const isImageFile = (f) => f && f.type && f.type.startsWith("image/");
 

@@ -216,6 +216,9 @@ def api_delete_company(handler, cid):
     if not comp:
         conn.close()
         return json_response(handler, {"error": "company not found"}, 404)
+    # delete members first (FK enforcement may be off in older SQLite sessions),
+    # then the company row itself.
+    conn.execute("DELETE FROM members WHERE company_id = ?", (cid,))
     conn.execute("DELETE FROM companies WHERE id = ?", (cid,))
     conn.commit()
     conn.close()
