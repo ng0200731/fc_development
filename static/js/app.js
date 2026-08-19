@@ -377,13 +377,12 @@ async function renderDevelopmentCreate() {
     <div class="dev-2col">
       <!-- 1st part: company + member -->
       <div class="dev-part" id="dev-part1">
-        <h3 class="subhead">1 · Company &amp; Member</h3>
+        <h3 class="subhead part-head">
+          1 · Company &amp; Member
+          <button class="icon-btn" id="dev-refresh" type="button" title="Refresh customer database">⟳</button>
+        </h3>
 
         <div class="field" id="dev-company-field">
-          <label for="dev-company">
-            Company
-            <button class="icon-btn" id="dev-refresh" type="button" title="Refresh customer database">⟳</button>
-          </label>
           <div class="combobox" id="dev-company-wrap">
             <input id="dev-company" type="text" autocomplete="off"
                    placeholder="Type ≥ 3 letters to search…" disabled />
@@ -419,6 +418,39 @@ async function renderDevelopmentCreate() {
         </div>
 
         <p class="muted small" id="dev-note">Complete part 1 to enable.</p>
+      </div>
+    </div>
+
+    <div class="dev-2col grid-below">
+      <!-- 3rd part: dimensions -->
+      <div class="dev-part" id="dev-part3">
+        <h3 class="subhead">3 · Dimensions</h3>
+        <div class="dim-row">
+          <div class="field">
+            <label for="dev-height">Height (mm)</label>
+            <input id="dev-height" type="number" min="0" step="0.1" placeholder="0.0" autocomplete="off" />
+          </div>
+          <div class="field">
+            <label for="dev-width">Width (mm)</label>
+            <input id="dev-width" type="number" min="0" step="0.1" placeholder="0.0" autocomplete="off" />
+          </div>
+        </div>
+      </div>
+
+      <!-- 4th part: image + documents -->
+      <div class="dev-part" id="dev-part4">
+        <h3 class="subhead">4 · Image</h3>
+
+        <div class="dropzone" id="dev-image-drop" tabindex="0">
+          <p class="muted small">Drag &amp; drop images here, or press <strong>Ctrl+V</strong> to paste.</p>
+          <div class="thumb-grid" id="dev-image-thumbs"></div>
+        </div>
+
+        <h4 class="subhead">Documents</h4>
+        <div class="dropzone" id="dev-doc-drop" tabindex="0">
+          <p class="muted small">Drag &amp; drop multiple files here.</p>
+          <div class="file-list" id="dev-doc-list"></div>
+        </div>
       </div>
     </div>
   `;
@@ -526,6 +558,10 @@ async function renderDevelopmentCreate() {
       listEl.querySelectorAll(".combobox-item").forEach((li) => {
         li.addEventListener("click", () => selectCompany(Number(li.dataset.id), li.dataset.name));
       });
+      // auto-highlight the first match so Enter/Tab can accept it immediately
+      listEl.querySelectorAll(".combobox-item").forEach((it, i) => {
+        it.classList.toggle("active", i === 0);
+      });
     }
     listEl.hidden = false;
   };
@@ -563,8 +599,10 @@ async function renderDevelopmentCreate() {
   searchEl.addEventListener("keydown", (e) => {
     if (listEl.hidden) return;
     const items = [...listEl.querySelectorAll(".combobox-item")];
+    if (!items.length) return;
     const active = listEl.querySelector(".combobox-item.active");
     let idx = items.indexOf(active);
+    if (idx < 0) idx = 0;
     if (e.key === "ArrowDown") {
       e.preventDefault();
       idx = Math.min(items.length - 1, idx + 1);
@@ -575,9 +613,11 @@ async function renderDevelopmentCreate() {
       idx = Math.max(0, idx - 1);
       items.forEach((it) => it.classList.remove("active"));
       if (items[idx]) { items[idx].classList.add("active"); items[idx].scrollIntoView({ block: "nearest" }); }
-    } else if (e.key === "Enter") {
+    } else if (e.key === "Enter" || e.key === "Tab") {
+      // accept the highlighted (or first) match without moving focus away
       e.preventDefault();
-      if (items[idx]) selectCompany(Number(items[idx].dataset.id), items[idx].dataset.name);
+      const pick = items[idx] || items[0];
+      if (pick) selectCompany(Number(pick.dataset.id), pick.dataset.name);
     } else if (e.key === "Escape") {
       listEl.hidden = true;
     }
@@ -599,7 +639,143 @@ async function renderDevelopmentCreate() {
       `Lower part to be advised.`;
   });
 
+  // ===== 4th part: image dropzone + documents =====
+  const imageDrop = panel.querySelector("#dev-image-drop");
+  const imageThumbs = panel.querySelector("#dev-image-thumbs");
+  const docDrop = panel.querySelector("#dev-doc-drop");
+  const docList = panel.querySelector("#dev-doc-list");
+
+  // in-memory stores (not yet persisted to any backend)
+  const images = [];   // { id, name, url }
+  const docs = [];     // { id, name, file }
+
+  const isImageFile = (f) => f && f.type && f.type.startsWith("image/");
+
+  const renderImageThumbs = () => {
+    if (!images.length) {
+      imageThumbs.innerHTML = "";
+      return;
+    }
+    imageThumbs.innerHTML = images.map((img) => `
+      <div class="thumb" data-id="${img.id}">
+        <img src="${img.url}" alt="${escapeHtml(img.name)}" />
+        <div class="thumb-name">${escapeHtml(img.name)}</div>
+        <button class="icon-btn danger thumb-rm" data-rm="${img.id}" title="Remove">✕</button>
+      </div>`).join("");
+    imageThumbs.querySelectorAll("[data-rm]").forEach((b) => {
+      b.addEventListener("click", () => {
+        const id = b.dataset.rm;
+        const idx = images.findIndex((x) => x.id === id);
+        if (idx >= 0) {
+          URL.revokeObjectURL(images[idx].url);
+          images.splice(idx, 1);
+          renderImageThumbs();
+        }
+      });
+    });
+  };
+
+  const addImageFile = (file) => {
+    if (!isImageFile(file)) return;
+    const url = URL.createObjectURL(file);
+    images.push({ id: "img-" + Date.now() + "-" + images.length, name: file.name, url });
+    renderImageThumbs();
+  };
+
+  // drag & drop for images
+  ["dragenter", "dragover"].forEach((ev) =>
+    imageDrop.addEventListener(ev, (e) => {
+      e.preventDefault();
+      imageDrop.classList.add("dragover");
+    })
+  );
+  ["dragleave", "drop"].forEach((ev) =>
+    imageDrop.addEventListener(ev, (e) => {
+      e.preventDefault();
+      if (ev === "dragleave" && imageDrop.contains(e.relatedTarget)) return;
+      imageDrop.classList.remove("dragover");
+    })
+  );
+  imageDrop.addEventListener("drop", (e) => {
+    [...(e.dataTransfer?.files || [])].forEach(addImageFile);
+  });
+
+  // Ctrl+V paste image
+  imageDrop.addEventListener("paste", (e) => {
+    const items = e.clipboardData?.items || [];
+    let added = false;
+    for (const it of items) {
+      if (it.kind === "file" && it.type.startsWith("image/")) {
+        const f = it.getAsFile();
+        if (f) { addImageFile(f); added = true; }
+      }
+    }
+    if (added) e.preventDefault();
+  });
+
+  // ---- documents ----
+  const renderDocList = () => {
+    if (!docs.length) {
+      docList.innerHTML = "";
+      return;
+    }
+    docList.innerHTML = docs.map((d) => `
+      <div class="doc-row" data-id="${d.id}">
+        <span class="doc-icon">📄</span>
+        <input class="doc-name" data-id="${d.id}" type="text" value="${escapeHtml(d.name)}" />
+        <span class="doc-size muted small">${formatBytes(d.file.size)}</span>
+        <button class="icon-btn danger doc-rm" data-rm="${d.id}" title="Remove">✕</button>
+      </div>`).join("");
+    docList.querySelectorAll(".doc-rm").forEach((b) => {
+      b.addEventListener("click", () => {
+        const id = b.dataset.rm;
+        const idx = docs.findIndex((x) => x.id === id);
+        if (idx >= 0) { docs.splice(idx, 1); renderDocList(); }
+      });
+    });
+    docList.querySelectorAll(".doc-name").forEach((inp) => {
+      inp.addEventListener("input", () => {
+        const d = docs.find((x) => x.id === inp.dataset.id);
+        if (d) d.name = inp.value;
+      });
+    });
+  };
+
+  const addDocFiles = (fileList) => {
+    [...fileList].forEach((f) => {
+      docs.push({ id: "doc-" + Date.now() + "-" + docs.length, name: f.name, file: f });
+    });
+    renderDocList();
+  };
+
+  ["dragenter", "dragover"].forEach((ev) =>
+    docDrop.addEventListener(ev, (e) => {
+      e.preventDefault();
+      docDrop.classList.add("dragover");
+    })
+  );
+  ["dragleave", "drop"].forEach((ev) =>
+    docDrop.addEventListener(ev, (e) => {
+      e.preventDefault();
+      if (ev === "dragleave" && docDrop.contains(e.relatedTarget)) return;
+      docDrop.classList.remove("dragover");
+    })
+  );
+  docDrop.addEventListener("drop", (e) => {
+    addDocFiles(e.dataTransfer?.files || []);
+  });
+
+  renderImageThumbs();
+  renderDocList();
+
   updateNextState();
+}
+
+function formatBytes(bytes) {
+  if (!bytes && bytes !== 0) return "";
+  if (bytes < 1024) return bytes + " B";
+  if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + " KB";
+  return (bytes / (1024 * 1024)).toFixed(1) + " MB";
 }
 
 // Fetch a single company with its members (reuses /api/companies/<id>).
@@ -614,7 +790,7 @@ async function fetchAnchoredCompany(id) {
 // View state
 let viewCustomers = [];      // raw data from /api/customers
 let viewFilters = {};         // {company, name, email, title, tel}
-let viewSelected = new Set(); // selected company ids (batch delete)
+let viewSelected = new Set(); // selected keys: "c:<companyId>" or "m:<memberId>"
 
 async function renderCustomerView() {
   panel.innerHTML = '<h2>Customer / View</h2><p class="empty">Loading…</p>';
@@ -705,12 +881,16 @@ function paintView() {
     `<th class="search-th actions-th"></th>`;
 
   const body = shown.map((r) => {
+    const checked = r.memberId != null && viewSelected.has("m:" + r.memberId);
     const editBtn = r.memberId != null
       ? `<button class="icon-btn" data-edit="${r.companyId}" title="Edit">✎</button>
          <button class="icon-btn danger" data-remove="${r.memberId}" title="Remove member">🗑</button>`
       : `<button class="icon-btn" data-edit="${r.companyId}" title="Edit company">✎</button>`;
     return `
-      <tr>
+      <tr class="${checked ? "selected" : ""}">
+        <td>
+          ${r.memberId != null ? `<label class="cb-cell"><input type="checkbox" class="row-select" data-key="m:${r.memberId}" ${checked ? "checked" : ""} /></label>` : ""}
+        </td>
         <td>${escapeHtml(r.company)}</td>
         <td>${escapeHtml(r.name)}</td>
         <td>${escapeHtml(r.email)}</td>
@@ -718,15 +898,15 @@ function paintView() {
         <td>${escapeHtml(r.tel)}</td>
         <td class="row-actions">${editBtn}</td>
       </tr>`;
-  }).join("") || `<tr><td colspan="6" class="muted">No matches.</td></tr>`;
+  }).join("") || `<tr><td colspan="7" class="muted">No matches.</td></tr>`;
 
   const companyBody = companyRows.map((c) => {
-    const checked = viewSelected.has(c.id);
+    const checked = viewSelected.has("c:" + c.id);
     return `
-      <tr data-company="${c.id}" class="${checked ? "selected" : ""}">
+      <tr class="${checked ? "selected" : ""}">
         <td>
           <label class="cb-cell">
-            <input type="checkbox" class="row-select" data-id="${c.id}" ${checked ? "checked" : ""} />
+            <input type="checkbox" class="row-select" data-key="c:${c.id}" ${checked ? "checked" : ""} />
             <strong>${escapeHtml(c.name)}</strong>
             <span class="muted">@${escapeHtml(c.emailSuffix)}</span>
           </label>
@@ -739,8 +919,12 @@ function paintView() {
       </tr>`;
   }).join("") || `<tr><td colspan="3" class="muted">No companies.</td></tr>`;
 
-  const allCompanyIds = companyRows.map((c) => c.id);
-  const allChecked = allCompanyIds.length > 0 && allCompanyIds.every((id) => viewSelected.has(id));
+  // "Select all" covers every visible company + member row.
+  const allKeys = [
+    ...companyRows.map((c) => "c:" + c.id),
+    ...shown.filter((r) => r.memberId != null).map((r) => "m:" + r.memberId),
+  ];
+  const allChecked = allKeys.length > 0 && allKeys.every((k) => viewSelected.has(k));
 
   panel.innerHTML = `
     <div class="view-head">
@@ -753,7 +937,7 @@ function paintView() {
     <div class="batch-bar" id="batch-bar">
       <label class="cb-cell">
         <input type="checkbox" id="select-all" ${allChecked ? "checked" : ""} />
-        <span>Select all (${companyRows.length})</span>
+        <span>Select all (${allKeys.length})</span>
       </label>
       <span class="muted batch-count" id="batch-count">${viewSelected.size} selected</span>
       <button class="btn danger" id="batch-delete" type="button" disabled>Delete selected</button>
@@ -774,8 +958,8 @@ function paintView() {
     <h3 class="subhead">Members</h3>
     <table class="grid" id="customer-grid">
       <thead>
-        <tr class="head-row">${cols.map((c) => `<th>${c.label}</th>`).join("")}<th></th></tr>
-        <tr class="search-row">${searchRow}</tr>
+        <tr class="head-row"><th></th>${cols.map((c) => `<th>${c.label}</th>`).join("")}<th></th></tr>
+        <tr class="search-row"><th></th>${searchRow}</tr>
       </thead>
       <tbody>${body}</tbody>
     </table>
@@ -791,7 +975,7 @@ function paintView() {
 
   panel.querySelector("#export-xlsx").addEventListener("click", () => exportExcel(shown));
 
-  // --- batch selection ---
+  // --- unified batch selection ---
   const selectAll = panel.querySelector("#select-all");
   const batchDelete = panel.querySelector("#batch-delete");
   const batchCount = panel.querySelector("#batch-count");
@@ -799,15 +983,14 @@ function paintView() {
   const syncBatchUI = () => {
     batchCount.textContent = viewSelected.size + " selected";
     batchDelete.disabled = viewSelected.size === 0;
-    const ids = companyRows.map((c) => c.id);
-    selectAll.checked = ids.length > 0 && ids.every((id) => viewSelected.has(id));
+    selectAll.checked = allKeys.length > 0 && allKeys.every((k) => viewSelected.has(k));
   };
 
   panel.querySelectorAll(".row-select").forEach((cb) => {
     cb.addEventListener("change", () => {
-      const id = Number(cb.dataset.id);
-      if (cb.checked) viewSelected.add(id);
-      else viewSelected.delete(id);
+      const key = cb.dataset.key;
+      if (cb.checked) viewSelected.add(key);
+      else viewSelected.delete(key);
       const tr = cb.closest("tr");
       if (tr) tr.classList.toggle("selected", cb.checked);
       syncBatchUI();
@@ -816,9 +999,9 @@ function paintView() {
 
   selectAll.addEventListener("change", () => {
     if (selectAll.checked) {
-      companyRows.forEach((c) => viewSelected.add(c.id));
+      allKeys.forEach((k) => viewSelected.add(k));
     } else {
-      companyRows.forEach((c) => viewSelected.delete(c.id));
+      allKeys.forEach((k) => viewSelected.delete(k));
     }
     panel.querySelectorAll(".row-select").forEach((cb) => {
       cb.checked = selectAll.checked;
@@ -828,7 +1011,7 @@ function paintView() {
     syncBatchUI();
   });
 
-  batchDelete.addEventListener("click", () => batchDeleteCompanies());
+  batchDelete.addEventListener("click", () => batchDeleteSelected());
 
   panel.querySelectorAll("[data-edit]").forEach((b) => {
     b.addEventListener("click", () => openEditModal(Number(b.dataset.edit)));
@@ -848,26 +1031,30 @@ async function deleteCompany(companyId) {
   if (!confirm(`Delete company "${name}"${count ? ` and its ${count} member(s)` : ""}?`)) return;
   try {
     await fetchJson(API + `/api/companies/${companyId}`, { method: "DELETE" });
-    viewSelected.delete(companyId);
+    viewSelected.delete("c:" + companyId);
     await renderCustomerView();
   } catch (err) {
     alert("Delete failed: " + err.message);
   }
 }
 
-async function batchDeleteCompanies() {
-  const ids = [...viewSelected];
-  if (!ids.length) return;
-  if (!confirm(`Delete ${ids.length} selected compan${ids.length === 1 ? "y" : "ies"} and all their members?`)) return;
+// Unified batch delete: mix of companies (c:<id>) and members (m:<id>).
+async function batchDeleteSelected() {
+  const keys = [...viewSelected];
+  if (!keys.length) return;
+  const companyIds = keys.filter((k) => k.startsWith("c:")).map((k) => Number(k.slice(2)));
+  const memberIds = keys.filter((k) => k.startsWith("m:")).map((k) => Number(k.slice(2)));
+  if (!confirm(`Delete ${companyIds.length} compan${companyIds.length === 1 ? "y" : "ies"} and ${memberIds.length} member(s)?`)) return;
   const btn = panel.querySelector("#batch-delete");
   if (btn) { btn.disabled = true; btn.textContent = "Deleting…"; }
   let failed = 0;
-  for (const id of ids) {
-    try {
-      await fetchJson(API + `/api/companies/${id}`, { method: "DELETE" });
-    } catch (err) {
-      failed++;
-    }
+  for (const id of companyIds) {
+    try { await fetchJson(API + `/api/companies/${id}`, { method: "DELETE" }); }
+    catch (err) { failed++; }
+  }
+  for (const id of memberIds) {
+    try { await fetchJson(API + `/api/members/${id}`, { method: "DELETE" }); }
+    catch (err) { failed++; }
   }
   if (failed) alert(`${failed} deletion(s) failed.`);
   viewSelected.clear();

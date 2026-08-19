@@ -210,6 +210,18 @@ def api_update_member(handler, mid):
     )
 
 
+def api_delete_company(handler, cid):
+    conn = db()
+    comp = conn.execute("SELECT * FROM companies WHERE id = ?", (cid,)).fetchone()
+    if not comp:
+        conn.close()
+        return json_response(handler, {"error": "company not found"}, 404)
+    conn.execute("DELETE FROM companies WHERE id = ?", (cid,))
+    conn.commit()
+    conn.close()
+    return json_response(handler, {"ok": True, "id": cid}, 200)
+
+
 def api_delete_member(handler, mid):
     conn = db()
     mem = conn.execute("SELECT * FROM members WHERE id = ?", (mid,)).fetchone()
@@ -281,6 +293,8 @@ class Handler(SimpleHTTPRequestHandler):
                     api_get_company(self, cid); return True
                 if method == "PUT":
                     api_update_company(self, cid); return True
+                if method == "DELETE":
+                    api_delete_company(self, cid); return True
             else:
                 # /api/companies/<id>/members
                 parts = rest.split("/")
