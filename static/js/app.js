@@ -502,50 +502,43 @@ async function renderDevelopmentCreate() {
     <h2>Development / Create</h2>
 
     <div class="dev-2col">
-      <!-- 1st part: company + member -->
-      <div class="dev-part" id="dev-part1">
+      <!-- Parts 1 + 2 + 3 stacked in one card -->
+      <div class="dev-part" id="dev-main">
         <h3 class="subhead part-head">
           1 · Company &amp; Member
           <button class="icon-btn" id="dev-refresh" type="button" title="Refresh customer database">⟳</button>
         </h3>
 
-        <div class="field" id="dev-company-field">
-          <div class="combobox" id="dev-company-wrap">
-            <input id="dev-company" type="text" autocomplete="off"
-                   placeholder="Type ≥ 3 letters to search…" disabled />
-            <input type="hidden" id="dev-company-id" />
-            <ul class="combobox-list" id="dev-company-list" role="listbox" hidden></ul>
+        <div class="dim-row">
+          <div class="field" id="dev-company-field">
+            <div class="combobox" id="dev-company-wrap">
+              <input id="dev-company" type="text" autocomplete="off"
+                     placeholder="Type ≥ 3 letters to search…" disabled />
+              <input type="hidden" id="dev-company-id" />
+              <ul class="combobox-list" id="dev-company-list" role="listbox" hidden></ul>
+            </div>
+          </div>
+
+          <div class="field" id="dev-member-field">
+            <label for="dev-member">Member</label>
+            <select id="dev-member" disabled>
+              <option value="">— select a company first —</option>
+            </select>
           </div>
         </div>
 
-        <div class="field" id="dev-member-field">
-          <label for="dev-member">Member</label>
-          <select id="dev-member" disabled>
-            <option value="">— select a company first —</option>
-          </select>
-        </div>
-      </div>
-
-      <!-- 2nd part: product type (locked until 1st part is complete) -->
-      <div class="dev-part locked" id="dev-part2">
         <h3 class="subhead">2 · Product Type</h3>
-
         <div class="field">
           <select id="dev-product" disabled>
             ${PRODUCT_TYPES.map((p) => `<option value="${escapeHtml(p)}">${escapeHtml(p)}</option>`).join("")}
           </select>
         </div>
-      </div>
-    </div>
 
-    <div class="dev-2col grid-below">
-      <!-- 3rd part: details (locked until part 1 + part 2 are complete) -->
-      <div class="dev-part locked" id="dev-part3">
         <h3 class="subhead">3 · Details</h3>
         <div id="dev-part3-body"></div>
       </div>
 
-      <!-- 4th part: image + documents -->
+      <!-- 4th part: image + documents (locked until part 1 + part 2 are complete) -->
       <div class="dev-part locked" id="dev-part4">
         <h3 class="subhead">4 · Image</h3>
 
@@ -569,24 +562,21 @@ async function renderDevelopmentCreate() {
     </div>
   `;
 
-  const part1 = panel.querySelector("#dev-part1");
-  const part2 = panel.querySelector("#dev-part2");
+  const part1 = panel.querySelector("#dev-main");
+  const part2 = panel.querySelector("#dev-product");
   const searchEl = panel.querySelector("#dev-company");
   const hiddenEl = panel.querySelector("#dev-company-id");
   const listEl   = panel.querySelector("#dev-company-list");
   const memberEl = panel.querySelector("#dev-member");
   const productEl = panel.querySelector("#dev-product");
 
-  // --- Part 3 + Part 4 unlock when part 1 AND part 2 are complete ---
-  const part3 = panel.querySelector("#dev-part3");
-  const part4 = panel.querySelector("#dev-part4");
+  // --- Part 4 unlock when part 1 AND part 2 are complete ---
   const part3Body = panel.querySelector("#dev-part3-body");
+  const part3 = part3Body;
+  const part4 = panel.querySelector("#dev-part4");
 
   const updateUnlock = () => {
     const allDone = hiddenEl.value !== "" && memberEl.value !== "" && devState.product;
-    part2.classList.toggle("locked", !(hiddenEl.value !== "" && memberEl.value !== ""));
-    productEl.disabled = !(hiddenEl.value !== "" && memberEl.value !== "");
-    part3.classList.toggle("locked", !allDone);
     part4.classList.toggle("locked", !allDone);
     if (allDone) renderPart3();
   };
@@ -664,7 +654,7 @@ async function renderDevelopmentCreate() {
   const updateNextState = () => {
     const part1Done = hiddenEl.value !== "" && memberEl.value !== "";
     // unlock part 2 once part 1 is complete
-    part2.classList.toggle("locked", !part1Done);
+    part2.disabled = !part1Done;
     productEl.disabled = !part1Done;
     updateUnlock();
   };

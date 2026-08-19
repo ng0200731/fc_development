@@ -291,8 +291,8 @@ body {
 }
 .dev-part .field:last-of-type { margin-bottom: 0; }
 
-/* ---- Development / Create: 3rd + 4th parts below ---- */
-.dev-2col.grid-below { margin-top: 24px; }
+/* ---- Development / Create: full-width single parts below the grid ---- */
+.dev-part.dev-single { margin-top: 24px; }
 
 .dev-part3 .subhead { margin-top: 0; }
 .dim-row {
