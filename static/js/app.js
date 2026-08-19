@@ -378,14 +378,124 @@ let devState = {
   companyName: "",
   memberId: "",
   product: "",
+  // Part 3 details (persisted so tab switches keep them)
   height: "",
   width: "",
+  raisedHeight: "",
+  noOfColor: "",
+  pantones: [],   // [{ value, color }]  one entry per color
   images: [],   // [{ id, name, url }]
   docs: [],     // [{ id, name, file }]
 };
 
 // One-time cache of the company master list so we don't refetch on every repaint.
 let devCompaniesCache = null;
+
+// Pantone datasets — loaded once from static files.
+// Two catalogs are wired in (per the project doc):
+//   • fhi-tcx   -> pantone-numbers.json      (Fashion + Home TCX, keys like "11-0103")
+//   • solid-c   -> pantone-solid-coated.json  (Solid Coated, keys like "Cool Gray 1 C", "100 C")
+const PANTONE_CATALOGS = [
+  { type: "TCX", file: "/pantone-numbers.json" },
+  { type: "C",   file: "/pantone-solid-coated.json" },
+];
+// type suffix token -> catalog type (used to boost/score when the user hints it)
+const PANTONE_TYPE_HINTS = { tcx: "TCX", tpg: "TPG", c: "C", u: "U" };
+
+// catalog type code -> full human-readable name shown in the UI
+const PANTONE_TYPE_NAMES = {
+  TCX: "Fashion + Home TCX",
+  TPG: "Fashion + Home TPG",
+  C:   "Solid Coated",
+  U:   "Solid Uncoated",
+};
+const pantoneTypeName = (t) => PANTONE_TYPE_NAMES[t] || t;
+
+let pantoneData = null;        // [{ code, name, hex, type }]
+
+async function ensurePantoneData() {
+  if (pantoneData) return;
+  pantoneData = [];
+  for (const cat of PANTONE_CATALOGS) {
+    try {
+      const raw = await fetchJson(API + cat.file);
+      let map = raw;
+      if (Array.isArray(raw)) {
+        map = {};
+        raw.forEach((e) => { map[e.code || e.name] = e; });
+      }
+      for (const [code, v] of Object.entries(map)) {
+        pantoneData.push({ code, name: v.name || code, hex: v.hex, type: cat.type });
+      }
+    } catch (err) {
+      // catalog unavailable — skip
+    }
+  }
+}
+
+// Strip "PANTONE", suffixes (C/U/TCX/TPG/TPN), spaces, slashes — keep code chars.
+function normalizePantone(s) {
+  return (s || "").toLowerCase()
+    .replace(/pantone/g, "")
+    .replace(/[^a-z0-9-]/g, "")
+    .trim();
+}
+
+// Detect an explicit catalog hint in the query (e.g. "cool gray 1 c" -> "C").
+function detectPantoneHint(q) {
+  const tokens = (q.toLowerCase().replace(/pantone/g, "").match(/[a-z]+/g) || []);
+  for (const t of tokens) {
+    if (PANTONE_TYPE_HINTS[t]) return PANTONE_TYPE_HINTS[t];
+  }
+  return null;
+}
+
+// Resolve a user query to a list of matching entries (best first), each tagged
+// with its catalog type. Exact code -> exact name -> scored fuzzy (catalog-hint
+// boost, then start-with, then shortest).
+function findPantoneMatches(query, limit = 8) {
+  if (!pantoneData) return [];
+  const q = (query || "").trim();
+  if (!q) return [];
+
+  const norm = normalizePantone(q);
+  const lower = q.toLowerCase().replace(/pantone/g, "").trim();
+  const hint = detectPantoneHint(q);
+  const results = [];
+  const seen = new Set();
+  const normKey = (code) =>
+    code.toLowerCase().replace(/pantone/g, "").replace(/\s+/g, "").replace(/[^a-z0-9-]/g, "");
+
+  // 1) exact code match across all catalogs (by normalized key)
+  if (norm) {
+    for (const e of pantoneData) {
+      if (normKey(e.code) === norm && !seen.has(e.code + e.type)) {
+        results.push(e); seen.add(e.code + e.type);
+      }
+    }
+  }
+
+  // 2) exact name match (case-insensitive)
+  const byName = pantoneData.find((e) => e.name.toLowerCase() === lower && !seen.has(e.code + e.type));
+  if (byName) { results.push(byName); seen.add(byName.code + byName.type); }
+
+  // 3) fuzzy name matches, ranked with a small score
+  const fuzzy = pantoneData
+    .filter((e) => !seen.has(e.code + e.type) && fuzzyMatch(e.name, lower))
+    .sort((a, b) => {
+      const score = (e) => {
+        let s = 0;
+        if (hint && e.type === hint) s += 100;
+        if (e.name.toLowerCase().startsWith(lower)) s += 10;
+        s -= e.name.length * 0.1;
+        return s;
+      };
+      return score(b) - score(a);
+    })
+    .slice(0, limit - results.length);
+
+  return results.concat(fuzzy);
+}
 
 async function renderDevelopmentCreate() {
   panel.innerHTML = `
@@ -414,8 +524,6 @@ async function renderDevelopmentCreate() {
             <option value="">— select a company first —</option>
           </select>
         </div>
-
-        <p class="muted small" id="dev-part1-note">Pick a company and member to unlock the next part.</p>
       </div>
 
       <!-- 2nd part: product type (locked until 1st part is complete) -->
@@ -423,7 +531,6 @@ async function renderDevelopmentCreate() {
         <h3 class="subhead">2 · Product Type</h3>
 
         <div class="field">
-          <label for="dev-product">Product type</label>
           <select id="dev-product" disabled>
             ${PRODUCT_TYPES.map((p) => `<option value="${escapeHtml(p)}">${escapeHtml(p)}</option>`).join("")}
           </select>
@@ -432,33 +539,30 @@ async function renderDevelopmentCreate() {
     </div>
 
     <div class="dev-2col grid-below">
-      <!-- 3rd part: dimensions -->
-      <div class="dev-part" id="dev-part3">
+      <!-- 3rd part: details (locked until part 1 + part 2 are complete) -->
+      <div class="dev-part locked" id="dev-part3">
         <h3 class="subhead">3 · Details</h3>
-        <div class="dim-row">
-          <div class="field">
-            <label for="dev-height">Height (mm)</label>
-            <input id="dev-height" type="number" min="0" step="0.1" placeholder="0.0" autocomplete="off" />
-          </div>
-          <div class="field">
-            <label for="dev-width">Width (mm)</label>
-            <input id="dev-width" type="number" min="0" step="0.1" placeholder="0.0" autocomplete="off" />
-          </div>
-        </div>
+        <div id="dev-part3-body"></div>
       </div>
 
       <!-- 4th part: image + documents -->
-      <div class="dev-part" id="dev-part4">
+      <div class="dev-part locked" id="dev-part4">
         <h3 class="subhead">4 · Image</h3>
 
         <div class="dropzone" id="dev-image-drop" tabindex="0">
-          <p class="muted small">Drag &amp; drop images here, or press <strong>Ctrl+V</strong> to paste.</p>
+          <div class="drop-region">
+            <span class="drop-icon">🖼️</span>
+            <p class="muted small drop-hint">Drag &amp; drop images here,<br/>or press <strong>Ctrl+V</strong> to paste.</p>
+          </div>
           <div class="thumb-grid" id="dev-image-thumbs"></div>
         </div>
 
         <h4 class="subhead">Documents</h4>
         <div class="dropzone" id="dev-doc-drop" tabindex="0">
-          <p class="muted small">Drag &amp; drop multiple files here.</p>
+          <div class="drop-region">
+            <span class="drop-icon">📁</span>
+            <p class="muted small drop-hint">Drag &amp; drop multiple files here.</p>
+          </div>
           <div class="file-list" id="dev-doc-list"></div>
         </div>
       </div>
@@ -472,16 +576,20 @@ async function renderDevelopmentCreate() {
   const listEl   = panel.querySelector("#dev-company-list");
   const memberEl = panel.querySelector("#dev-member");
   const productEl = panel.querySelector("#dev-product");
-  const heightEl = panel.querySelector("#dev-height");
-  const widthEl  = panel.querySelector("#dev-width");
-  // part 2 no longer has Reset/Next buttons; nextBtn may be null
-  const nextBtn  = panel.querySelector("#dev-next");
 
-  // restore saved dimensions + wire persistence
-  heightEl.value = devState.height;
-  widthEl.value  = devState.width;
-  heightEl.addEventListener("input", () => { devState.height = heightEl.value; });
-  widthEl.addEventListener("input",  () => { devState.width  = widthEl.value;  });
+  // --- Part 3 + Part 4 unlock when part 1 AND part 2 are complete ---
+  const part3 = panel.querySelector("#dev-part3");
+  const part4 = panel.querySelector("#dev-part4");
+  const part3Body = panel.querySelector("#dev-part3-body");
+
+  const updateUnlock = () => {
+    const allDone = hiddenEl.value !== "" && memberEl.value !== "" && devState.product;
+    part2.classList.toggle("locked", !(hiddenEl.value !== "" && memberEl.value !== ""));
+    productEl.disabled = !(hiddenEl.value !== "" && memberEl.value !== "");
+    part3.classList.toggle("locked", !allDone);
+    part4.classList.toggle("locked", !allDone);
+    if (allDone) renderPart3();
+  };
 
   // enable search once we have the company list
   let companies = [];
@@ -558,11 +666,164 @@ async function renderDevelopmentCreate() {
     // unlock part 2 once part 1 is complete
     part2.classList.toggle("locked", !part1Done);
     productEl.disabled = !part1Done;
-    if (part1Done) {
-      panel.querySelector("#dev-part1-note").textContent = "Part 1 complete ✓";
+    updateUnlock();
+  };
+
+  // ---- Part 3 dynamic body (depends on product type) ----
+  const renderPart3 = () => {
+    ensurePantoneData();   // load the TCX dataset (no-op if already cached)
+    if (devState.product === "raised silicon label") {
+      renderRaisedSiliconLabel();
     } else {
-      panel.querySelector("#dev-part1-note").textContent = "Pick a company and member to unlock the next part.";
+      // default: just height + width
+      part3Body.innerHTML = `
+        <div class="dim-row">
+          <div class="field">
+            <label for="dev-height">Height (mm)</label>
+            <input id="dev-height" type="number" min="0" step="0.1" placeholder="0.0" autocomplete="off" />
+          </div>
+          <div class="field">
+            <label for="dev-width">Width (mm)</label>
+            <input id="dev-width" type="number" min="0" step="0.1" placeholder="0.0" autocomplete="off" />
+          </div>
+        </div>`;
+      bindDimInputs();
     }
+  };
+
+  const bindDimInputs = () => {
+    const h = part3Body.querySelector("#dev-height");
+    const w = part3Body.querySelector("#dev-width");
+    if (h) { h.value = devState.height; h.addEventListener("input", () => { devState.height = h.value; }); }
+    if (w) { w.value = devState.width;  w.addEventListener("input",  () => { devState.width  = w.value; }); }
+  };
+
+  const renderRaisedSiliconLabel = () => {
+    part3Body.innerHTML = `
+      <div class="dim-row">
+        <div class="field">
+          <label for="dev-height">Height (mm)</label>
+          <input id="dev-height" type="number" min="0" step="0.1" placeholder="0.0" autocomplete="off" />
+        </div>
+        <div class="field">
+          <label for="dev-width">Width (mm)</label>
+          <input id="dev-width" type="number" min="0" step="0.1" placeholder="0.0" autocomplete="off" />
+        </div>
+      </div>
+      <div class="dim-row">
+        <div class="field">
+          <label for="dev-raised-height">Raised height (mm)</label>
+          <input id="dev-raised-height" type="number" min="0" step="0.1" placeholder="0.0" autocomplete="off" />
+        </div>
+        <div class="field">
+          <label for="dev-no-of-color">No. of color</label>
+          <input id="dev-no-of-color" type="number" min="1" step="1" placeholder="0" autocomplete="off" />
+        </div>
+      </div>
+      <div id="dev-pantone-wrap"></div>
+    `;
+
+    bindDimInputs();
+    const rh = part3Body.querySelector("#dev-raised-height");
+    const nc = part3Body.querySelector("#dev-no-of-color");
+    if (rh) { rh.value = devState.raisedHeight; rh.addEventListener("input", () => { devState.raisedHeight = rh.value; }); }
+    if (nc) {
+      nc.value = devState.noOfColor;
+      // update only the pantone rows (not the whole body) to keep focus
+      nc.addEventListener("input", () => {
+        devState.noOfColor = nc.value;
+        renderPantoneRows();
+      });
+    }
+    renderPantoneRows();
+  };
+
+  // re-render only the pantone input rows (keeps focus on the No. of color field)
+  const renderPantoneRows = () => {
+    const wrap = part3Body.querySelector("#dev-pantone-wrap");
+    if (!wrap) return;
+    const n = parseInt(devState.noOfColor, 10);
+    if (!isNaN(n) && n > 0) {
+      while (devState.pantones.length < n) devState.pantones.push({ value: "", color: "#000000" });
+      if (devState.pantones.length > n) devState.pantones.length = n;
+    }
+    if ((parseInt(devState.noOfColor, 10) || 0) <= 0) {
+      wrap.innerHTML = "";
+      return;
+    }
+    wrap.innerHTML = devState.pantones.map((p, i) => `
+      <div class="pantone-row">
+        <div class="field pantone-code">
+          <label for="dev-pantone-${i}">Pantone #${i + 1}</label>
+          <input id="dev-pantone-${i}" type="text" class="pantone-input"
+                 data-idx="${i}" value="${escapeHtml(p.value)}"
+                 placeholder="code (11-0103) or name (egret)" autocomplete="off" />
+          <div class="pantone-match" id="dev-pantone-match-${i}"></div>
+        </div>
+      </div>`).join("");
+    // Build + fill the match display for row i from a query string.
+    // Used both on live typing and when restoring state after a tab switch.
+    const showPantoneMatch = (i, query) => {
+      const matchEl = wrap.querySelector("#dev-pantone-match-" + i);
+      if (!matchEl) return;
+      const matches = findPantoneMatches(query);
+      if (!matches.length) {
+        matchEl.innerHTML = `<span class="muted small">No match</span>`;
+        return;
+      }
+      const top = matches[0];
+      if (devState.pantones[i]) devState.pantones[i].color = "#" + top.hex;
+
+      matchEl.innerHTML =
+        `<div class="pantone-top">` +
+          `<span class="swatch" style="background:#${escapeHtml(top.hex)}"></span>` +
+          `<span class="muted small">${escapeHtml(top.code)} · ${escapeHtml(top.name)} · ` +
+          `<span class="pantone-type" title="${escapeHtml(pantoneTypeName(top.type))}">${escapeHtml(pantoneTypeName(top.type))}</span> · #${escapeHtml(top.hex)}</span>` +
+        `</div>` +
+        (matches.length > 1
+          ? `<div class="pantone-similar">similar: ` +
+            matches.slice(1).map((m) =>
+              `<span class="pantone-chip" data-code="${escapeHtml(m.code)}" ` +
+              `title="${escapeHtml(m.code)} · ${escapeHtml(m.name)} · ${escapeHtml(pantoneTypeName(m.type))}">` +
+                `<span class="swatch sm" style="background:#${escapeHtml(m.hex)}"></span>` +
+                `${escapeHtml(m.name)} ` +
+                `<span class="pantone-type" title="${escapeHtml(pantoneTypeName(m.type))}">${escapeHtml(pantoneTypeName(m.type))}</span></span>`
+            ).join("") +
+            `</div>`
+          : "");
+
+      // clicking a similar chip fills the input with that code and shows the
+      // chosen color as plain text + square swatch below
+      matchEl.querySelectorAll(".pantone-chip").forEach((chip) => {
+        chip.addEventListener("click", () => {
+          const inp = wrap.querySelector("#dev-pantone-" + i);
+          if (inp) inp.value = chip.dataset.code;
+          if (devState.pantones[i]) devState.pantones[i].value = chip.dataset.code;
+          const chosen = findPantoneMatches(chip.dataset.code)[0];
+          matchEl.innerHTML = chosen
+            ? `<div class="pantone-top">` +
+              `<span class="swatch" style="background:#${escapeHtml(chosen.hex)}"></span>` +
+              `<span class="muted small">${escapeHtml(chosen.code)} · ${escapeHtml(chosen.name)} · ` +
+              `<span class="pantone-type" title="${escapeHtml(pantoneTypeName(chosen.type))}">${escapeHtml(pantoneTypeName(chosen.type))}</span> · #${escapeHtml(chosen.hex)}</span>` +
+              `</div>`
+            : "";
+        });
+      });
+    };
+
+    wrap.querySelectorAll(".pantone-input").forEach((inp) => {
+      inp.addEventListener("input", () => {
+        const i = Number(inp.dataset.idx);
+        if (!devState.pantones[i]) return;
+        devState.pantones[i].value = inp.value;
+        showPantoneMatch(i, inp.value);
+      });
+    });
+
+    // restore any previously-typed matches (so they survive a tab switch)
+    devState.pantones.forEach((p, i) => {
+      if (p && p.value) showPantoneMatch(i, p.value);
+    });
   };
 
   const resetCompanySelection = () => {
@@ -683,7 +944,13 @@ async function renderDevelopmentCreate() {
     devState.memberId = memberEl.value;
     updateNextState();
   });
-  productEl.addEventListener("change", () => { devState.product = productEl.value; updateNextState(); });
+  productEl.addEventListener("change", () => {
+    devState.product = productEl.value;
+    updateNextState();
+  });
+
+  // initial unlock check (covers restored state on tab switch)
+  updateNextState();
 
   // ===== 4th part: image dropzone + documents =====
   const imageDrop = panel.querySelector("#dev-image-drop");
@@ -700,8 +967,10 @@ async function renderDevelopmentCreate() {
   const renderImageThumbs = () => {
     if (!images.length) {
       imageThumbs.innerHTML = "";
+      imageDrop.classList.remove("has-items");
       return;
     }
+    imageDrop.classList.add("has-items");
     imageThumbs.innerHTML = images.map((img) => `
       <div class="thumb" data-id="${img.id}">
         <img src="${img.url}" alt="${escapeHtml(img.name)}" />
@@ -763,8 +1032,10 @@ async function renderDevelopmentCreate() {
   const renderDocList = () => {
     if (!docs.length) {
       docList.innerHTML = "";
+      docDrop.classList.remove("has-items");
       return;
     }
+    docDrop.classList.add("has-items");
     docList.innerHTML = docs.map((d) => `
       <div class="doc-row" data-id="${d.id}">
         <span class="doc-icon">📄</span>
@@ -853,26 +1124,6 @@ async function renderCustomerView() {
   }
 }
 
-// flatten companies -> customer rows (one row per member)
-function flattenRows(customers) {
-  const rows = [];
-  customers.forEach((c) => {
-    const members = c.members && c.members.length ? c.members : [null];
-    members.forEach((m) => {
-      rows.push({
-        companyId: c.id,
-        company: c.name,
-        emailSuffix: c.email_suffix,
-        memberId: m ? m.id : null,
-        name: m ? m.name : "",
-        email: m ? m.email_prefix + "@" + c.email_suffix : "",
-        title: m ? m.title : "",
-        tel: m ? m.tel : "",
-      });
-    });
-  });
-  return rows;
-}
 
 function fuzzyMatch(text, q) {
   if (!q) return true;
@@ -889,53 +1140,62 @@ function fuzzyMatch(text, q) {
 }
 
 function paintView() {
-  const rows = flattenRows(viewCustomers);
+  // One flat row per member (company rows with no members get a single row too).
   const cols = [
-    { key: "company", label: "Company" },
-    { key: "name", label: "Member" },
-    { key: "email", label: "Email" },
+    { key: "company", label: "Company Name" },
+    { key: "name", label: "Member Name" },
+    { key: "email", label: "Member Email" },
     { key: "title", label: "Title" },
     { key: "tel", label: "Tel" },
   ];
 
-  const filtered = rows.filter((r) =>
+  const rows = [];
+  viewCustomers.forEach((c) => {
+    const members = c.members && c.members.length ? c.members : [null];
+    members.forEach((m) => {
+      rows.push({
+        companyId: c.id,
+        company: c.name,
+        emailSuffix: c.email_suffix,
+        memberId: m ? m.id : null,
+        name: m ? m.name : "",
+        email: m ? m.email_prefix + "@" + c.email_suffix : "",
+        title: m ? m.title : "",
+        tel: m ? m.tel : "",
+      });
+    });
+  });
+
+  const shown = rows.filter((r) =>
     cols.every((c) => fuzzyMatch(r[c.key], viewFilters[c.key]))
   );
 
-  const filtersActive = Object.values(viewFilters).some((v) => v && v.trim());
-  const shown = filtersActive ? filtered : rows;
-
-  // Company rows: one per company, with member count.
-  const companyRows = viewCustomers
-    .map((c) => ({
-      id: c.id,
-      name: c.name,
-      emailSuffix: c.email_suffix,
-      memberCount: (c.members || []).length,
-    }))
-    .filter((c) =>
-      fuzzyMatch(c.name, viewFilters.company) &&
-      fuzzyMatch(c.emailSuffix, viewFilters.email)
-    );
+  // Batch delete works at the COMPANY level: each selected member row maps to
+  // its company, and deleting the company removes it + all its members.
+  const companyIds = [...new Set(shown.map((r) => r.companyId))];
+  const allKeys = companyIds.map((id) => "c:" + id);
+  const allChecked = allKeys.length > 0 && allKeys.every((k) => viewSelected.has(k));
 
   const searchRow = cols.map((c) =>
     `<th class="search-th">
        <input class="col-search" data-key="${c.key}" type="text"
               placeholder="Search ${c.label}…" value="${escapeHtml(viewFilters[c.key] || "")}" />
      </th>`
-  ).join("") +
-    `<th class="search-th actions-th"></th>`;
+  ).join("") + `<th class="search-th actions-th"></th>`;
 
   const body = shown.map((r) => {
-    const checked = r.memberId != null && viewSelected.has("m:" + r.memberId);
+    const checked = viewSelected.has("c:" + r.companyId);
     const editBtn = r.memberId != null
       ? `<button class="icon-btn" data-edit="${r.companyId}" title="Edit">✎</button>
-         <button class="icon-btn danger" data-remove="${r.memberId}" title="Remove member">🗑</button>`
-      : `<button class="icon-btn" data-edit="${r.companyId}" title="Edit company">✎</button>`;
+         <button class="icon-btn danger" data-del-company="${r.companyId}" title="Delete company">🗑</button>`
+      : `<button class="icon-btn" data-edit="${r.companyId}" title="Edit company">✎</button>
+         <button class="icon-btn danger" data-del-company="${r.companyId}" title="Delete company">🗑</button>`;
     return `
       <tr class="${checked ? "selected" : ""}">
         <td>
-          ${r.memberId != null ? `<label class="cb-cell"><input type="checkbox" class="row-select" data-key="m:${r.memberId}" ${checked ? "checked" : ""} /></label>` : ""}
+          <label class="cb-cell">
+            <input type="checkbox" class="row-select" data-key="c:${r.companyId}" ${checked ? "checked" : ""} />
+          </label>
         </td>
         <td>${escapeHtml(r.company)}</td>
         <td>${escapeHtml(r.name)}</td>
@@ -945,32 +1205,6 @@ function paintView() {
         <td class="row-actions">${editBtn}</td>
       </tr>`;
   }).join("") || `<tr><td colspan="7" class="muted">No matches.</td></tr>`;
-
-  const companyBody = companyRows.map((c) => {
-    const checked = viewSelected.has("c:" + c.id);
-    return `
-      <tr class="${checked ? "selected" : ""}">
-        <td>
-          <label class="cb-cell">
-            <input type="checkbox" class="row-select" data-key="c:${c.id}" ${checked ? "checked" : ""} />
-            <strong>${escapeHtml(c.name)}</strong>
-            <span class="muted">@${escapeHtml(c.emailSuffix)}</span>
-          </label>
-        </td>
-        <td>${c.memberCount} member${c.memberCount === 1 ? "" : "s"}</td>
-        <td class="row-actions">
-          <button class="icon-btn" data-edit="${c.id}" title="Edit">✎</button>
-          <button class="icon-btn danger" data-del-company="${c.id}" title="Delete company">🗑</button>
-        </td>
-      </tr>`;
-  }).join("") || `<tr><td colspan="3" class="muted">No companies.</td></tr>`;
-
-  // "Select all" covers every visible company + member row.
-  const allKeys = [
-    ...companyRows.map((c) => "c:" + c.id),
-    ...shown.filter((r) => r.memberId != null).map((r) => "m:" + r.memberId),
-  ];
-  const allChecked = allKeys.length > 0 && allKeys.every((k) => viewSelected.has(k));
 
   panel.innerHTML = `
     <div class="view-head">
@@ -989,22 +1223,13 @@ function paintView() {
       <button class="btn danger" id="batch-delete" type="button" disabled>Delete selected</button>
     </div>
 
-    <h3 class="subhead">Companies</h3>
-    <table class="grid company-grid" id="company-grid">
-      <thead>
-        <tr class="head-row">
-          <th>Company</th>
-          <th>Members</th>
-          <th class="actions-th">Actions</th>
-        </tr>
-      </thead>
-      <tbody>${companyBody}</tbody>
-    </table>
-
-    <h3 class="subhead">Members</h3>
     <table class="grid" id="customer-grid">
       <thead>
-        <tr class="head-row"><th></th>${cols.map((c) => `<th>${c.label}</th>`).join("")}<th></th></tr>
+        <tr class="head-row">
+          <th></th>
+          ${cols.map((c) => `<th>${c.label}</th>`).join("")}
+          <th class="actions-th">Actions</th>
+        </tr>
         <tr class="search-row"><th></th>${searchRow}</tr>
       </thead>
       <tbody>${body}</tbody>
@@ -1015,13 +1240,16 @@ function paintView() {
   panel.querySelectorAll(".col-search").forEach((inp) => {
     inp.addEventListener("input", () => {
       viewFilters[inp.dataset.key] = inp.value;
+      const cursor = inp.selectionStart;
       paintView();
+      const same = panel.querySelector(`.col-search[data-key="${inp.dataset.key}"]`);
+      if (same) { same.focus(); same.setSelectionRange(cursor, cursor); }
     });
   });
 
   panel.querySelector("#export-xlsx").addEventListener("click", () => exportExcel(shown));
 
-  // --- unified batch selection ---
+  // --- batch selection (company-level) ---
   const selectAll = panel.querySelector("#select-all");
   const batchDelete = panel.querySelector("#batch-delete");
   const batchCount = panel.querySelector("#batch-count");
@@ -1035,20 +1263,22 @@ function paintView() {
   panel.querySelectorAll(".row-select").forEach((cb) => {
     cb.addEventListener("change", () => {
       const key = cb.dataset.key;
+      const companyId = key.slice(2);
       if (cb.checked) viewSelected.add(key);
       else viewSelected.delete(key);
-      const tr = cb.closest("tr");
-      if (tr) tr.classList.toggle("selected", cb.checked);
+      // sync sibling rows of the same company
+      panel.querySelectorAll(`.row-select[data-key="${key}"]`).forEach((sib) => {
+        sib.checked = cb.checked;
+        const tr = sib.closest("tr");
+        if (tr) tr.classList.toggle("selected", cb.checked);
+      });
       syncBatchUI();
     });
   });
 
   selectAll.addEventListener("change", () => {
-    if (selectAll.checked) {
-      allKeys.forEach((k) => viewSelected.add(k));
-    } else {
-      allKeys.forEach((k) => viewSelected.delete(k));
-    }
+    if (selectAll.checked) allKeys.forEach((k) => viewSelected.add(k));
+    else allKeys.forEach((k) => viewSelected.delete(k));
     panel.querySelectorAll(".row-select").forEach((cb) => {
       cb.checked = selectAll.checked;
       const tr = cb.closest("tr");
@@ -1065,10 +1295,9 @@ function paintView() {
   panel.querySelectorAll("[data-del-company]").forEach((b) => {
     b.addEventListener("click", () => deleteCompany(Number(b.dataset.delCompany)));
   });
-  panel.querySelectorAll("[data-remove]").forEach((b) => {
-    b.addEventListener("click", () => removeMember(Number(b.dataset.remove)));
-  });
 }
+
+// helper: are all selectable company keys currently selected?
 
 async function deleteCompany(companyId) {
   const company = viewCustomers.find((c) => c.id === companyId);
@@ -1084,22 +1313,18 @@ async function deleteCompany(companyId) {
   }
 }
 
-// Unified batch delete: mix of companies (c:<id>) and members (m:<id>).
+// Unified batch delete: companies only (each company takes its members with it).
 async function batchDeleteSelected() {
   const keys = [...viewSelected];
   if (!keys.length) return;
   const companyIds = keys.filter((k) => k.startsWith("c:")).map((k) => Number(k.slice(2)));
-  const memberIds = keys.filter((k) => k.startsWith("m:")).map((k) => Number(k.slice(2)));
-  if (!confirm(`Delete ${companyIds.length} compan${companyIds.length === 1 ? "y" : "ies"} and ${memberIds.length} member(s)?`)) return;
+  const total = companyIds.length;
+  if (!confirm(`Delete ${total} compan${total === 1 ? "y" : "ies"} and all their members?`)) return;
   const btn = panel.querySelector("#batch-delete");
   if (btn) { btn.disabled = true; btn.textContent = "Deleting…"; }
   let failed = 0;
   for (const id of companyIds) {
     try { await fetchJson(API + `/api/companies/${id}`, { method: "DELETE" }); }
-    catch (err) { failed++; }
-  }
-  for (const id of memberIds) {
-    try { await fetchJson(API + `/api/members/${id}`, { method: "DELETE" }); }
     catch (err) { failed++; }
   }
   if (failed) alert(`${failed} deletion(s) failed.`);
@@ -1340,7 +1565,7 @@ function escapeHtml(s) {
 // ---------------------------------------------------------------------------
 
 function exportExcel(rows) {
-  const headers = ["Company", "Member", "Email", "Title", "Tel"];
+  const headers = ["Company Name", "Member Name", "Member Email", "Title", "Tel"];
   const lines = [headers.join(",")];
   rows.forEach((r) => {
     const cells = [r.company, r.name, r.email, r.title, r.tel].map(csvCell);
