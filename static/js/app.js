@@ -520,7 +520,6 @@ async function renderDevelopmentCreate() {
           </div>
 
           <div class="field" id="dev-member-field">
-            <label for="dev-member">Member</label>
             <select id="dev-member" disabled>
               <option value="">— select a company first —</option>
             </select>
