@@ -567,69 +567,72 @@ function openPostSaveModal() {
 // element references + helpers from renderDevelopmentCreate().
 async function fillDummyDevelopment(ctx) {
   const { searchEl, hiddenEl, memberEl, productEl, itemEl, companies,
-          selectCompany, loadMembers, updateNextState, updateSaveState } = ctx;
-
-  // 1) random company
-  const pool = companies && companies.length ? companies : (devCompaniesCache || []);
-  if (!pool.length) {
-    openConfirmModal("No companies", "There are no companies in the customer database yet. Create one first.", () => {});
-    return;
-  }
-  const comp = rnd(pool);
-  selectCompany(Number(comp.id), comp.name);
-  await loadMembers(Number(comp.id));
-  // random member (if any)
-  const memberOpts = [...memberEl.querySelectorAll("option")].filter((o) => o.value !== "");
-  if (memberOpts.length) {
-    const m = rnd(memberOpts);
-    memberEl.value = m.value;
-    devState.memberId = m.value;
-  }
-  updateNextState();
-
-  // 2) item name + product type
-  const ITEMS = ["Spring Patch", "Logo Badge", "Care Label", "Brand Tab", "Woven Emblem",
-                 "Silicone Grip", "Heat Transfer", "Glitter Transfer", "Reflective Tape"];
-  itemEl.value = rnd(ITEMS) + " " + (Math.floor(Math.random() * 900) + 100);
-  devState.item = itemEl.value;
-  productEl.value = rnd(PRODUCT_TYPES);
-  devState.product = productEl.value;
-  updateNextState();
-
-  // 3) Part 3 details
-  if (devState.product === "raised silicon label") {
-    devState.height = (Math.random() * 40 + 10).toFixed(1);
-    devState.width = (Math.random() * 40 + 10).toFixed(1);
-    devState.raisedHeight = (Math.random() * 3 + 0.5).toFixed(1);
-    devState.noOfColor = String(Math.floor(Math.random() * 4) + 1);
-    devState.pantones = [];
-    for (let i = 0; i < Number(devState.noOfColor); i++) {
-      devState.pantones.push({ value: "19-" + (Math.floor(Math.random() * 400) + 100) + " TCX", color: "#888888" });
+          selectCompany, loadMembers, updateNextState, updateSaveState, updateUnlock } = ctx;
+  try {
+    // 1) random company
+    const pool = companies && companies.length ? companies : (devCompaniesCache || []);
+    if (!pool.length) {
+      openConfirmModal("No companies", "There are no companies in the customer database yet. Create one first.", () => {});
+      return;
     }
-  } else {
-    devState.height = (Math.random() * 40 + 10).toFixed(1);
-    devState.width = (Math.random() * 40 + 10).toFixed(1);
-    devState.raisedHeight = "";
-    devState.noOfColor = "";
-    devState.pantones = [];
+    const comp = rnd(pool);
+    selectCompany(Number(comp.id), comp.name);
+    await loadMembers(Number(comp.id));
+    const memberOpts = [...memberEl.querySelectorAll("option")].filter((o) => o.value !== "");
+    if (memberOpts.length) {
+      const m = rnd(memberOpts);
+      memberEl.value = m.value;
+      devState.memberId = m.value;
+    }
+
+    // 2) item name + product type
+    const ITEMS = ["Spring Patch", "Logo Badge", "Care Label", "Brand Tab", "Woven Emblem",
+                   "Silicone Grip", "Heat Transfer", "Glitter Transfer", "Reflective Tape"];
+    itemEl.value = rnd(ITEMS) + " " + (Math.floor(Math.random() * 900) + 100);
+    devState.item = itemEl.value;
+    const pt = rnd(PRODUCT_TYPES);
+    productEl.value = pt;
+    devState.product = pt;
+
+    // 3) Part 3 details — set BEFORE rendering so inputs show the values
+    if (pt === "raised silicon label") {
+      devState.height = (Math.random() * 40 + 10).toFixed(1);
+      devState.width = (Math.random() * 40 + 10).toFixed(1);
+      devState.raisedHeight = (Math.random() * 3 + 0.5).toFixed(1);
+      devState.noOfColor = String(Math.floor(Math.random() * 4) + 1);
+      devState.pantones = [];
+      for (let i = 0; i < Number(devState.noOfColor); i++) {
+        devState.pantones.push({ value: "19-" + (Math.floor(Math.random() * 400) + 100) + " TCX", color: "#888888" });
+      }
+    } else {
+      devState.height = (Math.random() * 40 + 10).toFixed(1);
+      devState.width = (Math.random() * 40 + 10).toFixed(1);
+      devState.raisedHeight = "";
+      devState.noOfColor = "";
+      devState.pantones = [];
+    }
+
+    // 4) 4 random images from the pool
+    const images = await ensureImagePool();
+    devState.images = [];
+    if (images && images.length) {
+      const picks = new Set();
+      const count = Math.min(4, images.length);
+      while (picks.size < count) picks.add(Math.floor(Math.random() * images.length));
+      [...picks].forEach((idx) => {
+        const s = images[idx];
+        devState.images.push({ id: "img-" + Date.now() + "-" + devState.images.length, name: s.name, url: s.url });
+      });
+    }
+
+    // single synchronized render pass
+    updateNextState();
+    updateUnlock();          // renders Part 3 from current devState
+    renderDevImageThumbs();  // draws the 4 image thumbnails
+    updateSaveState();       // enables Save (>=1 image)
+  } catch (err) {
+    openConfirmModal("Dummy failed", String(err && err.message ? err.message : err), () => {});
   }
-
-  // 4) 4 random images from the pool
-  const images = await ensureImagePool();
-  devState.images = [];
-  const picks = new Set();
-  const count = Math.min(4, images.length);
-  while (picks.size < count) picks.add(Math.floor(Math.random() * images.length));
-  [...picks].forEach((idx) => {
-    const src = images[idx];
-    devState.images.push({ id: "img-" + Date.now() + "-" + devState.images.length, name: src.name, url: src.url });
-  });
-
-  // re-render Part 3 (dimensions / pantone) to reflect the dummy data
-  updateUnlock();
-  updateSaveState();
-  // render thumbs (the create render already wired this, but images changed)
-  renderDevImageThumbs();
 }
 
 // Shared thumbnail renderer for the Development / Create image dropzone.
@@ -762,6 +765,7 @@ async function renderDevelopmentCreate() {
           <div class="field">
             <label for="dev-product">Product type</label>
             <select id="dev-product" disabled>
+              <option value="">— select —</option>
               ${PRODUCT_TYPES.map((p) => `<option value="${escapeHtml(p)}">${escapeHtml(p)}</option>`).join("")}
             </select>
           </div>
@@ -1241,6 +1245,7 @@ async function renderDevelopmentCreate() {
     const url = URL.createObjectURL(file);
     images.push({ id: "img-" + Date.now() + "-" + images.length, name: file.name, url });
     renderImageThumbs();
+    updateSaveState();
   };
 
   // drag & drop for images
