@@ -58,11 +58,16 @@ sidebar.querySelectorAll(".group-toggle").forEach((btn) => {
 sidebar.querySelectorAll(".nav-item").forEach((item) => {
   item.addEventListener("click", (e) => {
     e.preventDefault();
+    // leaving any edit session when navigating via the sidebar
+    devEditMode = false;
+    devEditId = null;
     openTab(item.dataset.target);
   });
 });
 
 function openTab(target) {
+  // editing an existing development only applies while on the Create screen
+  if (target !== "development-create") { devEditMode = false; devEditId = null; }
   openTabs.add(target);
   activeTarget = target;
   renderTabs();
@@ -88,8 +93,9 @@ function renderTabs() {
     tab.setAttribute("role", "tab");
 
     const label = document.createElement("span");
-    label.textContent = labels[target] || target;
+    label.textContent = (target === "development-create" && devEditMode) ? "edit" : (labels[target] || target);
     tab.appendChild(label);
+    if (target === "development-create" && devEditMode) tab.classList.add("edit-mode");
 
     const close = document.createElement("button");
     close.className = "close";
@@ -381,6 +387,7 @@ let devState = {
   companyId: "",
   companyName: "",
   memberId: "",
+  memberName: "",
   item: "",
   product: "",
   // Part 3 details (persisted so tab switches keep them)
@@ -397,6 +404,17 @@ let devState = {
 // Dummy button and the Development / View image column. Fetched once.
 let devImagePool = null;   // [{ name, url }]
 let devImagePoolLoading = null;
+
+// When editing an existing development, the Create screen is reused pre-filled
+// and the mini-tab shows "edit" (red background / black text).
+let devEditMode = false;
+let devEditId = null;
+
+// Reference to the current Development/Create save-state updater so the
+// module-level image thumbnail renderer can re-evaluate Save gating after a
+// removal. The renderer is shared with the Dummy flow and cannot otherwise
+// reach renderDevelopmentCreate()'s updateSaveState closure.
+let devSaveStateFn = null;
 
 // One-time cache of the company master list so we don't refetch on every repaint.
 let devCompaniesCache = null;
@@ -470,6 +488,7 @@ function resetDevState() {
   devState.companyId = "";
   devState.companyName = "";
   devState.memberId = "";
+  devState.memberName = "";
   devState.item = "";
   devState.product = "";
   devState.height = "";
@@ -612,23 +631,18 @@ async function fillDummyDevelopment(ctx) {
       devState.pantones = [];
     }
 
-    // 4) 4 random images from the pool
+    // 4) single image from the pool (a development requires exactly one image)
     const images = await ensureImagePool();
     devState.images = [];
     if (images && images.length) {
-      const picks = new Set();
-      const count = Math.min(4, images.length);
-      while (picks.size < count) picks.add(Math.floor(Math.random() * images.length));
-      [...picks].forEach((idx) => {
-        const s = images[idx];
-        devState.images.push({ id: "img-" + Date.now() + "-" + devState.images.length, name: s.name, url: s.url });
-      });
+      const s = images[Math.floor(Math.random() * images.length)];
+      devState.images.push({ id: "img-" + Date.now() + "-0", name: s.name, url: s.url });
     }
 
     // single synchronized render pass
     updateNextState();
     updateUnlock();          // renders Part 3 from current devState
-    renderDevImageThumbs();  // draws the 4 image thumbnails
+    renderDevImageThumbs();  // draws the single image thumbnail
     updateSaveState();       // enables Save (>=1 image)
   } catch (err) {
     openConfirmModal("Dummy failed", String(err && err.message ? err.message : err), () => {});
@@ -636,6 +650,8 @@ async function fillDummyDevelopment(ctx) {
 }
 
 // Shared thumbnail renderer for the Development / Create image dropzone.
+// After removing an image it re-evaluates Save gating (via devSaveStateFn) and,
+// if the user just cleared the last image, prompts them to add/keep one.
 function renderDevImageThumbs() {
   const imageThumbs = panel.querySelector("#dev-image-thumbs");
   if (!imageThumbs) return;
@@ -652,7 +668,20 @@ function renderDevImageThumbs() {
     b.addEventListener("click", () => {
       const id = b.dataset.rm;
       const i = devState.images.findIndex((x) => x.id === id);
-      if (i >= 0) { devState.images.splice(i, 1); updateSaveState(); b.closest(".thumb").remove(); }
+      if (i >= 0) {
+        devState.images.splice(i, 1);
+        if (typeof devSaveStateFn === "function") devSaveStateFn();
+        b.closest(".thumb").remove();
+        // A development needs at least one image — if they removed the last one,
+        // prompt so nothing silently disappears with no feedback.
+        if (devState.images.length === 0) {
+          openConfirmModal(
+            "No image attached",
+            "A development needs at least one image. Add or paste an image, or generate one with the Dummy button.",
+            () => {}
+          );
+        }
+      }
     });
   });
 }
@@ -723,12 +752,12 @@ function findPantoneMatches(query, limit = 8) {
 
 async function renderDevelopmentCreate() {
   panel.innerHTML = `
-    <h2>Development / Create</h2>
+    <h2>${devEditMode ? "Development / Edit" : "Development / Create"}</h2>
 
     <div class="actions create-actions">
       <button class="btn ghost" id="dev-dummy" type="button">Dummy</button>
       <button class="btn ghost" id="dev-reset" type="button">Reset</button>
-      <button class="btn primary" id="dev-save" type="button" disabled>Save</button>
+      <button class="btn primary" id="dev-save" type="button" disabled>${devEditMode ? "Update" : "Save"}</button>
     </div>
 
     <div class="dev-2col">
@@ -817,7 +846,9 @@ async function renderDevelopmentCreate() {
   const part4 = panel.querySelector("#dev-part4");
 
   const updateUnlock = () => {
-    const allDone = hiddenEl.value !== "" && memberEl.value !== "" && devState.product;
+    // In edit mode the record is already complete, so trust restored state and
+    // unlock immediately instead of waiting for the async member load.
+    const allDone = (hiddenEl.value !== "" && memberEl.value !== "" && devState.product) || devEditMode;
     part4.classList.toggle("locked", !allDone);
     // Part 3 (details) is always visible; only Part 4 (image/docs) is gated.
     renderPart3();
@@ -839,28 +870,20 @@ async function renderDevelopmentCreate() {
   }
   searchEl.disabled = false;
 
-  // restore previously selected company into the search box
-  let needMemberRestore = false;
-  if (devState.companyId) {
-    const stillThere = companies.some((c) => String(c.id) === String(devState.companyId));
-    if (stillThere) {
-      hiddenEl.value = devState.companyId;
-      searchEl.value = devState.companyName || devState.companyId;
-      needMemberRestore = devState.memberId !== "";
-      // reload members now (and restore the chosen member) so the dropdown is populated
-      loadMembers(Number(devState.companyId), devState.memberId);
-    } else {
-      // company vanished from DB since last visit — drop the selection
-      devState.companyId = "";
-      devState.companyName = "";
-      devState.memberId = "";
-    }
-  }
-
   // restore product selection
   if (devState.product) productEl.value = devState.product;
   // restore item name
   if (devState.item) itemEl.value = devState.item;
+
+  // In edit mode, the record is already fully valid: don't blank the company/
+  // member dropdowns while the async member load is still resolving. Seed the
+  // member dropdown synchronously from devState.memberId so Part 4 unlocks
+  // immediately and images/Part 3 render without waiting on the network.
+  if (devEditMode && devState.companyId && devState.memberId) {
+    memberEl.innerHTML = `<option value="${devState.memberId}">${escapeHtml(devState.memberName || devState.memberId)}</option>`;
+    memberEl.value = devState.memberId;
+    memberEl.disabled = false;
+  }
 
   // refresh = re-fetch latest companies + members from the customer database
   panel.querySelector("#dev-refresh").addEventListener("click", async (e) => {
@@ -1201,6 +1224,7 @@ async function renderDevelopmentCreate() {
   // initial unlock check (covers restored state on tab switch)
   updateNextState();
   updateSaveState();
+  devSaveStateFn = updateSaveState;   // let the shared image renderer re-gate Save
 
   // ===== 4th part: image dropzone + documents =====
   const imageDrop = panel.querySelector("#dev-image-drop");
@@ -1235,6 +1259,16 @@ async function renderDevelopmentCreate() {
           URL.revokeObjectURL(images[idx].url);
           images.splice(idx, 1);
           renderImageThumbs();
+          updateSaveState();   // re-gate Save now that an image is gone
+          // A development needs at least one image — if they removed the last
+          // one, prompt so nothing silently disappears with no feedback.
+          if (images.length === 0) {
+            openConfirmModal(
+              "No image attached",
+              "A development needs at least one image. Add or paste an image, or generate one with the Dummy button.",
+              () => {}
+            );
+          }
         }
       });
     });
@@ -1351,6 +1385,8 @@ async function renderDevelopmentCreate() {
       "Reset development?",
       "This will clear all fields and images you have entered. Continue?",
       () => {
+        devEditMode = false;
+        devEditId = null;
         resetDevState();
         renderDevelopmentCreate();
       }
@@ -1366,17 +1402,29 @@ async function renderDevelopmentCreate() {
     }
     saveBtn.disabled = true;
     saveBtn.textContent = "Saving…";
+    const verb = devEditMode ? "Update" : "Save";
     try {
-      await fetchJson(API + "/api/developments", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      });
-      openPostSaveModal();
+      if (devEditMode && devEditId != null) {
+        await fetchJson(API + `/api/developments/${devEditId}`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+        devEditMode = false;
+        devEditId = null;
+        openTab("development-view");
+      } else {
+        await fetchJson(API + "/api/developments", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+        openPostSaveModal();
+      }
     } catch (err) {
-      saveBtn.textContent = "Save";
+      saveBtn.textContent = verb;
       saveBtn.disabled = false;
-      openConfirmModal("Save failed", "Could not save development: " + err.message, () => {});
+      openConfirmModal(verb + " failed", "Could not save development: " + err.message, () => {});
     }
   });
 
@@ -1562,7 +1610,7 @@ function paintDevelopmentView() {
   batchDelete.addEventListener("click", batchDeleteDevelopments);
 
   panel.querySelectorAll("[data-edit]").forEach((b) => {
-    b.addEventListener("click", () => openDevEditModal(Number(b.dataset.edit)));
+    b.addEventListener("click", () => editDevelopmentInCreate(Number(b.dataset.edit)));
   });
   panel.querySelectorAll("[data-del]").forEach((b) => {
     b.addEventListener("click", () => deleteDevelopment(Number(b.dataset.del)));
@@ -1608,6 +1656,47 @@ async function deleteDevelopment(id) {
       }
     }
   );
+}
+
+// Load an existing development into the Create screen (pre-filled) and switch
+// the mini-tab to "edit" (red background / black text). Reuses devState so the
+// Create renderer restores every field, then the Update button PUTs the record.
+async function editDevelopmentInCreate(id) {
+  let rec;
+  try {
+    rec = await fetchJson(API + `/api/developments/${id}`);
+  } catch (err) {
+    openConfirmModal("Load failed", err.message, () => {});
+    return;
+  }
+
+  // seed the persistent state from the record
+  resetDevState();
+  devState.companyId = rec.company_id != null ? String(rec.company_id) : "";
+  devState.companyName = rec.company_name || "";
+  devState.memberId = rec.member_id != null ? String(rec.member_id) : "";
+  devState.memberName = rec.member_name || "";
+  devState.item = rec.item_name || "";
+  devState.product = rec.product_type || "";
+
+  // Part 3 details
+  devState.height = rec.height != null ? String(rec.height) : "";
+  devState.width = rec.width != null ? String(rec.width) : "";
+  devState.raisedHeight = rec.raised_height != null ? String(rec.raised_height) : "";
+  devState.noOfColor = rec.no_of_color != null ? String(rec.no_of_color) : "";
+  devState.pantones = Array.isArray(rec.pantones) ? rec.pantones.map((p) => ({ value: p.value || "", color: p.color || "#000000" })) : [];
+
+  // images — map saved names back to the sample-image pool (real thumbnails)
+  const pool = await ensureImagePool();
+  const findInPool = (name) => pool.find((p) => p.name === name);
+  devState.images = (rec.image_names || []).map((n) => {
+    const hit = findInPool(n);
+    return { id: "eimg-" + n, name: n, url: hit ? hit.url : API + "/sample-images/" + encodeURI(n) };
+  });
+
+  devEditMode = true;
+  devEditId = rec.id;
+  openTab("development-create");
 }
 
 // Edit modal for a development record. Prefilled with all fields + images.

@@ -163,6 +163,16 @@ select:focus-visible,
   font-weight: 600;
 }
 
+/* Edit-mode mini-tab: red background with black text */
+.tab.edit-mode,
+.tab.edit-mode.active {
+  background: #dc2626;
+  color: #000;
+  border-color: #b91c1c;
+  font-weight: 600;
+}
+.tab.edit-mode .close { color: #000; }
+
 .tab .close {
   border: none;
   background: none;
