@@ -377,6 +377,7 @@ let devState = {
   companyId: "",
   companyName: "",
   memberId: "",
+  item: "",
   product: "",
   // Part 3 details (persisted so tab switches keep them)
   height: "",
@@ -387,6 +388,11 @@ let devState = {
   images: [],   // [{ id, name, url }]
   docs: [],     // [{ id, name, file }]
 };
+
+// Pool of sample images (from C:\Users\ng\Desktop\canvas_source) used by the
+// Dummy button and the Development / View image column. Fetched once.
+let devImagePool = null;   // [{ name, url }]
+let devImagePoolLoading = null;
 
 // One-time cache of the company master list so we don't refetch on every repaint.
 let devCompaniesCache = null;
@@ -501,6 +507,12 @@ async function renderDevelopmentCreate() {
   panel.innerHTML = `
     <h2>Development / Create</h2>
 
+    <div class="actions create-actions">
+      <button class="btn ghost" id="dev-dummy" type="button">Dummy</button>
+      <button class="btn ghost" id="dev-reset" type="button">Reset</button>
+      <button class="btn primary" id="dev-save" type="button" disabled>Save</button>
+    </div>
+
     <div class="dev-2col">
       <!-- Parts 1 + 2 + 3 stacked in one card -->
       <div class="dev-part" id="dev-main">
@@ -526,14 +538,20 @@ async function renderDevelopmentCreate() {
           </div>
         </div>
 
-        <h3 class="subhead">2 · Product Type</h3>
-        <div class="field">
-          <select id="dev-product" disabled>
-            ${PRODUCT_TYPES.map((p) => `<option value="${escapeHtml(p)}">${escapeHtml(p)}</option>`).join("")}
-          </select>
+        <h3 class="subhead">2 · Item &amp; Product Type</h3>
+        <div class="dim-row">
+          <div class="field">
+            <label for="dev-item">Item name</label>
+            <input id="dev-item" type="text" placeholder="e.g. Spring Collection Patch" autocomplete="off" />
+          </div>
+          <div class="field">
+            <label for="dev-product">Product type</label>
+            <select id="dev-product" disabled>
+              ${PRODUCT_TYPES.map((p) => `<option value="${escapeHtml(p)}">${escapeHtml(p)}</option>`).join("")}
+            </select>
+          </div>
         </div>
 
-        <h3 class="subhead">3 · Details</h3>
         <div id="dev-part3-body"></div>
       </div>
 
@@ -568,6 +586,10 @@ async function renderDevelopmentCreate() {
   const listEl   = panel.querySelector("#dev-company-list");
   const memberEl = panel.querySelector("#dev-member");
   const productEl = panel.querySelector("#dev-product");
+  const itemEl = panel.querySelector("#dev-item");
+  const saveBtn = panel.querySelector("#dev-save");
+  const resetBtn = panel.querySelector("#dev-reset");
+  const dummyBtn = panel.querySelector("#dev-dummy");
 
   // --- Part 4 unlock when part 1 AND part 2 are complete ---
   const part3Body = panel.querySelector("#dev-part3-body");
@@ -616,6 +638,8 @@ async function renderDevelopmentCreate() {
 
   // restore product selection
   if (devState.product) productEl.value = devState.product;
+  // restore item name
+  if (devState.item) itemEl.value = devState.item;
 
   // refresh = re-fetch latest companies + members from the customer database
   panel.querySelector("#dev-refresh").addEventListener("click", async (e) => {
@@ -657,6 +681,12 @@ async function renderDevelopmentCreate() {
     productEl.disabled = !part1Done;
     updateUnlock();
   };
+
+  // Track item name input into devState and re-evaluate Save gating.
+  itemEl.addEventListener("input", () => {
+    devState.item = itemEl.value.trim();
+    updateSaveState();
+  });
 
   // ---- Part 3 dynamic body (depends on product type) ----
   const renderPart3 = () => {
@@ -938,8 +968,18 @@ async function renderDevelopmentCreate() {
     updateNextState();
   });
 
+  // Save gating: every required field filled AND at least one image present.
+  const updateSaveState = () => {
+    const allFilled = hiddenEl.value !== "" && memberEl.value !== "" &&
+                      devState.item && devState.product &&
+                      devState.images.length >= 1;
+    saveBtn.disabled = !allFilled;
+    saveBtn.classList.toggle("active", allFilled);
+  };
+
   // initial unlock check (covers restored state on tab switch)
   updateNextState();
+  updateSaveState();
 
   // ===== 4th part: image dropzone + documents =====
   const imageDrop = panel.querySelector("#dev-image-drop");
