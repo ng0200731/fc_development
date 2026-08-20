@@ -35,3 +35,13 @@ Do **not** use Playwright (or similar browser-automation tools) to test the app,
 - You are not expected to verify the UI by driving a browser.
 - The user tests the app themselves in their own browser.
 - Do the verification you can at the code/API level (e.g. `curl` against the REST API, inspecting responses) without a headless browser.
+
+## No browser pop-ups
+Never use native browser pop-ups (`window.alert`, `window.confirm`, `window.prompt`, or blocking modal dialogs) in the frontend.
+- Surface messages, confirmations, and prompts inside the page UI (e.g. inline banners, toasts, in-page modals built from DOM elements).
+- This keeps the app consistent, avoids blocking the page thread, and lets the user interact with content normally.
+
+## Warnings and test output must be copyable
+Any warning, error, or test/diagnostic output shown to the user must be **selectable and copyable** — never trapped inside a non-selectable element or native dialog.
+- Render warnings/test results as text in the page (a panel, console-style box, or log area) that the user can highlight and copy.
+- Do not rely on `window.alert`/`confirm`, images of text, or canvas-rendered text for anything the user may need to copy.

@@ -346,7 +346,7 @@ function showMemberStep(companyName, emailSuffix) {
       try {
         await saveCustomerWithMembers(companyName, emailSuffix, pending);
         createBtn.textContent = "Created ✓";
-        setTimeout(renderCustomerCreate, 800);
+        openCustomerPostSaveModal();
       } catch (err) {
         createBtn.textContent = "Create failed — retry";
         createBtn.disabled = false;
@@ -547,6 +547,31 @@ function openConfirmModal(title, message, onConfirm) {
   overlay.querySelector("#cf-ok").addEventListener("click", () => {
     overlay.remove();
     onConfirm();
+  });
+}
+
+// Centered post-create modal for Customer / Create: go to Customer / View,
+// or stay and create another customer.
+function openCustomerPostSaveModal() {
+  const overlay = document.createElement("div");
+  overlay.className = "modal-overlay";
+  overlay.innerHTML = `
+    <div class="modal" role="dialog" aria-modal="true" style="max-width:440px">
+      <h3>Customer created</h3>
+      <p class="muted">What would you like to do next?</p>
+      <div class="actions modal-actions">
+        <button class="btn ghost" id="cps-keep" type="button">Keep creating new customer</button>
+        <button class="btn primary" id="cps-view" type="button">Go to Customer / View</button>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+  overlay.querySelector("#cps-view").addEventListener("click", () => {
+    overlay.remove();
+    openTab("customer-view");
+  });
+  overlay.querySelector("#cps-keep").addEventListener("click", () => {
+    overlay.remove();
+    renderCustomerCreate();
   });
 }
 
