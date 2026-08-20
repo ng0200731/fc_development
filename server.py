@@ -481,6 +481,8 @@ class Handler(SimpleHTTPRequestHandler):
 
     def _serve_sample_list(self):
         return json_response(self, list_sample_images())
+
+    def _route(self):
         parsed = urlparse(self.path)
         path = parsed.path
         method = self.command

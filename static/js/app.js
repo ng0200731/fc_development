@@ -129,6 +129,10 @@ async function renderPanel() {
     await renderDevelopmentCreate();
     return;
   }
+  if (activeTarget === "development-view") {
+    await renderDevelopmentView();
+    return;
+  }
 
   panel.innerHTML =
     `<h2>${labels[activeTarget] || activeTarget}</h2>` +
@@ -419,6 +423,7 @@ const pantoneTypeName = (t) => PANTONE_TYPE_NAMES[t] || t;
 
 let pantoneData = null;        // [{ code, name, hex, type }]
 
+// Load the Pantone catalogs once (no-op if already cached).
 async function ensurePantoneData() {
   if (pantoneData) return;
   pantoneData = [];
@@ -437,6 +442,216 @@ async function ensurePantoneData() {
       // catalog unavailable — skip
     }
   }
+}
+
+// Fetch the image pool once (sample images from canvas_source). Returns
+// [{ name, url }] where url points at the server's /sample-images/<rel> route.
+async function ensureImagePool() {
+  if (devImagePool) return devImagePool;
+  if (devImagePoolLoading) return devImagePoolLoading;
+  devImagePoolLoading = (async () => {
+    try {
+      const data = await fetchJson(API + "/api/sample-images");
+      devImagePool = (data.files || []).map((f) => ({
+        name: f,
+        url: API + "/sample-images/" + f,
+      }));
+    } catch (err) {
+      devImagePool = [];
+    }
+    return devImagePool;
+  })();
+  return devImagePoolLoading;
+}
+
+// Reset the persistent development state (used by Reset button + post-save
+// "continue with same customer" path that only clears parts 2+).
+function resetDevState() {
+  devState.companyId = "";
+  devState.companyName = "";
+  devState.memberId = "";
+  devState.item = "";
+  devState.product = "";
+  devState.height = "";
+  devState.width = "";
+  devState.raisedHeight = "";
+  devState.noOfColor = "";
+  devState.pantones = [];
+  devState.images = [];
+  devState.docs = [];
+}
+
+// Build the development payload from current devState + DOM inputs.
+function buildDevelopmentPayload() {
+  const itemEl = panel.querySelector("#dev-item");
+  const productEl = panel.querySelector("#dev-product");
+  const memberEl = panel.querySelector("#dev-member");
+  const companyName = devState.companyName;
+  const item = (itemEl ? itemEl.value.trim() : devState.item) || devState.item;
+  const product = (productEl ? productEl.value : devState.product) || devState.product;
+  if (!companyName || !item || !product || devState.images.length < 1) return null;
+  const memberName = memberEl && memberEl.value
+    ? memberEl.options[memberEl.selectedIndex]?.textContent || ""
+    : "";
+  return {
+    company_id: devState.companyId ? Number(devState.companyId) : null,
+    company_name: companyName,
+    member_id: devState.memberId ? Number(devState.memberId) : null,
+    member_name: memberName || null,
+    item_name: item,
+    product_type: product,
+    height: devState.height || null,
+    width: devState.width || null,
+    raised_height: devState.raisedHeight || null,
+    no_of_color: devState.noOfColor ? Number(devState.noOfColor) : null,
+    pantones: devState.pantones.filter((p) => p && p.value),
+    image_names: devState.images.map((i) => i.name),
+  };
+}
+
+// Centered confirm modal (replaces window.confirm). onConfirm runs on "Yes".
+function openConfirmModal(title, message, onConfirm) {
+  const overlay = document.createElement("div");
+  overlay.className = "modal-overlay";
+  overlay.innerHTML = `
+    <div class="modal" role="dialog" aria-modal="true" style="max-width:420px">
+      <h3>${escapeHtml(title)}</h3>
+      <p class="muted">${escapeHtml(message)}</p>
+      <div class="actions modal-actions">
+        <button class="btn ghost" id="cf-cancel" type="button">Cancel</button>
+        <button class="btn primary" id="cf-ok" type="button">Yes</button>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+  overlay.querySelector("#cf-cancel").addEventListener("click", () => overlay.remove());
+  overlay.addEventListener("click", (e) => { if (e.target === overlay) overlay.remove(); });
+  overlay.querySelector("#cf-ok").addEventListener("click", () => {
+    overlay.remove();
+    onConfirm();
+  });
+}
+
+// Centered post-save modal: continue with the same customer, or go to View.
+function openPostSaveModal() {
+  const overlay = document.createElement("div");
+  overlay.className = "modal-overlay";
+  overlay.innerHTML = `
+    <div class="modal" role="dialog" aria-modal="true" style="max-width:440px">
+      <h3>Development saved</h3>
+      <p class="muted">Continue with the same customer?</p>
+      <div class="actions modal-actions">
+        <button class="btn ghost" id="ps-view" type="button">No — go to Development / View</button>
+        <button class="btn primary" id="ps-continue" type="button">Yes, same customer</button>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+  overlay.querySelector("#ps-view").addEventListener("click", () => {
+    overlay.remove();
+    openTab("development-view");
+  });
+  overlay.querySelector("#ps-continue").addEventListener("click", () => {
+    overlay.remove();
+    // keep Part 1 (company/member), clear the rest
+    const keepCompanyId = devState.companyId;
+    const keepCompanyName = devState.companyName;
+    const keepMemberId = devState.memberId;
+    resetDevState();
+    devState.companyId = keepCompanyId;
+    devState.companyName = keepCompanyName;
+    devState.memberId = keepMemberId;
+    renderDevelopmentCreate();
+  });
+}
+
+// Fill every field with random data + 4 random images. `ctx` carries the
+// element references + helpers from renderDevelopmentCreate().
+async function fillDummyDevelopment(ctx) {
+  const { searchEl, hiddenEl, memberEl, productEl, itemEl, companies,
+          selectCompany, loadMembers, updateNextState, updateSaveState } = ctx;
+
+  // 1) random company
+  const pool = companies && companies.length ? companies : (devCompaniesCache || []);
+  if (!pool.length) {
+    openConfirmModal("No companies", "There are no companies in the customer database yet. Create one first.", () => {});
+    return;
+  }
+  const comp = rnd(pool);
+  selectCompany(Number(comp.id), comp.name);
+  await loadMembers(Number(comp.id));
+  // random member (if any)
+  const memberOpts = [...memberEl.querySelectorAll("option")].filter((o) => o.value !== "");
+  if (memberOpts.length) {
+    const m = rnd(memberOpts);
+    memberEl.value = m.value;
+    devState.memberId = m.value;
+  }
+  updateNextState();
+
+  // 2) item name + product type
+  const ITEMS = ["Spring Patch", "Logo Badge", "Care Label", "Brand Tab", "Woven Emblem",
+                 "Silicone Grip", "Heat Transfer", "Glitter Transfer", "Reflective Tape"];
+  itemEl.value = rnd(ITEMS) + " " + (Math.floor(Math.random() * 900) + 100);
+  devState.item = itemEl.value;
+  productEl.value = rnd(PRODUCT_TYPES);
+  devState.product = productEl.value;
+  updateNextState();
+
+  // 3) Part 3 details
+  if (devState.product === "raised silicon label") {
+    devState.height = (Math.random() * 40 + 10).toFixed(1);
+    devState.width = (Math.random() * 40 + 10).toFixed(1);
+    devState.raisedHeight = (Math.random() * 3 + 0.5).toFixed(1);
+    devState.noOfColor = String(Math.floor(Math.random() * 4) + 1);
+    devState.pantones = [];
+    for (let i = 0; i < Number(devState.noOfColor); i++) {
+      devState.pantones.push({ value: "19-" + (Math.floor(Math.random() * 400) + 100) + " TCX", color: "#888888" });
+    }
+  } else {
+    devState.height = (Math.random() * 40 + 10).toFixed(1);
+    devState.width = (Math.random() * 40 + 10).toFixed(1);
+    devState.raisedHeight = "";
+    devState.noOfColor = "";
+    devState.pantones = [];
+  }
+
+  // 4) 4 random images from the pool
+  const images = await ensureImagePool();
+  devState.images = [];
+  const picks = new Set();
+  const count = Math.min(4, images.length);
+  while (picks.size < count) picks.add(Math.floor(Math.random() * images.length));
+  [...picks].forEach((idx) => {
+    const src = images[idx];
+    devState.images.push({ id: "img-" + Date.now() + "-" + devState.images.length, name: src.name, url: src.url });
+  });
+
+  // re-render Part 3 (dimensions / pantone) to reflect the dummy data
+  updateUnlock();
+  updateSaveState();
+  // render thumbs (the create render already wired this, but images changed)
+  renderDevImageThumbs();
+}
+
+// Shared thumbnail renderer for the Development / Create image dropzone.
+function renderDevImageThumbs() {
+  const imageThumbs = panel.querySelector("#dev-image-thumbs");
+  if (!imageThumbs) return;
+  const imageDrop = panel.querySelector("#dev-image-drop");
+  if (devState.images.length) imageDrop.classList.add("has-items");
+  else imageDrop.classList.remove("has-items");
+  imageThumbs.innerHTML = devState.images.map((img) => `
+    <div class="thumb" data-id="${img.id}">
+      <img src="${img.url}" alt="${escapeHtml(img.name)}" />
+      <div class="thumb-name">${escapeHtml(img.name)}</div>
+      <button class="icon-btn danger thumb-rm" data-rm="${img.id}" title="Remove">✕</button>
+    </div>`).join("");
+  imageThumbs.querySelectorAll("[data-rm]").forEach((b) => {
+    b.addEventListener("click", () => {
+      const id = b.dataset.rm;
+      const i = devState.images.findIndex((x) => x.id === id);
+      if (i >= 0) { devState.images.splice(i, 1); updateSaveState(); b.closest(".thumb").remove(); }
+    });
+  });
 }
 
 // Strip "PANTONE", suffixes (C/U/TCX/TPG/TPN), spaces, slashes — keep code chars.
@@ -552,6 +767,7 @@ async function renderDevelopmentCreate() {
           </div>
         </div>
 
+        <h3 class="subhead">3 · Details</h3>
         <div id="dev-part3-body"></div>
       </div>
 
@@ -599,7 +815,8 @@ async function renderDevelopmentCreate() {
   const updateUnlock = () => {
     const allDone = hiddenEl.value !== "" && memberEl.value !== "" && devState.product;
     part4.classList.toggle("locked", !allDone);
-    if (allDone) renderPart3();
+    // Part 3 (details) is always visible; only Part 4 (image/docs) is gated.
+    renderPart3();
   };
 
   // enable search once we have the company list
@@ -1115,6 +1332,466 @@ async function renderDevelopmentCreate() {
   renderDocList();
 
   updateNextState();
+  updateSaveState();
+
+  // ===== Action buttons: Dummy / Reset / Save =====
+
+  dummyBtn.addEventListener("click", () => fillDummyDevelopment({
+    searchEl, hiddenEl, memberEl, productEl, itemEl, listEl, companies,
+    selectCompany, loadMembers, updateNextState, updateSaveState, updateUnlock,
+  }));
+
+  resetBtn.addEventListener("click", () => {
+    openConfirmModal(
+      "Reset development?",
+      "This will clear all fields and images you have entered. Continue?",
+      () => {
+        resetDevState();
+        renderDevelopmentCreate();
+      }
+    );
+  });
+
+  saveBtn.addEventListener("click", async () => {
+    if (saveBtn.disabled) return;
+    const payload = buildDevelopmentPayload();
+    if (!payload) {
+      openConfirmModal("Cannot save", "Please fill company, member, item, product type, and at least one image.", () => {});
+      return;
+    }
+    saveBtn.disabled = true;
+    saveBtn.textContent = "Saving…";
+    try {
+      await fetchJson(API + "/api/developments", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      openPostSaveModal();
+    } catch (err) {
+      saveBtn.textContent = "Save";
+      saveBtn.disabled = false;
+      openConfirmModal("Save failed", "Could not save development: " + err.message, () => {});
+    }
+  });
+
+}
+
+// ---------------------------------------------------------------------------
+// Development / View
+// ---------------------------------------------------------------------------
+
+let devViewData = [];        // raw rows from /api/developments
+let devViewFilters = {};      // {company, member, item, product, ...}
+let devViewSelected = new Set(); // selected keys: "d:<id>"
+
+// Build a short Part-3 details summary for the View's Details column.
+function devDetailsSummary(d) {
+  const parts = [];
+  if (d.height || d.width) {
+    parts.push(`${(d.height || "?")} × ${(d.width || "?")} mm`);
+  }
+  if (d.raised_height) parts.push(`raised ${d.raised_height} mm`);
+  if (d.no_of_color) {
+    const cols = (d.pantones || []).filter((p) => p && p.value).map((p) => p.value);
+    parts.push(`${d.no_of_color} color${Number(d.no_of_color) > 1 ? "s" : ""}` + (cols.length ? ` (${cols.join(", ")})` : ""));
+  }
+  return parts.join(" · ");
+}
+
+async function renderDevelopmentView() {
+  panel.innerHTML = '<h2>Development / View</h2><p class="empty">Loading…</p>';
+  devViewSelected.clear();
+  try {
+    devViewData = await fetchJson(API + "/api/developments");
+    if (!devViewData.length) {
+      panel.innerHTML = '<h2>Development / View</h2><p class="empty">No developments saved yet.</p>';
+      return;
+    }
+    paintDevelopmentView();
+  } catch (err) {
+    panel.innerHTML = `<h2>Development / View</h2><p class="empty">Failed to load: ${escapeHtml(err.message)}</p>`;
+  }
+}
+
+function paintDevelopmentView() {
+  const cols = [
+    { key: "company_name", label: "Company" },
+    { key: "member_name", label: "Member" },
+    { key: "item_name", label: "Item" },
+    { key: "product_type", label: "Product Type" },
+    { key: "image", label: "Image" },
+    { key: "created_at", label: "Created" },
+    { key: "updated_at", label: "Updated" },
+    { key: "details", label: "Details" },
+  ];
+
+  const shown = devViewData.filter((r) =>
+    cols.filter((c) => c.key !== "image" && c.key !== "details").every((c) =>
+      fuzzyMatch(r[c.key], devViewFilters[c.key])
+    )
+  );
+
+  const allKeys = shown.map((r) => "d:" + r.id);
+  const allChecked = allKeys.length > 0 && allKeys.every((k) => devViewSelected.has(k));
+
+  const searchRow = cols.map((c) => {
+    if (c.key === "image" || c.key === "details") {
+      return `<th class="search-th"></th>`;
+    }
+    return `<th class="search-th">
+       <input class="col-search" data-key="${c.key}" type="text"
+              placeholder="Search ${c.label}…" value="${escapeHtml(devViewFilters[c.key] || "")}" />
+     </th>`;
+  }).join("") + `<th class="search-th actions-th"></th>`;
+
+  const body = shown.map((r) => {
+    const checked = devViewSelected.has("d:" + r.id);
+    const imgs = (r.image_names || []).slice(0, 3);
+    const thumbs = imgs.length
+      ? `<div class="dev-thumbs">` + imgs.map((n) =>
+          `<img class="dev-thumb-sm" src="${API}/sample-images/${encodeURI(n)}" alt="${escapeHtml(n)}" title="${escapeHtml(n)}" />`).join("") + `</div>`
+      : `<span class="muted">—</span>`;
+    return `
+      <tr class="${checked ? "selected" : ""}">
+        <td>
+          <label class="cb-cell">
+            <input type="checkbox" class="row-select" data-key="d:${r.id}" ${checked ? "checked" : ""} />
+          </label>
+        </td>
+        <td>${escapeHtml(r.company_name)}</td>
+        <td>${escapeHtml(r.member_name || "—")}</td>
+        <td>${escapeHtml(r.item_name)}</td>
+        <td>${escapeHtml(r.product_type)}</td>
+        <td class="cell-imgs">${thumbs}</td>
+        <td>${escapeHtml(r.created_at)}</td>
+        <td>${escapeHtml(r.updated_at)}</td>
+        <td class="details-cell">${escapeHtml(devDetailsSummary(r))}</td>
+        <td class="row-actions">
+          <button class="icon-btn" data-edit="${r.id}" title="Edit">✎</button>
+          <button class="icon-btn danger" data-del="${r.id}" title="Delete">🗑</button>
+        </td>
+      </tr>`;
+  }).join("") || `<tr><td colspan="10" class="muted">No matches.</td></tr>`;
+
+  panel.innerHTML = `
+    <div class="view-head">
+      <h2>Development / View</h2>
+      <div class="view-actions">
+        <button class="btn ghost" id="dev-export" type="button">Export Excel</button>
+      </div>
+    </div>
+
+    <div class="batch-bar" id="batch-bar">
+      <label class="cb-cell">
+        <input type="checkbox" id="select-all" ${allChecked ? "checked" : ""} />
+        <span>Select all (${allKeys.length})</span>
+      </label>
+      <span class="muted batch-count" id="batch-count">${devViewSelected.size} selected</span>
+      <button class="btn danger" id="batch-delete" type="button" disabled>Delete selected</button>
+    </div>
+
+    <table class="grid dev-grid" id="development-grid">
+      <thead>
+        <tr class="head-row">
+          <th></th>
+          ${cols.map((c) => `<th>${c.label}</th>`).join("")}
+          <th class="actions-th">Actions</th>
+        </tr>
+        <tr class="search-row"><th></th>${searchRow}</tr>
+      </thead>
+      <tbody>${body}</tbody>
+    </table>
+  `;
+
+  // per-column fuzzy search
+  panel.querySelectorAll(".col-search").forEach((inp) => {
+    inp.addEventListener("input", () => {
+      devViewFilters[inp.dataset.key] = inp.value;
+      const cursor = inp.selectionStart;
+      paintDevelopmentView();
+      const same = panel.querySelector(`.col-search[data-key="${inp.dataset.key}"]`);
+      if (same) { same.focus(); same.setSelectionRange(cursor, cursor); }
+    });
+  });
+
+  panel.querySelector("#dev-export").addEventListener("click", () =>
+    exportDevelopmentExcel(shown));
+
+  // --- batch selection ---
+  const selectAll = panel.querySelector("#select-all");
+  const batchDelete = panel.querySelector("#batch-delete");
+  const batchCount = panel.querySelector("#batch-count");
+
+  const syncBatchUI = () => {
+    batchCount.textContent = devViewSelected.size + " selected";
+    batchDelete.disabled = devViewSelected.size === 0;
+    selectAll.checked = allKeys.length > 0 && allKeys.every((k) => devViewSelected.has(k));
+  };
+
+  panel.querySelectorAll(".row-select").forEach((cb) => {
+    cb.addEventListener("change", () => {
+      const key = cb.dataset.key;
+      if (cb.checked) devViewSelected.add(key);
+      else devViewSelected.delete(key);
+      panel.querySelectorAll(`.row-select[data-key="${key}"]`).forEach((sib) => {
+        sib.checked = cb.checked;
+        const tr = sib.closest("tr");
+        if (tr) tr.classList.toggle("selected", cb.checked);
+      });
+      syncBatchUI();
+    });
+  });
+
+  selectAll.addEventListener("change", () => {
+    if (selectAll.checked) allKeys.forEach((k) => devViewSelected.add(k));
+    else allKeys.forEach((k) => devViewSelected.delete(k));
+    panel.querySelectorAll(".row-select").forEach((cb) => {
+      cb.checked = selectAll.checked;
+      const tr = cb.closest("tr");
+      if (tr) tr.classList.toggle("selected", selectAll.checked);
+    });
+    syncBatchUI();
+  });
+
+  batchDelete.addEventListener("click", batchDeleteDevelopments);
+
+  panel.querySelectorAll("[data-edit]").forEach((b) => {
+    b.addEventListener("click", () => openDevEditModal(Number(b.dataset.edit)));
+  });
+  panel.querySelectorAll("[data-del]").forEach((b) => {
+    b.addEventListener("click", () => deleteDevelopment(Number(b.dataset.del)));
+  });
+}
+
+async function batchDeleteDevelopments() {
+  const keys = [...devViewSelected];
+  if (!keys.length) return;
+  const ids = keys.filter((k) => k.startsWith("d:")).map((k) => Number(k.slice(2)));
+  if (!ids.length) return;
+  openConfirmModal(
+    "Delete developments?",
+    `Delete ${ids.length} development${ids.length === 1 ? "" : "s"} permanently?`,
+    async () => {
+      const btn = panel.querySelector("#batch-delete");
+      if (btn) { btn.disabled = true; btn.textContent = "Deleting…"; }
+      let failed = 0;
+      for (const id of ids) {
+        try { await fetchJson(API + `/api/developments/${id}`, { method: "DELETE" }); }
+        catch (err) { failed++; }
+      }
+      if (failed) openConfirmModal("Partial failure", `${failed} deletion(s) failed.`, () => {});
+      devViewSelected.clear();
+      await renderDevelopmentView();
+    }
+  );
+}
+
+async function deleteDevelopment(id) {
+  const rec = devViewData.find((r) => r.id === id);
+  const label = rec ? `${rec.company_name} / ${rec.item_name}` : `#${id}`;
+  openConfirmModal(
+    "Delete development?",
+    `Delete "${label}" permanently?`,
+    async () => {
+      try {
+        await fetchJson(API + `/api/developments/${id}`, { method: "DELETE" });
+        devViewSelected.delete("d:" + id);
+        await renderDevelopmentView();
+      } catch (err) {
+        openConfirmModal("Delete failed", err.message, () => {});
+      }
+    }
+  );
+}
+
+// Edit modal for a development record. Prefilled with all fields + images.
+async function openDevEditModal(id) {
+  let rec;
+  try {
+    rec = await fetchJson(API + `/api/developments/${id}`);
+  } catch (err) {
+    openConfirmModal("Load failed", err.message, () => {});
+    return;
+  }
+
+  // local editable image list (seeded from saved names -> pool urls)
+  const pool = await ensureImagePool();
+  const findInPool = (name) => pool.find((p) => p.name === name);
+  const editImages = (rec.image_names || []).map((n) => {
+    const hit = findInPool(n);
+    return { id: "eimg-" + Math.random().toString(36).slice(2), name: n, url: hit ? hit.url : "" };
+  });
+
+  const overlay = document.createElement("div");
+  overlay.className = "modal-overlay";
+  overlay.innerHTML = `
+    <div class="modal" role="dialog" aria-modal="true" style="max-width:620px">
+      <h3>Edit development</h3>
+      <div class="field">
+        <label>Company</label>
+        <input id="ed-company" type="text" value="${escapeHtml(rec.company_name)}" />
+      </div>
+      <div class="field">
+        <label>Member</label>
+        <input id="ed-member" type="text" value="${escapeHtml(rec.member_name || "")}" />
+      </div>
+      <div class="dim-row">
+        <div class="field">
+          <label for="ed-item">Item name</label>
+          <input id="ed-item" type="text" value="${escapeHtml(rec.item_name)}" />
+        </div>
+        <div class="field">
+          <label for="ed-product">Product type</label>
+          <select id="ed-product">
+            ${PRODUCT_TYPES.map((p) =>
+              `<option value="${escapeHtml(p)}" ${p === rec.product_type ? "selected" : ""}>${escapeHtml(p)}</option>`).join("")}
+          </select>
+        </div>
+      </div>
+      <div class="dim-row">
+        <div class="field">
+          <label for="ed-height">Height (mm)</label>
+          <input id="ed-height" type="number" step="0.1" value="${escapeHtml(rec.height ?? "")}" />
+        </div>
+        <div class="field">
+          <label for="ed-width">Width (mm)</label>
+          <input id="ed-width" type="number" step="0.1" value="${escapeHtml(rec.width ?? "")}" />
+        </div>
+      </div>
+      <div class="dim-row">
+        <div class="field">
+          <label for="ed-raised">Raised height (mm)</label>
+          <input id="ed-raised" type="number" step="0.1" value="${escapeHtml(rec.raised_height ?? "")}" />
+        </div>
+        <div class="field">
+          <label for="ed-nocolor">No. of color</label>
+          <input id="ed-nocolor" type="number" step="1" value="${escapeHtml(rec.no_of_color ?? "")}" />
+        </div>
+      </div>
+
+      <h4 class="subhead">Images</h4>
+      <div class="dropzone" id="ed-image-drop" tabindex="0">
+        <div class="drop-region">
+          <span class="drop-icon">🖼️</span>
+          <p class="muted small drop-hint">Drag &amp; drop images here,<br/>or press <strong>Ctrl+V</strong> to paste.</p>
+        </div>
+        <div class="thumb-grid" id="ed-image-thumbs"></div>
+      </div>
+
+      <div class="actions modal-actions">
+        <button class="btn ghost" id="ed-cancel" type="button">Cancel</button>
+        <button class="btn primary" id="ed-save" type="button">Save</button>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+
+  const renderEditThumbs = () => {
+    const wrap = overlay.querySelector("#ed-image-thumbs");
+    const drop = overlay.querySelector("#ed-image-drop");
+    if (editImages.length) drop.classList.add("has-items");
+    else drop.classList.remove("has-items");
+    wrap.innerHTML = editImages.map((img) => `
+      <div class="thumb" data-id="${img.id}">
+        ${img.url ? `<img src="${img.url}" alt="${escapeHtml(img.name)}" />` : `<div class="thumb-name">${escapeHtml(img.name)}</div>`}
+        <div class="thumb-name">${escapeHtml(img.name)}</div>
+        <button class="icon-btn danger thumb-rm" data-rm="${img.id}" title="Remove">✕</button>
+      </div>`).join("");
+    wrap.querySelectorAll("[data-rm]").forEach((b) => {
+      b.addEventListener("click", () => {
+        const i = editImages.findIndex((x) => x.id === b.dataset.rm);
+        if (i >= 0) { editImages.splice(i, 1); renderEditThumbs(); }
+      });
+    });
+  };
+  renderEditThumbs();
+
+  // drag & drop + paste inside the modal
+  const dropEl = overlay.querySelector("#ed-image-drop");
+  const isImg = (f) => f && f.type && f.type.startsWith("image/");
+  const addFile = (file) => {
+    if (!isImg(file)) return;
+    editImages.push({ id: "eimg-" + Math.random().toString(36).slice(2), name: file.name, url: URL.createObjectURL(file) });
+    renderEditThumbs();
+  };
+  ["dragenter", "dragover"].forEach((ev) => dropEl.addEventListener(ev, (e) => { e.preventDefault(); dropEl.classList.add("dragover"); }));
+  ["dragleave", "drop"].forEach((ev) => dropEl.addEventListener(ev, (e) => {
+    e.preventDefault();
+    if (ev === "dragleave" && dropEl.contains(e.relatedTarget)) return;
+    dropEl.classList.remove("dragover");
+  }));
+  dropEl.addEventListener("drop", (e) => [...(e.dataTransfer?.files || [])].forEach(addFile));
+  dropEl.addEventListener("paste", (e) => {
+    for (const it of (e.clipboardData?.items || [])) {
+      if (it.kind === "file" && it.type.startsWith("image/")) { const f = it.getAsFile(); if (f) addFile(f); }
+    }
+  });
+
+  overlay.querySelector("#ed-cancel").addEventListener("click", () => overlay.remove());
+  overlay.addEventListener("click", (e) => { if (e.target === overlay) overlay.remove(); });
+
+  overlay.querySelector("#ed-save").addEventListener("click", async () => {
+    const company_name = overlay.querySelector("#ed-company").value.trim();
+    const item_name = overlay.querySelector("#ed-item").value.trim();
+    const product_type = overlay.querySelector("#ed-product").value;
+    if (!company_name || !item_name || !product_type) {
+      openConfirmModal("Missing fields", "Company, item name, and product type are required.", () => {});
+      return;
+    }
+    const payload = {
+      company_id: rec.company_id,
+      company_name,
+      member_id: rec.member_id,
+      member_name: overlay.querySelector("#ed-member").value.trim() || null,
+      item_name,
+      product_type,
+      height: overlay.querySelector("#ed-height").value || null,
+      width: overlay.querySelector("#ed-width").value || null,
+      raised_height: overlay.querySelector("#ed-raised").value || null,
+      no_of_color: overlay.querySelector("#ed-nocolor").value || null,
+      pantones: rec.pantones || [],
+      image_names: editImages.map((i) => i.name),
+    };
+    const saveBtn = overlay.querySelector("#ed-save");
+    saveBtn.disabled = true;
+    saveBtn.textContent = "Saving…";
+    try {
+      await fetchJson(API + `/api/developments/${id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      overlay.remove();
+      await renderDevelopmentView();
+    } catch (err) {
+      saveBtn.disabled = false;
+      saveBtn.textContent = "Save";
+      openConfirmModal("Save failed", err.message, () => {});
+    }
+  });
+}
+
+function exportDevelopmentExcel(rows) {
+  const headers = ["Company", "Member", "Item", "Product Type", "Created", "Updated", "Details", "Images"];
+  const lines = [headers.join(",")];
+  rows.forEach((r) => {
+    const cells = [
+      r.company_name, r.member_name || "", r.item_name, r.product_type,
+      r.created_at, r.updated_at, devDetailsSummary(r),
+      (r.image_names || []).join("; "),
+    ].map(csvCell);
+    lines.push(cells.join(","));
+  });
+  const csv = "﻿" + lines.join("\r\n");
+  const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = "developments.csv";
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
 }
 
 function formatBytes(bytes) {

@@ -281,6 +281,20 @@ select:focus-visible,
 
 .actions { display: flex; gap: 10px; margin-top: 20px; }
 
+/* action row at top of Development / Create (Dummy / Reset / Save) */
+.create-actions {
+  margin-bottom: 18px;
+  align-items: center;
+}
+.create-actions .btn.primary.active {
+  box-shadow: 0 0 0 3px var(--ring);
+}
+.create-actions .btn.primary[disabled] {
+  background: #cbd5e1;
+  border-color: #cbd5e1;
+  cursor: not-allowed;
+}
+
 /* ---- Development / Create ---- */
 .combobox { position: relative; }
 #dev-refresh {
@@ -532,6 +546,23 @@ select:focus-visible,
   font-size: 12px;
   background: rgba(255,255,255,.9);
 }
+
+/* Development / View image column + details cell */
+.dev-thumbs { display: flex; gap: 6px; flex-wrap: wrap; }
+.dev-thumb-sm {
+  width: 44px; height: 44px;
+  object-fit: cover;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  display: block;
+}
+.cell-imgs { vertical-align: middle; }
+.details-cell {
+  font-size: 12px;
+  color: var(--text-soft);
+  max-width: 240px;
+}
+.dev-grid tbody td { vertical-align: middle; }
 
 /* document list */
 .file-list { margin-top: 12px; display: flex; flex-direction: column; gap: 8px; }
