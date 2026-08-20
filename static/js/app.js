@@ -811,7 +811,7 @@ async function renderDevelopmentCreate() {
         <div class="dropzone" id="dev-image-drop" tabindex="0">
           <div class="drop-region">
             <span class="drop-icon">🖼️</span>
-            <p class="muted small drop-hint">Drag &amp; drop images here,<br/>or press <strong>Ctrl+V</strong> to paste.</p>
+            <p class="muted small drop-hint">Drop or paste <strong>one</strong> image here.<br/>A new image replaces the current one.</p>
           </div>
           <div class="thumb-grid" id="dev-image-thumbs"></div>
         </div>
@@ -924,6 +924,7 @@ async function renderDevelopmentCreate() {
     part2.disabled = !part1Done;
     productEl.disabled = !part1Done;
     updateUnlock();
+    updateSaveState();   // company/member change affects Save gating
   };
 
   // Track item name input into devState and re-evaluate Save gating.
@@ -1276,8 +1277,11 @@ async function renderDevelopmentCreate() {
 
   const addImageFile = (file) => {
     if (!isImageFile(file)) return;
+    // Only one image is allowed — a new attachment replaces the previous one.
+    if (images.length) URL.revokeObjectURL(images[0].url);
     const url = URL.createObjectURL(file);
-    images.push({ id: "img-" + Date.now() + "-" + images.length, name: file.name, url });
+    images.length = 0;
+    images.push({ id: "img-" + Date.now() + "-0", name: file.name, url });
     renderImageThumbs();
     updateSaveState();
   };
@@ -1297,20 +1301,20 @@ async function renderDevelopmentCreate() {
     })
   );
   imageDrop.addEventListener("drop", (e) => {
-    [...(e.dataTransfer?.files || [])].forEach(addImageFile);
+    // Only one image is allowed — take just the first dropped file.
+    const first = [...(e.dataTransfer?.files || [])].find(isImageFile);
+    if (first) addImageFile(first);
   });
 
-  // Ctrl+V paste image
+  // Ctrl+V paste image (only one image is allowed — take the first pasted)
   imageDrop.addEventListener("paste", (e) => {
     const items = e.clipboardData?.items || [];
-    let added = false;
     for (const it of items) {
       if (it.kind === "file" && it.type.startsWith("image/")) {
         const f = it.getAsFile();
-        if (f) { addImageFile(f); added = true; }
+        if (f) { addImageFile(f); e.preventDefault(); break; }
       }
     }
-    if (added) e.preventDefault();
   });
 
   // ---- documents ----

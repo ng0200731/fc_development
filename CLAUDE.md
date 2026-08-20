@@ -29,3 +29,9 @@ Any scratch/test `.py` file (ad-hoc debugging scripts) is **temporary**.
 
 ## Running
 Use `start.bat` to start the server (Windows). The server runs in the background and opens `http://localhost:8088`.
+
+## Never use Playwright (or other browser automation)
+Do **not** use Playwright (or similar browser-automation tools) to test the app, unless explicitly told to do so.
+- You are not expected to verify the UI by driving a browser.
+- The user tests the app themselves in their own browser.
+- Do the verification you can at the code/API level (e.g. `curl` against the REST API, inspecting responses) without a headless browser.
