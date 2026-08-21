@@ -507,7 +507,7 @@ select:focus-visible,
   );
 }
 .dropzone.has-items .drop-region {
-  padding: 8px 0;
+  display: none;
 }
 .dropzone .drop-icon {
   font-size: 26px;

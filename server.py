@@ -48,6 +48,9 @@ def init_db():
             id            INTEGER PRIMARY KEY AUTOINCREMENT,
             name          TEXT NOT NULL,
             email_suffix  TEXT NOT NULL,
+            currency      TEXT,
+            payment_term  TEXT,
+            shipment_term TEXT,
             created_at    TEXT NOT NULL
         )
         """
@@ -89,9 +92,27 @@ def init_db():
     )
     # Migrations: add any columns introduced after the initial schema so that
     # an existing database (already created without them) keeps working.
+    _ensure_company_columns(conn)
     _ensure_dev_columns(conn)
     conn.commit()
     conn.close()
+
+
+# Columns added to `companies` after the table was first created. Each entry
+# is { column_name: SQL type }. init_db() adds any that are missing.
+_COMPANY_MISSING_COLUMNS = {
+    "currency": "TEXT",
+    "payment_term": "TEXT",
+    "shipment_term": "TEXT",
+}
+
+
+def _ensure_company_columns(conn):
+    cur = conn.cursor()
+    existing = {r[1] for r in cur.execute("PRAGMA table_info(companies)").fetchall()}
+    for col, ctype in _COMPANY_MISSING_COLUMNS.items():
+        if col not in existing:
+            cur.execute(f"ALTER TABLE companies ADD COLUMN {col} {ctype}")
 
 
 # Columns added to `developments` after the table was first created. Each entry
@@ -278,16 +299,26 @@ def api_create_company(handler):
     suffix = (data.get("email_suffix") or "").strip().lstrip("@")
     if not name or not suffix:
         return json_response(handler, {"error": "name and email_suffix are required"}, 400)
+    currency = (data.get("currency") or "").strip() or None
+    payment_term = (data.get("payment_term") or "").strip() or None
+    shipment_term = (data.get("shipment_term") or "").strip() or None
     conn = db()
     cur = conn.cursor()
     cur.execute(
-        "INSERT INTO companies (name, email_suffix, created_at) VALUES (?, ?, ?)",
-        (name, suffix, now_iso()),
+        "INSERT INTO companies (name, email_suffix, currency, payment_term, "
+        "shipment_term, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+        (name, suffix, currency, payment_term, shipment_term, now_iso()),
     )
     cid = cur.lastrowid
     conn.commit()
     conn.close()
-    return json_response(handler, {"id": cid, "name": name, "email_suffix": suffix}, 201)
+    return json_response(
+        handler,
+        {"id": cid, "name": name, "email_suffix": suffix,
+         "currency": currency, "payment_term": payment_term,
+         "shipment_term": shipment_term},
+        201,
+    )
 
 
 def api_list_companies(handler):
@@ -355,13 +386,23 @@ def api_update_company(handler, cid):
     if not name or not suffix:
         conn.close()
         return json_response(handler, {"error": "name and email_suffix are required"}, 400)
+    currency = (data.get("currency") or "").strip() or None
+    payment_term = (data.get("payment_term") or "").strip() or None
+    shipment_term = (data.get("shipment_term") or "").strip() or None
     conn.execute(
-        "UPDATE companies SET name = ?, email_suffix = ? WHERE id = ?",
-        (name, suffix, cid),
+        "UPDATE companies SET name = ?, email_suffix = ?, currency = ?, "
+        "payment_term = ?, shipment_term = ? WHERE id = ?",
+        (name, suffix, currency, payment_term, shipment_term, cid),
     )
     conn.commit()
     conn.close()
-    return json_response(handler, {"id": cid, "name": name, "email_suffix": suffix}, 200)
+    return json_response(
+        handler,
+        {"id": cid, "name": name, "email_suffix": suffix,
+         "currency": currency, "payment_term": payment_term,
+         "shipment_term": shipment_term},
+        200,
+    )
 
 
 def api_update_member(handler, mid):

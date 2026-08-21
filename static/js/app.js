@@ -34,11 +34,10 @@ const labels = {
   "development-view":   "Development / View",
 };
 
-const PRODUCT_TYPES = [
-  "flat heat transfer",
-  "raised silicon label",
-  "woven tape",
-];
+// Dropdown option sets for the Company step of Customer / Create.
+const CURRENCIES = ["USD", "RMB", "HKD"];
+const PAYMENT_TERMS = ["COD", "credit 30 days", "credit 45 days"];
+const SHIPMENT_TERMS = ["Ex Work", "Door 2 Door", "FOB", "CIF"];
 
 const sidebar = document.getElementById("sidebar");
 const tabsEl  = document.getElementById("tabs");
@@ -176,6 +175,27 @@ function renderCustomerCreate() {
           <input id="cmp-suffix" type="text" placeholder="acme.com" autocomplete="off" />
         </div>
       </div>
+      <div class="field">
+        <label for="cmp-currency">Currency</label>
+        <select id="cmp-currency">
+          <option value="">— select —</option>
+          ${CURRENCIES.map((c) => `<option value="${escapeHtml(c)}">${escapeHtml(c)}</option>`).join("")}
+        </select>
+      </div>
+      <div class="field">
+        <label for="cmp-payment">Payment term</label>
+        <select id="cmp-payment">
+          <option value="">— select —</option>
+          ${PAYMENT_TERMS.map((p) => `<option value="${escapeHtml(p)}">${escapeHtml(p)}</option>`).join("")}
+        </select>
+      </div>
+      <div class="field">
+        <label for="cmp-shipment">Shipment term</label>
+        <select id="cmp-shipment">
+          <option value="">— select —</option>
+          ${SHIPMENT_TERMS.map((s) => `<option value="${escapeHtml(s)}">${escapeHtml(s)}</option>`).join("")}
+        </select>
+      </div>
       <div class="actions">
         <button class="btn ghost" id="cmp-dummy" type="button">Dummy</button>
         <button class="btn primary" id="cmp-next" type="button" disabled>Next</button>
@@ -185,6 +205,9 @@ function renderCustomerCreate() {
 
   const nameEl   = panel.querySelector("#cmp-name");
   const suffixEl = panel.querySelector("#cmp-suffix");
+  const currEl   = panel.querySelector("#cmp-currency");
+  const payEl    = panel.querySelector("#cmp-payment");
+  const shipEl   = panel.querySelector("#cmp-shipment");
   const nextBtn  = panel.querySelector("#cmp-next");
 
   const validateCompany = () => {
@@ -198,18 +221,27 @@ function renderCustomerCreate() {
     const d = dummyCompany();
     nameEl.value   = d.name;
     suffixEl.value = d.suffix;
+    currEl.value   = d.currency;
+    payEl.value    = d.payment;
+    shipEl.value   = d.shipment;
     validateCompany();
   });
 
   panel.querySelector("#cmp-next").addEventListener("click", () => {
     if (!nameEl.value.trim() || !suffixEl.value.trim()) return;
-    showMemberStep(nameEl.value.trim(), suffixEl.value.trim().replace(/^@/, ""));
+    showMemberStep(
+      nameEl.value.trim(),
+      suffixEl.value.trim().replace(/^@/, ""),
+      currEl.value,
+      payEl.value,
+      shipEl.value,
+    );
   });
 
   validateCompany();
 }
 
-function showMemberStep(companyName, emailSuffix) {
+function showMemberStep(companyName, emailSuffix, currency, paymentTerm, shipmentTerm) {
   const subtabs = panel.querySelector("#createSubtabs");
   subtabs.querySelector('[data-step="company"]').classList.add("done");
   const memberTab = subtabs.querySelector('[data-step="member"]');
@@ -228,6 +260,9 @@ function showMemberStep(companyName, emailSuffix) {
   // Store company info on the panel element
   panel.dataset.cmpName = companyName;
   panel.dataset.cmpSuffix = emailSuffix;
+  panel.dataset.cmpCurrency = currency || "";
+  panel.dataset.cmpPayment = paymentTerm || "";
+  panel.dataset.cmpShipment = shipmentTerm || "";
 
   let memberSec = panel.querySelector("#step-member");
   if (!memberSec) {
@@ -795,7 +830,6 @@ async function renderDevelopmentCreate() {
     <div class="actions create-actions">
       ${devEditMode ? '<button class="btn ghost" id="dev-back" type="button">← Back</button>' : ''}
       <button class="btn ghost" id="dev-dummy" type="button">Dummy</button>
-      <button class="btn ghost" id="dev-reset" type="button">Reset</button>
       <button class="btn primary" id="dev-save" type="button" disabled>${devEditMode ? "Update" : "Save"}</button>
     </div>
 
@@ -876,7 +910,6 @@ async function renderDevelopmentCreate() {
   const productEl = panel.querySelector("#dev-product");
   const itemEl = panel.querySelector("#dev-item");
   const saveBtn = panel.querySelector("#dev-save");
-  const resetBtn = panel.querySelector("#dev-reset");
   const dummyBtn = panel.querySelector("#dev-dummy");
 
   // --- Part 4 unlock when part 1 AND part 2 are complete ---
@@ -1497,7 +1530,7 @@ async function renderDevelopmentCreate() {
   updateNextState();
   updateSaveState();
 
-  // ===== Action buttons: Dummy / Reset / Save =====
+  // ===== Action buttons: Dummy / Save =====
 
   dummyBtn.addEventListener("click", () => fillDummyDevelopment({
     searchEl, hiddenEl, memberEl, productEl, itemEl, listEl, companies,
@@ -1515,19 +1548,6 @@ async function renderDevelopmentCreate() {
       openTab("development-view");
     });
   }
-
-  resetBtn.addEventListener("click", () => {
-    openConfirmModal(
-      "Reset development?",
-      "This will clear all fields and images you have entered. Continue?",
-      () => {
-        devEditMode = false;
-        devEditId = null;
-        resetDevState();
-        renderDevelopmentCreate();
-      }
-    );
-  });
 
   saveBtn.addEventListener("click", async () => {
     if (saveBtn.disabled) return;
@@ -1968,7 +1988,12 @@ async function openDevEditModal(id) {
   const isImg = (f) => f && f.type && f.type.startsWith("image/");
   const addFile = (file) => {
     if (!isImg(file)) return;
-    editImages.push({ id: "eimg-" + Math.random().toString(36).slice(2), name: file.name, url: URL.createObjectURL(file) });
+    // Only one image is allowed — a new attachment replaces the previous one.
+    editImages.splice(0, editImages.length, {
+      id: "eimg-" + Math.random().toString(36).slice(2),
+      name: file.name,
+      url: URL.createObjectURL(file),
+    });
     renderEditThumbs();
   };
   ["dragenter", "dragover"].forEach((ev) => dropEl.addEventListener(ev, (e) => { e.preventDefault(); dropEl.classList.add("dragover"); }));
