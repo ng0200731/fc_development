@@ -590,7 +590,15 @@ select:focus-visible,
   margin: 2px 4px 2px 0;
   font-size: 12px;
   white-space: nowrap;
+  color: var(--accent, #2a6df4);
+  text-decoration: none;
+  cursor: pointer;
 }
+.doc-tag:hover {
+  border-color: var(--accent, #2a6df4);
+  background: var(--accent-soft, rgba(42,109,244,.08));
+}
+.doc-tag:visited { color: var(--accent, #2a6df4); }
 .details-cell {
   font-size: 12px;
   color: var(--text-soft);

@@ -704,18 +704,28 @@ function renderDevImageThumbs() {
       const id = b.dataset.rm;
       const i = devState.images.findIndex((x) => x.id === id);
       if (i >= 0) {
-        devState.images.splice(i, 1);
-        if (typeof devSaveStateFn === "function") devSaveStateFn();
-        b.closest(".thumb").remove();
-        // A development needs at least one image — if they removed the last one,
-        // prompt so nothing silently disappears with no feedback.
-        if (devState.images.length === 0) {
-          openConfirmModal(
-            "No image attached",
-            "A development needs at least one image. Add or paste an image, or generate one with the Dummy button.",
-            () => {}
-          );
-        }
+        openConfirmModal(
+          "Remove image?",
+          "Remove this image from the development?",
+          () => {
+            // Only remove after the user confirms "Yes".
+            const j = devState.images.findIndex((x) => x.id === id);
+            if (j >= 0) {
+              devState.images.splice(j, 1);
+              if (typeof devSaveStateFn === "function") devSaveStateFn();
+              renderDevImageThumbs();
+              // A development needs at least one image — if they removed the
+              // last one, prompt so nothing silently disappears with no feedback.
+              if (devState.images.length === 0) {
+                openConfirmModal(
+                  "No image attached",
+                  "A development needs at least one image. Add or paste an image, or generate one with the Dummy button.",
+                  () => {}
+                );
+              }
+            }
+          }
+        );
       }
     });
   });
@@ -1297,19 +1307,31 @@ async function renderDevelopmentCreate() {
         const id = b.dataset.rm;
         const idx = images.findIndex((x) => x.id === id);
         if (idx >= 0) {
-          URL.revokeObjectURL(images[idx].url);
-          images.splice(idx, 1);
-          renderImageThumbs();
-          updateSaveState();   // re-gate Save now that an image is gone
-          // A development needs at least one image — if they removed the last
-          // one, prompt so nothing silently disappears with no feedback.
-          if (images.length === 0) {
-            openConfirmModal(
-              "No image attached",
-              "A development needs at least one image. Add or paste an image, or generate one with the Dummy button.",
-              () => {}
-            );
-          }
+          openConfirmModal(
+            "Remove image?",
+            "Remove this image from the development?",
+            () => {
+              // Only remove after the user confirms "Yes".
+              const j = images.findIndex((x) => x.id === id);
+              if (j >= 0) {
+                if (images[j].url && images[j].url.startsWith("blob:")) {
+                  URL.revokeObjectURL(images[j].url);
+                }
+                images.splice(j, 1);
+                renderImageThumbs();
+                updateSaveState();   // re-gate Save now that an image is gone
+                // A development needs at least one image — if they removed the
+                // last one, prompt so nothing silently disappears with no feedback.
+                if (images.length === 0) {
+                  openConfirmModal(
+                    "No image attached",
+                    "A development needs at least one image. Add or paste an image, or generate one with the Dummy button.",
+                    () => {}
+                  );
+                }
+              }
+            }
+          );
         }
       });
     });
@@ -1394,6 +1416,7 @@ async function renderDevelopmentCreate() {
         <span class="doc-icon">📄</span>
         <input class="doc-name" data-id="${d.id}" type="text" value="${escapeHtml(d.name)}" />
         <span class="doc-size muted small">${d.file ? formatBytes(d.file.size) : "saved"}</span>
+        ${d.uploading ? '<span class="thumb-badge uploading">uploading…</span>' : ''}
         <button class="icon-btn danger doc-rm" data-rm="${d.id}" title="Remove">✕</button>
       </div>`).join("");
     docList.querySelectorAll(".doc-rm").forEach((b) => {
@@ -1411,11 +1434,26 @@ async function renderDevelopmentCreate() {
     });
   };
 
-  const addDocFiles = (fileList) => {
-    [...fileList].forEach((f) => {
-      docs.push({ id: "doc-" + Date.now() + "-" + docs.length, name: f.name, file: f });
-    });
-    renderDocList();
+  // Documents are never stored as blob URLs — they're uploaded to /api/uploads
+  // so they survive a save + reload + edit. Seed an optimistic row, then swap
+  // the name to the server path once the upload resolves.
+  const addDocFiles = async (fileList) => {
+    for (const f of fileList) {
+      const id = "doc-" + Date.now() + "-" + docs.length;
+      const entry = { id, name: f.name, file: f, uploading: true };
+      docs.push(entry);
+      renderDocList();
+      try {
+        const r = await uploadFile(f);
+        entry.name = r.path;            // "uploads/<uuid>__<file>"
+        entry.url = API + r.path;       // servable from /uploads/...
+        entry.uploading = false;
+      } catch (err) {
+        entry.uploading = false;
+        openConfirmModal("Upload failed", "Could not upload document: " + err.message, () => {});
+      }
+      renderDocList();
+    }
   };
 
   ["dragenter", "dragover"].forEach((ev) =>
@@ -1575,10 +1613,10 @@ function paintDevelopmentView() {
     const imgs = (r.image_names || []).slice(0, 3);
     const thumbs = imgs.length
       ? `<div class="dev-thumbs">` + imgs.map((n) =>
-          `<img class="dev-thumb-sm" src="${imageUrl(n)}" alt="${escapeHtml(n)}" title="${escapeHtml(n)}" />`).join("") + `</div>`
+          `<img class="dev-thumb-sm" src="${assetUrl(n)}" alt="${escapeHtml(n)}" title="${escapeHtml(n)}" />`).join("") + `</div>`
       : `<span class="muted">—</span>`;
     const docs = (r.doc_names || []).map((n) =>
-      `<span class="doc-tag" title="${escapeHtml(n)}">📄 ${escapeHtml(n)}</span>`).join("");
+      `<a class="doc-tag" href="${assetUrl(n)}" target="_blank" rel="noopener" download title="${escapeHtml(n)}">📄 ${escapeHtml(displayName(n))}</a>`).join("");
     const docLinks = docs || `<span class="muted">—</span>`;
     return `
       <tr class="${checked ? "selected" : ""}">
@@ -1766,11 +1804,12 @@ async function editDevelopmentInCreate(id) {
   devState.images = (rec.image_names || []).map((n) => ({
     id: "eimg-" + n,
     name: n,
-    url: imageUrl(n),
+    url: assetUrl(n),
   }));
 
-  // documents — seed from saved doc_names (file content is gone after a reload,
-  // so we keep just the name; the user can re-drop a replacement if needed).
+  // documents — seed from saved doc_names. The bytes are gone after a reload,
+  // so we keep just the name (file: null → shows "saved"). They re-link to the
+  // persisted /uploads/ file when edited/saved again.
   devState.docs = (rec.doc_names || []).map((name, i) => ({
     id: "edoc-" + rec.id + "-" + i,
     name,
@@ -1876,8 +1915,19 @@ async function openDevEditModal(id) {
       </div>`).join("");
     wrap.querySelectorAll("[data-rm]").forEach((b) => {
       b.addEventListener("click", () => {
-        const i = editImages.findIndex((x) => x.id === b.dataset.rm);
-        if (i >= 0) { editImages.splice(i, 1); renderEditThumbs(); }
+        const id = b.dataset.rm;
+        const i = editImages.findIndex((x) => x.id === id);
+        if (i >= 0) {
+          openConfirmModal(
+            "Remove image?",
+            "Remove this image from the development?",
+            () => {
+              // Only remove after the user confirms "Yes".
+              const j = editImages.findIndex((x) => x.id === id);
+              if (j >= 0) { editImages.splice(j, 1); renderEditThumbs(); }
+            }
+          );
+        }
       });
     });
   };
@@ -2471,3 +2521,36 @@ function csvCell(v) {
   if (/[",\r\n]/.test(v)) return '"' + v.replace(/"/g, '""') + '"';
   return v;
 }
+
+// ---------------------------------------------------------------------------
+// Attachment helpers: upload + asset URL resolution (Part 4 files)
+// ---------------------------------------------------------------------------
+
+// Resolve a stored path -> a servable URL.
+//   "uploads/..."  -> same-origin /uploads/...   (user-dropped image/doc bytes)
+//   anything else  -> /sample-images/...          (legacy sample / Dummy image)
+function assetUrl(name) {
+  if (!name) return "";
+  if (name.startsWith("uploads/")) return API + "/" + name;
+  return API + "/sample-images/" + name;
+}
+
+// Strip the embedded "<uuid>__" prefix (and any path) so uploaded files show
+// their original filename; sample paths show just the basename.
+function displayName(name) {
+  if (!name) return "";
+  const base = name.indexOf("/") >= 0 ? name.split("/").pop() : name;
+  return base.replace(/^[^_]*__/, "");
+}
+
+// Upload a single File to the server, returning { path, name, url }.
+// Used for user-dropped images and ALL documents (replacing blob-URL storage).
+async function uploadFile(file) {
+  const form = new FormData();
+  form.append("file", file);
+  const res = await fetch(API + "/api/uploads", { method: "POST", body: form });
+  if (!res.ok) throw new Error("upload failed: " + res.status);
+  const data = await res.json();
+  return data; // { path, name, url }
+}
+
