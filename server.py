@@ -76,13 +76,32 @@ def init_db():
             no_of_color   INTEGER,
             pantones      TEXT,
             image_names   TEXT,
+            doc_names     TEXT,
             created_at    TEXT NOT NULL,
             updated_at    TEXT NOT NULL
         )
         """
     )
+    # Migrations: add any columns introduced after the initial schema so that
+    # an existing database (already created without them) keeps working.
+    _ensure_dev_columns(conn)
     conn.commit()
     conn.close()
+
+
+# Columns added to `developments` after the table was first created. Each entry
+# is { column_name: SQL type }. init_db() adds any that are missing.
+_DEV_MISSING_COLUMNS = {
+    "doc_names": "TEXT",
+}
+
+
+def _ensure_dev_columns(conn):
+    cur = conn.cursor()
+    existing = {r[1] for r in cur.execute("PRAGMA table_info(developments)").fetchall()}
+    for col, ctype in _DEV_MISSING_COLUMNS.items():
+        if col not in existing:
+            cur.execute(f"ALTER TABLE developments ADD COLUMN {col} {ctype}")
 
 
 def now_iso():
@@ -338,7 +357,7 @@ def api_list_customers(handler):
 
 def _dev_row_to_payload(row):
     out = dict(row)
-    for k in ("pantones", "image_names"):
+    for k in ("pantones", "image_names", "doc_names"):
         if out.get(k):
             try:
                 out[k] = json.loads(out[k])
@@ -381,6 +400,9 @@ def _dev_insert_or_update(conn, did, data):
         pantones = json.dumps(pantones, ensure_ascii=False)
     if isinstance(image_names, (list, dict)):
         image_names = json.dumps(image_names, ensure_ascii=False)
+    doc_names = data.get("doc_names")
+    if isinstance(doc_names, (list, dict)):
+        doc_names = json.dumps(doc_names, ensure_ascii=False)
     vals = (
         data.get("company_id") if did is None else (data.get("company_id") if data.get("company_id") is not None else None),
         company_name,
@@ -394,6 +416,7 @@ def _dev_insert_or_update(conn, did, data):
         _to_int(data.get("no_of_color")),
         pantones,
         image_names,
+        doc_names,
     )
     if did is None:
         cur = conn.cursor()
@@ -401,8 +424,8 @@ def _dev_insert_or_update(conn, did, data):
             "INSERT INTO developments "
             "(company_id, company_name, member_id, member_name, item_name, "
             "product_type, height, width, raised_height, no_of_color, pantones, "
-            "image_names, created_at, updated_at) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "image_names, doc_names, created_at, updated_at) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             vals + (now_iso(), now_iso()),
         )
         return cur.lastrowid
@@ -410,7 +433,7 @@ def _dev_insert_or_update(conn, did, data):
         "UPDATE developments SET "
         "company_id=?, company_name=?, member_id=?, member_name=?, item_name=?, "
         "product_type=?, height=?, width=?, raised_height=?, no_of_color=?, "
-        "pantones=?, image_names=?, updated_at=? WHERE id=?",
+        "pantones=?, image_names=?, doc_names=?, updated_at=? WHERE id=?",
         vals + (now_iso(), did),
     )
     return did

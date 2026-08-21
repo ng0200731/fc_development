@@ -523,8 +523,9 @@ function buildDevelopmentPayload() {
     width: devState.width || null,
     raised_height: devState.raisedHeight || null,
     no_of_color: devState.noOfColor ? Number(devState.noOfColor) : null,
-    pantones: devState.pantones.filter((p) => p && p.value),
+    pantones: devState.pantones.filter((p) => p && p.value).map((p) => ({ value: p.value, color: p.color })),
     image_names: devState.images.map((i) => i.name),
+    doc_names: devState.docs.map((d) => d.name),
   };
 }
 
@@ -902,9 +903,13 @@ async function renderDevelopmentCreate() {
 
   // In edit mode, the record is already fully valid: don't blank the company/
   // member dropdowns while the async member load is still resolving. Seed the
-  // member dropdown synchronously from devState.memberId so Part 4 unlocks
-  // immediately and images/Part 3 render without waiting on the network.
+  // company hidden field + search box AND the member dropdown synchronously so
+  // Part 2 (product) stays enabled and the Save/Update button unlocks without
+  // waiting on the network. Without this, updateNextState()/updateSaveState()
+  // see an empty company and keep Save disabled — the edit appears to do nothing.
   if (devEditMode && devState.companyId && devState.memberId) {
+    hiddenEl.value = devState.companyId;
+    searchEl.value = devState.companyName;
     memberEl.innerHTML = `<option value="${devState.memberId}">${escapeHtml(devState.memberName || devState.memberId)}</option>`;
     memberEl.value = devState.memberId;
     memberEl.disabled = false;
@@ -1354,7 +1359,7 @@ async function renderDevelopmentCreate() {
       <div class="doc-row" data-id="${d.id}">
         <span class="doc-icon">📄</span>
         <input class="doc-name" data-id="${d.id}" type="text" value="${escapeHtml(d.name)}" />
-        <span class="doc-size muted small">${formatBytes(d.file.size)}</span>
+        <span class="doc-size muted small">${d.file ? formatBytes(d.file.size) : "saved"}</span>
         <button class="icon-btn danger doc-rm" data-rm="${d.id}" title="Remove">✕</button>
       </div>`).join("");
     docList.querySelectorAll(".doc-rm").forEach((b) => {
@@ -1503,22 +1508,26 @@ function paintDevelopmentView() {
     { key: "item_name", label: "Item" },
     { key: "product_type", label: "Product Type" },
     { key: "image", label: "Image" },
+    { key: "documents", label: "Documents" },
     { key: "created_at", label: "Created" },
     { key: "updated_at", label: "Updated" },
     { key: "details", label: "Details" },
   ];
 
+  // image / documents / details are rendered specially and not column-searched
+  const searchCols = cols.filter(
+    (c) => c.key !== "image" && c.key !== "documents" && c.key !== "details"
+  );
+
   const shown = devViewData.filter((r) =>
-    cols.filter((c) => c.key !== "image" && c.key !== "details").every((c) =>
-      fuzzyMatch(r[c.key], devViewFilters[c.key])
-    )
+    searchCols.every((c) => fuzzyMatch(r[c.key], devViewFilters[c.key]))
   );
 
   const allKeys = shown.map((r) => "d:" + r.id);
   const allChecked = allKeys.length > 0 && allKeys.every((k) => devViewSelected.has(k));
 
   const searchRow = cols.map((c) => {
-    if (c.key === "image" || c.key === "details") {
+    if (c.key === "image" || c.key === "documents" || c.key === "details") {
       return `<th class="search-th"></th>`;
     }
     return `<th class="search-th">
@@ -1534,6 +1543,9 @@ function paintDevelopmentView() {
       ? `<div class="dev-thumbs">` + imgs.map((n) =>
           `<img class="dev-thumb-sm" src="${API}/sample-images/${encodeURI(n)}" alt="${escapeHtml(n)}" title="${escapeHtml(n)}" />`).join("") + `</div>`
       : `<span class="muted">—</span>`;
+    const docs = (r.doc_names || []).map((n) =>
+      `<span class="doc-tag" title="${escapeHtml(n)}">📄 ${escapeHtml(n)}</span>`).join("");
+    const docLinks = docs || `<span class="muted">—</span>`;
     return `
       <tr class="${checked ? "selected" : ""}">
         <td>
@@ -1546,6 +1558,7 @@ function paintDevelopmentView() {
         <td>${escapeHtml(r.item_name)}</td>
         <td>${escapeHtml(r.product_type)}</td>
         <td class="cell-imgs">${thumbs}</td>
+        <td class="cell-docs">${docLinks}</td>
         <td>${escapeHtml(r.created_at)}</td>
         <td>${escapeHtml(r.updated_at)}</td>
         <td class="details-cell">${escapeHtml(devDetailsSummary(r))}</td>
@@ -1554,7 +1567,7 @@ function paintDevelopmentView() {
           <button class="icon-btn danger" data-del="${r.id}" title="Delete">🗑</button>
         </td>
       </tr>`;
-  }).join("") || `<tr><td colspan="10" class="muted">No matches.</td></tr>`;
+  }).join("") || `<tr><td colspan="11" class="muted">No matches.</td></tr>`;
 
   panel.innerHTML = `
     <div class="view-head">
@@ -1722,6 +1735,14 @@ async function editDevelopmentInCreate(id) {
     const hit = findInPool(n);
     return { id: "eimg-" + n, name: n, url: hit ? hit.url : API + "/sample-images/" + encodeURI(n) };
   });
+
+  // documents — seed from saved doc_names (file content is gone after a reload,
+  // so we keep just the name; the user can re-drop a replacement if needed).
+  devState.docs = (rec.doc_names || []).map((name, i) => ({
+    id: "edoc-" + rec.id + "-" + i,
+    name,
+    file: null,
+  }));
 
   devEditMode = true;
   devEditId = rec.id;
