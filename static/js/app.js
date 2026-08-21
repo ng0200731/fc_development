@@ -34,6 +34,16 @@ const labels = {
   "development-view":   "Development / View",
 };
 
+// Selectable product types for the Development form.
+const PRODUCT_TYPES = [
+  "woven label",
+  "printed label",
+  "hang tag",
+  "raised silicon label",
+  "heat transfer label",
+  "leather patch",
+];
+
 // Dropdown option sets for the Company step of Customer / Create.
 const CURRENCIES = ["USD", "RMB", "HKD"];
 const PAYMENT_TERMS = ["COD", "credit 30 days", "credit 45 days"];
@@ -60,13 +70,14 @@ sidebar.querySelectorAll(".nav-item").forEach((item) => {
     // leaving any edit session when navigating via the sidebar
     devEditMode = false;
     devEditId = null;
+    devOriginal = null;
     openTab(item.dataset.target);
   });
 });
 
 function openTab(target) {
   // editing an existing development only applies while on the Create screen
-  if (target !== "development-create") { devEditMode = false; devEditId = null; }
+  if (target !== "development-create") { devEditMode = false; devEditId = null; devOriginal = null; }
   openTabs.add(target);
   activeTarget = target;
   renderTabs();
@@ -160,6 +171,8 @@ function renderCustomerCreate() {
     <div class="subtabs" id="createSubtabs" role="tablist">
       <button class="subtab active" data-step="company" role="tab">Company</button>
       <button class="subtab locked" data-step="member" role="tab" disabled>Member</button>
+      <button class="subtab locked" data-step="shipto" role="tab" disabled>Ship to</button>
+      <button class="subtab locked" data-step="project" role="tab" disabled>Project</button>
     </div>
 
     <!-- COMPANY STEP -->
@@ -248,12 +261,22 @@ function showMemberStep(companyName, emailSuffix, currency, paymentTerm, shipmen
   memberTab.classList.remove("locked");
   memberTab.disabled = false;
 
+  // the ship-to + project tabs are unlocked once we have a created company id
+  const unlockLaterTabs = () => {
+    ["shipto", "project"].forEach((step) => {
+      const tab = subtabs.querySelector(`[data-step="${step}"]`);
+      if (tab) { tab.classList.remove("locked"); tab.disabled = false; }
+    });
+  };
+
   subtabs.querySelectorAll(".subtab").forEach((t) => {
     t.classList.toggle("active", t.dataset.step === "member");
     t.onclick = () => {
       subtabs.querySelectorAll(".subtab").forEach((x) => x.classList.toggle("active", x === t));
-      panel.querySelector("#step-company").style.display = t.dataset.step === "company" ? "" : "none";
-      panel.querySelector("#step-member").style.display = t.dataset.step === "member" ? "" : "none";
+      ["company", "member", "shipto", "project"].forEach((step) => {
+        const sec = panel.querySelector("#step-" + step);
+        if (sec) sec.style.display = t.dataset.step === step ? "" : "none";
+      });
     };
   });
 
@@ -379,7 +402,7 @@ function showMemberStep(companyName, emailSuffix, currency, paymentTerm, shipmen
       createBtn.disabled = true;
       createBtn.textContent = "Creating…";
       try {
-        await saveCustomerWithMembers(
+        const company = await saveCustomerWithMembers(
           companyName, emailSuffix, pending,
           {
             currency: panel.dataset.cmpCurrency || "",
@@ -387,6 +410,10 @@ function showMemberStep(companyName, emailSuffix, currency, paymentTerm, shipmen
             shipment_term: panel.dataset.cmpShipment || "",
           },
         );
+        panel.dataset.cmpId = String(company.id);
+        unlockLaterTabs();
+        showShipToStep(company.id, companyName, emailSuffix);
+        showProjectStep(company.id, companyName, emailSuffix);
         createBtn.textContent = "Created ✓";
         openCustomerPostSaveModal();
       } catch (err) {
@@ -413,6 +440,186 @@ function validateMemberStep() {
              sec.querySelector("#mbr-tel").value.trim();
   const addBtn = sec.querySelector("#mbr-add");
   if (addBtn) addBtn.disabled = !ok;
+}
+
+// ---------------------------------------------------------------------------
+// Customer / Create — Ship to step (multiple addresses + default)
+// ---------------------------------------------------------------------------
+
+function showShipToStep(companyId, companyName, emailSuffix) {
+  let sec = panel.querySelector("#step-shipto");
+  if (sec) return; // already built
+  sec = document.createElement("div");
+  sec.className = "subpanel";
+  sec.id = "step-shipto";
+  sec.style.display = "none";
+  sec.innerHTML = `
+    <p class="ctx">Company: <strong>${escapeHtml(companyName)}</strong>
+       (email suffix <strong>@${escapeHtml(emailSuffix)}</strong>)</p>
+    <div class="ship-list" id="ship-list"></div>
+    <div class="member-form">
+      <h3 class="subhead">Add ship-to address</h3>
+      <div class="field">
+        <label for="ship-addr">Address</label>
+        <textarea id="ship-addr" rows="3" placeholder="Full shipping address…" autocomplete="off"></textarea>
+      </div>
+      <div class="actions">
+        <button class="btn" id="ship-add" type="button" disabled>Add address</button>
+      </div>
+    </div>
+  `;
+  panel.querySelector("#step-member").after(sec);
+
+  const listEl = sec.querySelector("#ship-list");
+  const addrEl = sec.querySelector("#ship-addr");
+  const addBtn = sec.querySelector("#ship-add");
+
+  const renderShipList = (rows) => {
+    if (!rows.length) {
+      listEl.innerHTML = '<p class="muted small">No ship-to addresses yet.</p>';
+      return;
+    }
+    listEl.innerHTML = rows.map((s) => `
+      <div class="member-row ${s.is_default ? "default-row" : ""}">
+        <span>
+          <strong>${escapeHtml(s.address)}</strong>
+          ${s.is_default ? '<span class="badge default-badge">default</span>' : ""}
+        </span>
+        <span class="muted">
+          ${s.is_default ? "" : `<button class="btn tiny" data-default="${s.id}" title="Set as default">Set default</button>`}
+          <button class="icon-btn danger" data-rm="${s.id}" title="Remove">✕</button>
+        </span>
+      </div>`).join("");
+    listEl.querySelectorAll("[data-default]").forEach((b) => {
+      b.addEventListener("click", async () => {
+        try {
+          await fetchJson(API + `/api/ship-to/${b.dataset.default}/default`, { method: "PUT" });
+          const rows = await fetchJson(API + `/api/ship-to/${companyId}`);
+          renderShipList(rows);
+        } catch (err) { alert("Set default failed: " + err.message); }
+      });
+    });
+    listEl.querySelectorAll("[data-rm]").forEach((b) => {
+      b.addEventListener("click", async () => {
+        try {
+          await fetchJson(API + `/api/ship-to/${b.dataset.rm}`, { method: "DELETE" });
+          const rows = await fetchJson(API + `/api/ship-to/${companyId}`);
+          renderShipList(rows);
+        } catch (err) { alert("Remove failed: " + err.message); }
+      });
+    });
+  };
+
+  addrEl.addEventListener("input", () => {
+    addBtn.disabled = !addrEl.value.trim();
+  });
+
+  addBtn.addEventListener("click", async () => {
+    if (addBtn.disabled) return;
+    const address = addrEl.value.trim();
+    try {
+      await fetchJson(API + `/api/ship-to/${companyId}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ address }),
+      });
+      addrEl.value = "";
+      addBtn.disabled = true;
+      const rows = await fetchJson(API + `/api/ship-to/${companyId}`);
+      renderShipList(rows);
+    } catch (err) { alert("Add failed: " + err.message); }
+  });
+
+  fetchJson(API + `/api/ship-to/${companyId}`)
+    .then(renderShipList)
+    .catch(() => renderShipList([]));
+}
+
+// ---------------------------------------------------------------------------
+// Customer / Create — Project step (unique project names per company)
+// ---------------------------------------------------------------------------
+
+function showProjectStep(companyId, companyName, emailSuffix) {
+  let sec = panel.querySelector("#step-project");
+  if (sec) return; // already built
+  sec = document.createElement("div");
+  sec.className = "subpanel";
+  sec.id = "step-project";
+  sec.style.display = "none";
+  sec.innerHTML = `
+    <p class="ctx">Company: <strong>${escapeHtml(companyName)}</strong>
+       (email suffix <strong>@${escapeHtml(emailSuffix)}</strong>)</p>
+    <div class="proj-list" id="proj-list"></div>
+    <div class="member-form">
+      <h3 class="subhead">Add project</h3>
+      <div class="field">
+        <label for="proj-name">Project name</label>
+        <input id="proj-name" type="text" placeholder="e.g. Spring 2026 Collection" autocomplete="off" />
+      </div>
+      <div class="actions">
+        <button class="btn" id="proj-add" type="button" disabled>Add project</button>
+      </div>
+    </div>
+  `;
+  panel.querySelector("#step-shipto").after(sec);
+
+  const listEl = sec.querySelector("#proj-list");
+  const nameEl = sec.querySelector("#proj-name");
+  const addBtn = sec.querySelector("#proj-add");
+
+  const renderProjList = (rows) => {
+    if (!rows.length) {
+      listEl.innerHTML = '<p class="muted small">No projects yet.</p>';
+      return;
+    }
+    listEl.innerHTML = rows.map((p) => `
+      <div class="member-row">
+        <span><strong>${escapeHtml(p.name)}</strong></span>
+        <span class="muted">
+          <button class="icon-btn danger" data-rm="${p.id}" title="Remove">✕</button>
+        </span>
+      </div>`).join("");
+    listEl.querySelectorAll("[data-rm]").forEach((b) => {
+      b.addEventListener("click", async () => {
+        try {
+          await fetchJson(API + `/api/projects/${b.dataset.rm}`, { method: "DELETE" });
+          const rows = await fetchJson(API + `/api/projects/${companyId}`);
+          renderProjList(rows);
+        } catch (err) { alert("Remove failed: " + err.message); }
+      });
+    });
+  };
+
+  nameEl.addEventListener("input", () => {
+    addBtn.disabled = !nameEl.value.trim();
+  });
+
+  addBtn.addEventListener("click", async () => {
+    if (addBtn.disabled) return;
+    const name = nameEl.value.trim();
+    try {
+      const res = await fetchJson(API + `/api/projects/${companyId}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name }),
+      });
+      if (res.error) { alert(res.error); return; }
+      nameEl.value = "";
+      addBtn.disabled = true;
+      const rows = await fetchJson(API + `/api/projects/${companyId}`);
+      renderProjList(rows);
+    } catch (err) {
+      if (err.message.includes("409")) {
+        alert("A project with this name already exists for this company.");
+      } else {
+        alert("Add failed: " + err.message);
+      }
+    }
+  });
+
+  fetchJson(API + `/api/projects/${companyId}`)
+    .then(renderProjList)
+    .catch(() => renderProjList([]));
 }
 
 // ---------------------------------------------------------------------------
@@ -1329,14 +1536,48 @@ async function renderDevelopmentCreate() {
     return true;
   };
 
+  // Build the current record signature (the meaningful editable fields) so we
+  // can compare it against the originally-loaded record and only enable Update
+  // when something actually changed.
+  const currentSignature = () => ({
+    company_id: devState.companyId ? Number(devState.companyId) : null,
+    member_id: devState.memberId ? Number(devState.memberId) : null,
+    item_name: (devState.item || "").trim(),
+    product_type: devState.product || "",
+    height: devState.height ? Number(devState.height) : null,
+    width: devState.width ? Number(devState.width) : null,
+    raised_height: devState.raisedHeight ? Number(devState.raisedHeight) : null,
+    no_of_color: devState.noOfColor ? Number(devState.noOfColor) : null,
+    pantones: devState.pantones.filter((p) => p && p.value).map((p) => ({ value: p.value.trim(), color: p.color })),
+    image_names: devState.images.map((i) => i.name).sort(),
+    doc_names: devState.docs.map((d) => d.name).sort(),
+  });
+
+  const sigEq = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+  const isDirty = () => !devOriginal || !sigEq(currentSignature(), {
+    company_id: devOriginal.company_id != null ? Number(devOriginal.company_id) : null,
+    member_id: devOriginal.member_id != null ? Number(devOriginal.member_id) : null,
+    item_name: (devOriginal.item_name || "").trim(),
+    product_type: devOriginal.product_type || "",
+    height: devOriginal.height != null ? Number(devOriginal.height) : null,
+    width: devOriginal.width != null ? Number(devOriginal.width) : null,
+    raised_height: devOriginal.raised_height != null ? Number(devOriginal.raised_height) : null,
+    no_of_color: devOriginal.no_of_color != null ? Number(devOriginal.no_of_color) : null,
+    pantones: (devOriginal.pantones || []).map((p) => ({ value: (p.value || "").trim(), color: p.color })),
+    image_names: (devOriginal.image_names || []).slice().sort(),
+    doc_names: (devOriginal.doc_names || []).slice().sort(),
+  });
+
   // Save gating: every required field filled AND at least one image present.
+  // In edit mode the button is "Update" and must reflect a real change.
   const updateSaveState = () => {
     const allFilled = hiddenEl.value !== "" && memberEl.value !== "" &&
                       devState.item && devState.product &&
                       devState.images.length >= 1 &&
                       part3Valid();
-    saveBtn.disabled = !allFilled;
-    saveBtn.classList.toggle("active", allFilled);
+    const canSave = devEditMode ? (allFilled && isDirty()) : allFilled;
+    saveBtn.disabled = !canSave;
+    saveBtn.classList.toggle("active", canSave);
   };
 
   // initial unlock check (covers restored state on tab switch)
@@ -1552,6 +1793,7 @@ async function renderDevelopmentCreate() {
     backBtn.addEventListener("click", () => {
       devEditMode = false;
       devEditId = null;
+      devOriginal = null;
       resetDevState();
       openTab("development-view");
     });
@@ -1576,6 +1818,7 @@ async function renderDevelopmentCreate() {
         });
         devEditMode = false;
         devEditId = null;
+        devOriginal = null;
         openTab("development-view");
       } else {
         await fetchJson(API + "/api/developments", {
@@ -1876,6 +2119,7 @@ async function editDevelopmentInCreate(id) {
 
   devEditMode = true;
   devEditId = rec.id;
+  devOriginal = rec;   // keep the pristine record for dirty comparison
   openTab("development-create");
 }
 
@@ -2146,11 +2390,15 @@ function paintView() {
     { key: "currency", label: "Currency" },
     { key: "payment_term", label: "Payment Term" },
     { key: "shipment_term", label: "Shipment Term" },
+    { key: "ship_to", label: "Ship To" },
+    { key: "projects", label: "Projects" },
   ];
 
   const rows = [];
   viewCustomers.forEach((c) => {
     const members = c.members && c.members.length ? c.members : [null];
+    const shipTo = (c.ship_to || []).map((s) => s.address).join(" | ");
+    const projects = (c.projects || []).map((p) => p.name).join(", ");
     members.forEach((m) => {
       rows.push({
         companyId: c.id,
@@ -2159,6 +2407,8 @@ function paintView() {
         currency: c.currency || "",
         payment_term: c.payment_term || "",
         shipment_term: c.shipment_term || "",
+        shipTo,
+        projects,
         memberId: m ? m.id : null,
         name: m ? m.name : "",
         email: m ? m.email_prefix + "@" + c.email_suffix : "",
@@ -2207,9 +2457,11 @@ function paintView() {
         <td>${escapeHtml(r.currency)}</td>
         <td>${escapeHtml(r.payment_term)}</td>
         <td>${escapeHtml(r.shipment_term)}</td>
+        <td>${escapeHtml(r.shipTo)}</td>
+        <td>${escapeHtml(r.projects)}</td>
         <td class="row-actions">${editBtn}</td>
       </tr>`;
-  }).join("") || `<tr><td colspan="10" class="muted">No matches.</td></tr>`;
+  }).join("") || `<tr><td colspan="12" class="muted">No matches.</td></tr>`;
 
   panel.innerHTML = `
     <div class="view-head">

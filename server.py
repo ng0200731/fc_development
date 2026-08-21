@@ -90,6 +90,28 @@ def init_db():
         )
         """
     )
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS ship_to (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            company_id  INTEGER NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+            address     TEXT NOT NULL,
+            is_default  INTEGER NOT NULL DEFAULT 0,
+            created_at  TEXT NOT NULL
+        )
+        """
+    )
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS projects (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            company_id  INTEGER NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+            name        TEXT NOT NULL,
+            created_at  TEXT NOT NULL,
+            UNIQUE(company_id, name)
+        )
+        """
+    )
     # Migrations: add any columns introduced after the initial schema so that
     # an existing database (already created without them) keeps working.
     _ensure_company_columns(conn)
@@ -337,9 +359,17 @@ def api_get_company(handler, cid):
     members = conn.execute(
         "SELECT * FROM members WHERE company_id = ? ORDER BY id", (cid,)
     ).fetchall()
+    ship_to = conn.execute(
+        "SELECT * FROM ship_to WHERE company_id = ? ORDER BY is_default DESC, id", (cid,)
+    ).fetchall()
+    projects = conn.execute(
+        "SELECT * FROM projects WHERE company_id = ? ORDER BY id", (cid,)
+    ).fetchall()
     conn.close()
     out = dict(comp)
     out["members"] = [dict(m) for m in members]
+    out["ship_to"] = [dict(s) for s in ship_to]
+    out["projects"] = [dict(p) for p in projects]
     return json_response(handler, out)
 
 
@@ -438,9 +468,11 @@ def api_delete_company(handler, cid):
     if not comp:
         conn.close()
         return json_response(handler, {"error": "company not found"}, 404)
-    # delete members first (FK enforcement may be off in older SQLite sessions),
-    # then the company row itself.
+    # delete members, ship-to addresses, and projects first (FK enforcement may
+    # be off in older SQLite sessions), then the company row itself.
     conn.execute("DELETE FROM members WHERE company_id = ?", (cid,))
+    conn.execute("DELETE FROM ship_to WHERE company_id = ?", (cid,))
+    conn.execute("DELETE FROM projects WHERE company_id = ?", (cid,))
     conn.execute("DELETE FROM companies WHERE id = ?", (cid,))
     conn.commit()
     conn.close()
@@ -468,11 +500,149 @@ def api_list_customers(handler):
         members = conn.execute(
             "SELECT * FROM members WHERE company_id = ? ORDER BY id", (c["id"],)
         ).fetchall()
+        ship_to = conn.execute(
+            "SELECT * FROM ship_to WHERE company_id = ? ORDER BY is_default DESC, id", (c["id"],)
+        ).fetchall()
+        projects = conn.execute(
+            "SELECT * FROM projects WHERE company_id = ? ORDER BY id", (c["id"],)
+        ).fetchall()
         item = dict(c)
         item["members"] = [dict(m) for m in members]
+        item["ship_to"] = [dict(s) for s in ship_to]
+        item["projects"] = [dict(p) for p in projects]
         out.append(item)
     conn.close()
     return json_response(handler, out)
+
+
+# --- Ship-To handlers -------------------------------------------------------
+
+def api_list_ship_to(handler, cid):
+    conn = db()
+    rows = conn.execute(
+        "SELECT * FROM ship_to WHERE company_id = ? ORDER BY is_default DESC, id", (cid,)
+    ).fetchall()
+    conn.close()
+    return json_response(handler, [dict(r) for r in rows])
+
+
+def api_add_ship_to(handler, cid):
+    conn = db()
+    comp = conn.execute("SELECT * FROM companies WHERE id = ?", (cid,)).fetchone()
+    if not comp:
+        conn.close()
+        return json_response(handler, {"error": "company not found"}, 404)
+    data = read_json_body(handler)
+    address = (data.get("address") or "").strip()
+    if not address:
+        conn.close()
+        return json_response(handler, {"error": "address is required"}, 400)
+    # First address for a company becomes the default automatically.
+    existing = conn.execute(
+        "SELECT COUNT(*) AS n FROM ship_to WHERE company_id = ?", (cid,)
+    ).fetchone()["n"]
+    is_default = 1 if existing == 0 else 0
+    cur = conn.cursor()
+    cur.execute(
+        "INSERT INTO ship_to (company_id, address, is_default, created_at) "
+        "VALUES (?, ?, ?, ?)",
+        (cid, address, is_default, now_iso()),
+    )
+    sid = cur.lastrowid
+    conn.commit()
+    conn.close()
+    return json_response(
+        handler,
+        {"id": sid, "company_id": cid, "address": address, "is_default": is_default},
+        201,
+    )
+
+
+def api_set_default_ship_to(handler, sid):
+    conn = db()
+    row = conn.execute("SELECT * FROM ship_to WHERE id = ?", (sid,)).fetchone()
+    if not row:
+        conn.close()
+        return json_response(handler, {"error": "not found"}, 404)
+    cid = row["company_id"]
+    # Clear all defaults for the company, then mark this one.
+    conn.execute("UPDATE ship_to SET is_default = 0 WHERE company_id = ?", (cid,))
+    conn.execute("UPDATE ship_to SET is_default = 1 WHERE id = ?", (sid,))
+    conn.commit()
+    conn.close()
+    return json_response(handler, {"ok": True, "id": sid}, 200)
+
+
+def api_delete_ship_to(handler, sid):
+    conn = db()
+    row = conn.execute("SELECT * FROM ship_to WHERE id = ?", (sid,)).fetchone()
+    if not row:
+        conn.close()
+        return json_response(handler, {"error": "not found"}, 404)
+    was_default = row["is_default"]
+    cid = row["company_id"]
+    conn.execute("DELETE FROM ship_to WHERE id = ?", (sid,))
+    # If we removed the default and others remain, promote the first remaining.
+    if was_default:
+        first = conn.execute(
+            "SELECT * FROM ship_to WHERE company_id = ? ORDER BY id LIMIT 1", (cid,)
+        ).fetchone()
+        if first:
+            conn.execute("UPDATE ship_to SET is_default = 1 WHERE id = ?", (first["id"],))
+    conn.commit()
+    conn.close()
+    return json_response(handler, {"ok": True, "id": sid}, 200)
+
+
+# --- Project handlers -------------------------------------------------------
+
+def api_list_projects(handler, cid):
+    conn = db()
+    rows = conn.execute(
+        "SELECT * FROM projects WHERE company_id = ? ORDER BY id", (cid,)
+    ).fetchall()
+    conn.close()
+    return json_response(handler, [dict(r) for r in rows])
+
+
+def api_add_project(handler, cid):
+    conn = db()
+    comp = conn.execute("SELECT * FROM companies WHERE id = ?", (cid,)).fetchone()
+    if not comp:
+        conn.close()
+        return json_response(handler, {"error": "company not found"}, 404)
+    data = read_json_body(handler)
+    name = (data.get("name") or "").strip()
+    if not name:
+        conn.close()
+        return json_response(handler, {"error": "name is required"}, 400)
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "INSERT INTO projects (company_id, name, created_at) VALUES (?, ?, ?)",
+            (cid, name, now_iso()),
+        )
+        pid = cur.lastrowid
+        conn.commit()
+        conn.close()
+        return json_response(handler, {"id": pid, "company_id": cid, "name": name}, 201)
+    except sqlite3.IntegrityError:
+        conn.close()
+        return json_response(
+            handler, {"error": "a project with this name already exists for this company"}, 409
+        )
+
+
+def api_delete_project(handler, pid):
+    conn = db()
+    row = conn.execute("SELECT * FROM projects WHERE id = ?", (pid,)).fetchone()
+    if not row:
+        conn.close()
+        return json_response(handler, {"error": "not found"}, 404)
+    conn.execute("DELETE FROM projects WHERE id = ?", (pid,))
+    conn.commit()
+    conn.close()
+    return json_response(handler, {"ok": True, "id": pid}, 200)
 
 
 # --- Development handlers --------------------------------------------------
@@ -666,6 +836,37 @@ class Handler(SimpleHTTPRequestHandler):
                     api_update_member(self, mid); return True
                 if method == "DELETE":
                     api_delete_member(self, mid); return True
+            return False
+
+        if path.startswith("/api/ship-to/"):
+            rest = path[len("/api/ship-to/"):]
+            parts = rest.split("/")
+            if len(parts) == 1 and parts[0].isdigit():
+                cid = int(parts[0])
+                if method == "GET":
+                    api_list_ship_to(self, cid); return True
+                if method == "POST":
+                    api_add_ship_to(self, cid); return True
+            elif len(parts) == 2 and parts[0].isdigit():
+                sid = int(parts[0])
+                if parts[1] == "default" and method == "PUT":
+                    api_set_default_ship_to(self, sid); return True
+                if method == "DELETE":
+                    api_delete_ship_to(self, sid); return True
+            return False
+
+        if path.startswith("/api/projects/"):
+            rest = path[len("/api/projects/"):]
+            parts = rest.split("/")
+            if len(parts) == 1 and parts[0].isdigit():
+                cid = int(parts[0])
+                if method == "GET":
+                    api_list_projects(self, cid); return True
+                if method == "POST":
+                    api_add_project(self, cid); return True
+            elif len(parts) == 2 and parts[0].isdigit() and method == "DELETE":
+                pid = int(parts[0])
+                api_delete_project(self, pid); return True
             return False
 
         if path.startswith("/api/companies/"):
