@@ -663,12 +663,15 @@ async function fillDummyDevelopment(ctx) {
       devState.width = (Math.random() * 40 + 10).toFixed(1);
       devState.raisedHeight = "";
       devState.noOfColor = "";
-      devState.pantones = [];
+      devState.pantones.length = 0;
     }
 
     // 4) single image from the pool (a development requires exactly one image)
     const images = await ensureImagePool();
-    devState.images = [];
+    // Clear in place (length = 0) rather than reassigning — the Render closure
+    // captured `devState.images` by reference, so a reassignment would orphan
+    // it and break later add/remove/reattach Save-gating.
+    devState.images.length = 0;
     if (images && images.length) {
       const s = images[Math.floor(Math.random() * images.length)];
       devState.images.push({ id: "img-" + Date.now() + "-0", name: s.name, url: s.url });
