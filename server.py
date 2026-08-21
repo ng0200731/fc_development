@@ -18,6 +18,8 @@ Run:  python server.py   (default port 8088)
 
 import json
 import os
+import re
+import uuid
 import sqlite3
 import datetime
 from http.server import HTTPServer, SimpleHTTPRequestHandler
@@ -26,7 +28,10 @@ from urllib.parse import urlparse
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.path.join(BASE_DIR, "data", "fc.db")
 STATIC_DIR = os.path.join(BASE_DIR, "static")
+UPLOADS_DIR = os.path.join(BASE_DIR, "data", "uploads")
 PORT = int(os.environ.get("PORT", "8088"))
+
+os.makedirs(UPLOADS_DIR, exist_ok=True)
 
 # Directory scanned for sample images used by the Development / Create "Dummy"
 # button and the image pool. Kept outside the project so the repo stays clean.
@@ -187,6 +192,82 @@ def serve_sample_image(handler, rel):
     handler.send_header("Cache-Control", "public, max-age=3600")
     handler.end_headers()
     handler.wfile.write(data)
+
+
+# --- Uploaded files (user-dropped images + documents) -----------------------
+
+EXT_CTYPE = {
+    ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+    ".webp": "image/webp", ".gif": "image/gif",
+    ".pdf": "application/pdf",
+    ".txt": "text/plain; charset=utf-8",
+    ".csv": "text/csv; charset=utf-8",
+    ".doc": "application/msword",
+    ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    ".xls": "application/vnd.ms-excel",
+    ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    ".zip": "application/zip",
+}
+
+
+def safe_upload_path(rel):
+    """Resolve a relative path under UPLOADS_DIR, guarding traversal."""
+    base = os.path.abspath(UPLOADS_DIR)
+    target = os.path.abspath(os.path.join(base, rel))
+    if target != base and not target.startswith(base + os.sep):
+        return None
+    if not os.path.isfile(target):
+        return None
+    return target
+
+
+def serve_upload(handler, rel):
+    path = safe_upload_path(rel)
+    if not path:
+        handler.send_response(404)
+        handler.end_headers()
+        return
+    ext = os.path.splitext(path)[1].lower()
+    ctype = EXT_CTYPE.get(ext, "application/octet-stream")
+    with open(path, "rb") as f:
+        data = f.read()
+    handler.send_response(200)
+    handler.send_header("Content-Type", ctype)
+    handler.send_header("Content-Length", str(len(data)))
+    handler.send_header("Cache-Control", "public, max-age=3600")
+    handler.end_headers()
+    handler.wfile.write(data)
+
+
+def _sanitize_filename(name):
+    """Keep only the basename and strip path separators / parent dirs."""
+    name = os.path.basename(name or "file")
+    name = re.sub(r"[\/\\]", "_", name)
+    name = name.replace("..", "_")
+    return name or "file"
+
+
+def api_upload_file(handler):
+    """Accept multipart/form-data with a single 'file' field, persist it
+    under data/uploads/<uuid>__<sanitized-original>, and return its path."""
+    import cgi
+    ctype = handler.headers.get("Content-Type", "")
+    form = cgi.FieldStorage(
+        fp=handler.rfile,
+        headers=handler.headers,
+        environ={"REQUEST_METHOD": "POST", "CONTENT_TYPE": ctype},
+    )
+    if "file" not in form:
+        return json_response(handler, {"error": "no file field"}, 400)
+    item = form["file"]
+    if not hasattr(item, "filename") or not item.filename:
+        return json_response(handler, {"error": "empty file"}, 400)
+    orig = _sanitize_filename(item.filename)
+    stored = uuid.uuid4().hex + "__" + orig
+    with open(os.path.join(UPLOADS_DIR, stored), "wb") as f:
+        f.write(item.file.read())
+    rel = "uploads/" + stored          # served at GET /uploads/<rest>
+    return json_response(handler, {"path": rel, "name": orig, "url": "/" + rel}, 201)
 
 
 # --- API handlers ---------------------------------------------------------
@@ -526,12 +607,16 @@ class Handler(SimpleHTTPRequestHandler):
             api_list_customers(self); return True
         if path == "/api/sample-images" and method == "GET":
             return self._serve_sample_list()
+        if path == "/api/uploads" and method == "POST":
+            api_upload_file(self); return True
         if path == "/api/developments" and method == "POST":
             api_create_development(self); return True
         if path == "/api/developments" and method == "GET":
             api_list_developments(self); return True
         if path.startswith("/sample-images/"):
             serve_sample_image(self, path[len("/sample-images/"):]); return True
+        if path.startswith("/uploads/"):
+            serve_upload(self, path[len("/uploads/"):]); return True
         if path.startswith("/api/members/"):
             rest = path[len("/api/members/"):]
             if rest.isdigit():

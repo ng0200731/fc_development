@@ -472,7 +472,7 @@ async function ensureImagePool() {
       const data = await fetchJson(API + "/api/sample-images");
       devImagePool = (data.files || []).map((f) => ({
         name: f,
-        url: API + "/sample-images/" + f,
+        url: "/sample-images/" + f,
       }));
     } catch (err) {
       devImagePool = [];
@@ -480,6 +480,15 @@ async function ensureImagePool() {
     return devImagePool;
   })();
   return devImagePoolLoading;
+}
+
+// Resolve a stored image name (as kept in developments.image_names) to a
+// servable URL. Sample images live under /sample-images/<rel>; user-uploaded
+// images are stored with an "uploads/" prefix and served from /uploads/<rest>.
+function imageUrl(name) {
+  if (!name) return "";
+  if (name.startsWith("uploads/")) return API + "/" + name;
+  return API + "/sample-images/" + encodeURI(name);
 }
 
 // Reset the persistent development state (used by Reset button + post-save
@@ -1280,6 +1289,7 @@ async function renderDevelopmentCreate() {
       <div class="thumb" data-id="${img.id}">
         <img src="${img.url}" alt="${escapeHtml(img.name)}" />
         <div class="thumb-name">${escapeHtml(img.name)}</div>
+        ${img.uploading ? '<span class="thumb-badge uploading">uploading…</span>' : ''}
         <button class="icon-btn danger thumb-rm" data-rm="${img.id}" title="Remove">✕</button>
       </div>`).join("");
     imageThumbs.querySelectorAll("[data-rm]").forEach((b) => {
@@ -1309,11 +1319,35 @@ async function renderDevelopmentCreate() {
     if (!isImageFile(file)) return;
     // Only one image is allowed — a new attachment replaces the previous one.
     if (images.length) URL.revokeObjectURL(images[0].url);
-    const url = URL.createObjectURL(file);
+    const localUrl = URL.createObjectURL(file);
+    // Optimistically show the dropped image, then upload it so the development
+    // is linked to a persisted file (served from /uploads/... on reload).
+    const id = "img-" + Date.now() + "-0";
     images.length = 0;
-    images.push({ id: "img-" + Date.now() + "-0", name: file.name, url });
+    images.push({ id, name: file.name, url: localUrl, uploading: true });
     renderImageThumbs();
     updateSaveState();
+    uploadImageFile(file, id);
+  };
+
+  // Upload a dropped/pasted image to /api/uploads and link it to the dev sequence.
+  const uploadImageFile = async (file, id) => {
+    const entry = images.find((x) => x.id === id);
+    if (!entry) return;
+    try {
+      const fd = new FormData();
+      fd.append("file", file);
+      const data = await fetchJson(API + "/api/uploads", { method: "POST", body: fd });
+      // Store the server path so the saved development references the upload.
+      entry.name = data.path;          // e.g. "uploads/<uuid>__<file>"
+      entry.url = data.url;            // e.g. "/uploads/<uuid>__<file>"
+      entry.uploading = false;
+      renderImageThumbs();
+      updateSaveState();
+    } catch (err) {
+      if (entry) entry.uploading = false;
+      openConfirmModal("Upload failed", "Could not upload image: " + err.message, () => {});
+    }
   };
 
   // drag & drop for images
@@ -1541,7 +1575,7 @@ function paintDevelopmentView() {
     const imgs = (r.image_names || []).slice(0, 3);
     const thumbs = imgs.length
       ? `<div class="dev-thumbs">` + imgs.map((n) =>
-          `<img class="dev-thumb-sm" src="${API}/sample-images/${encodeURI(n)}" alt="${escapeHtml(n)}" title="${escapeHtml(n)}" />`).join("") + `</div>`
+          `<img class="dev-thumb-sm" src="${imageUrl(n)}" alt="${escapeHtml(n)}" title="${escapeHtml(n)}" />`).join("") + `</div>`
       : `<span class="muted">—</span>`;
     const docs = (r.doc_names || []).map((n) =>
       `<span class="doc-tag" title="${escapeHtml(n)}">📄 ${escapeHtml(n)}</span>`).join("");
@@ -1728,13 +1762,12 @@ async function editDevelopmentInCreate(id) {
   devState.noOfColor = rec.no_of_color != null ? String(rec.no_of_color) : "";
   devState.pantones = Array.isArray(rec.pantones) ? rec.pantones.map((p) => ({ value: p.value || "", color: p.color || "#000000" })) : [];
 
-  // images — map saved names back to the sample-image pool (real thumbnails)
-  const pool = await ensureImagePool();
-  const findInPool = (name) => pool.find((p) => p.name === name);
-  devState.images = (rec.image_names || []).map((n) => {
-    const hit = findInPool(n);
-    return { id: "eimg-" + n, name: n, url: hit ? hit.url : API + "/sample-images/" + encodeURI(n) };
-  });
+  // images — resolve each saved name to its servable URL (sample or upload).
+  devState.images = (rec.image_names || []).map((n) => ({
+    id: "eimg-" + n,
+    name: n,
+    url: imageUrl(n),
+  }));
 
   // documents — seed from saved doc_names (file content is gone after a reload,
   // so we keep just the name; the user can re-drop a replacement if needed).

@@ -556,6 +556,17 @@ select:focus-visible,
   font-size: 12px;
   background: rgba(255,255,255,.9);
 }
+.thumb-badge {
+  position: absolute;
+  left: 4px; bottom: 28px;
+  font-size: 10px;
+  padding: 1px 5px;
+  border-radius: var(--radius-sm);
+  background: rgba(0,0,0,.62);
+  color: #fff;
+  line-height: 1.4;
+}
+.thumb-badge.uploading { background: rgba(40,100,200,.82); }
 
 /* Development / View image column + details cell */
 .dev-thumbs { display: flex; gap: 6px; flex-wrap: wrap; }
