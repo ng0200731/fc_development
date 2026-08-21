@@ -30,6 +30,13 @@ Any scratch/test `.py` file (ad-hoc debugging scripts) is **temporary**.
 ## Running
 Use `start.bat` to start the server (Windows). The server runs in the background and opens `http://localhost:8088`.
 
+## Don't test unless explicitly asked
+I (Claude) should **focus on coding, not testing**. The user tests the app themselves in their own browser.
+- **Do not** run end-to-end / UI reproduction tests (jsdom, Playwright, browser automation, test scripts) to verify behavior — unless the user explicitly asks me to test.
+- When fixing a bug or implementing a feature, deliver the code change and explain what was changed. The user will verify the result themselves.
+- This applies to **all** projects, not just this one (e.g. Pantone validation, edit-mode gating, etc.).
+- A fix is considered done when the code is written and reasoned through — not when a test passes.
+
 ## Never use Playwright (or other browser automation)
 Do **not** use Playwright (or similar browser-automation tools) to test the app, unless explicitly told to do so.
 - You are not expected to verify the UI by driving a browser.

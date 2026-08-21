@@ -1285,8 +1285,9 @@ async function renderDevelopmentCreate() {
       const n = parseInt(devState.noOfColor, 10);
       if (!n || n < 1) return false;                       // no. of color required (>= 1)
 
-      if (n > 1) {
-        // each color needs a non-trivial Pantone code (length must be > 1)
+      if (n >= 1) {
+        // every shown Pantone row needs a non-trivial code (length must be > 1).
+        // Pantone #1 is shown as soon as no. of color >= 1, so it must be filled.
         for (const p of devState.pantones) {
           const v = (p && (p.value || "") || "").trim().length;
           if (v <= 1) return false;
