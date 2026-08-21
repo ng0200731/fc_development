@@ -379,7 +379,14 @@ function showMemberStep(companyName, emailSuffix, currency, paymentTerm, shipmen
       createBtn.disabled = true;
       createBtn.textContent = "Creating…";
       try {
-        await saveCustomerWithMembers(companyName, emailSuffix, pending);
+        await saveCustomerWithMembers(
+          companyName, emailSuffix, pending,
+          {
+            currency: panel.dataset.cmpCurrency || "",
+            payment_term: panel.dataset.cmpPayment || "",
+            shipment_term: panel.dataset.cmpShipment || "",
+          },
+        );
         createBtn.textContent = "Created ✓";
         openCustomerPostSaveModal();
       } catch (err) {
@@ -444,6 +451,7 @@ let devImagePoolLoading = null;
 // and the mini-tab shows "edit" (red background / black text).
 let devEditMode = false;
 let devEditId = null;
+let devOriginal = null;   // snapshot of the record being edited (for dirty-check)
 
 // Reference to the current Development/Create save-state updater so the
 // module-level image thumbnail renderer can re-evaluate Save gating after a
@@ -2135,6 +2143,9 @@ function paintView() {
     { key: "email", label: "Member Email" },
     { key: "title", label: "Title" },
     { key: "tel", label: "Tel" },
+    { key: "currency", label: "Currency" },
+    { key: "payment_term", label: "Payment Term" },
+    { key: "shipment_term", label: "Shipment Term" },
   ];
 
   const rows = [];
@@ -2145,6 +2156,9 @@ function paintView() {
         companyId: c.id,
         company: c.name,
         emailSuffix: c.email_suffix,
+        currency: c.currency || "",
+        payment_term: c.payment_term || "",
+        shipment_term: c.shipment_term || "",
         memberId: m ? m.id : null,
         name: m ? m.name : "",
         email: m ? m.email_prefix + "@" + c.email_suffix : "",
@@ -2190,9 +2204,12 @@ function paintView() {
         <td>${escapeHtml(r.email)}</td>
         <td>${escapeHtml(r.title)}</td>
         <td>${escapeHtml(r.tel)}</td>
+        <td>${escapeHtml(r.currency)}</td>
+        <td>${escapeHtml(r.payment_term)}</td>
+        <td>${escapeHtml(r.shipment_term)}</td>
         <td class="row-actions">${editBtn}</td>
       </tr>`;
-  }).join("") || `<tr><td colspan="7" class="muted">No matches.</td></tr>`;
+  }).join("") || `<tr><td colspan="10" class="muted">No matches.</td></tr>`;
 
   panel.innerHTML = `
     <div class="view-head">
@@ -2346,6 +2363,33 @@ function openEditModal(companyId) {
         </div>
       </div>
 
+      <div class="dim-row">
+        <div class="field">
+          <label for="ed-currency">Currency</label>
+          <select id="ed-currency">
+            <option value="">— select —</option>
+            ${CURRENCIES.map((c) =>
+              `<option value="${escapeHtml(c)}" ${c === (company.currency || "") ? "selected" : ""}>${escapeHtml(c)}</option>`).join("")}
+          </select>
+        </div>
+        <div class="field">
+          <label for="ed-payment">Payment term</label>
+          <select id="ed-payment">
+            <option value="">— select —</option>
+            ${PAYMENT_TERMS.map((p) =>
+              `<option value="${escapeHtml(p)}" ${p === (company.payment_term || "") ? "selected" : ""}>${escapeHtml(p)}</option>`).join("")}
+          </select>
+        </div>
+        <div class="field">
+          <label for="ed-shipment">Shipment term</label>
+          <select id="ed-shipment">
+            <option value="">— select —</option>
+            ${SHIPMENT_TERMS.map((s) =>
+              `<option value="${escapeHtml(s)}" ${s === (company.shipment_term || "") ? "selected" : ""}>${escapeHtml(s)}</option>`).join("")}
+          </select>
+        </div>
+      </div>
+
       <h4 class="subhead">Members</h4>
       <div class="member-list" id="ed-members"></div>
 
@@ -2434,11 +2478,14 @@ function openEditModal(companyId) {
     const name = overlay.querySelector("#ed-name").value.trim();
     const suf = suffix();
     if (!name || !suf) { alert("Company name and email suffix are required."); return; }
+    const currency = overlay.querySelector("#ed-currency").value || null;
+    const payment_term = overlay.querySelector("#ed-payment").value || null;
+    const shipment_term = overlay.querySelector("#ed-shipment").value || null;
     const saveBtn = overlay.querySelector("#ed-save");
     saveBtn.disabled = true;
     saveBtn.textContent = "Saving…";
     try {
-      await apiPutCompany(companyId, name, suf);
+      await apiPutCompany(companyId, name, suf, { currency, payment_term, shipment_term });
       for (const m of members) {
         if (typeof m.id === "string" && m.id.startsWith("new-")) {
           await apiAddMember(companyId, m);
@@ -2470,11 +2517,17 @@ async function removeMember(memberId) {
 // API calls
 // ---------------------------------------------------------------------------
 
-async function saveCustomerWithMembers(companyName, emailSuffix, members) {
+async function saveCustomerWithMembers(companyName, emailSuffix, members, companyExtra = {}) {
   const cRes = await fetchJson(API + "/api/companies", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ name: companyName, email_suffix: emailSuffix }),
+    body: JSON.stringify({
+      name: companyName,
+      email_suffix: emailSuffix,
+      currency: companyExtra.currency || null,
+      payment_term: companyExtra.payment_term || null,
+      shipment_term: companyExtra.shipment_term || null,
+    }),
   });
   const company = cRes;
   for (const m of members) {
@@ -2487,11 +2540,17 @@ async function saveCustomerWithMembers(companyName, emailSuffix, members) {
   return company;
 }
 
-async function apiPutCompany(companyId, name, emailSuffix) {
+async function apiPutCompany(companyId, name, emailSuffix, extra = {}) {
   return fetchJson(API + `/api/companies/${companyId}`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ name, email_suffix: emailSuffix }),
+    body: JSON.stringify({
+      name,
+      email_suffix: emailSuffix,
+      currency: extra.currency || null,
+      payment_term: extra.payment_term || null,
+      shipment_term: extra.shipment_term || null,
+    }),
   });
 }
 
@@ -2526,7 +2585,13 @@ const rnd = (arr) => arr[Math.floor(Math.random() * arr.length)];
 
 function dummyCompany() {
   const name = rnd(COMP) + " " + rnd(["Inc", "LLC", "Corp", "Group", "Labs"]);
-  return { name, suffix: rnd(SUFFIX) };
+  return {
+    name,
+    suffix: rnd(SUFFIX),
+    currency: rnd(CURRENCIES),
+    payment: rnd(PAYMENT_TERMS),
+    shipment: rnd(SHIPMENT_TERMS),
+  };
 }
 
 function dummyMember() {
@@ -2553,10 +2618,12 @@ function escapeHtml(s) {
 // ---------------------------------------------------------------------------
 
 function exportExcel(rows) {
-  const headers = ["Company Name", "Member Name", "Member Email", "Title", "Tel"];
+  const headers = ["Company Name", "Member Name", "Member Email", "Title", "Tel",
+                   "Currency", "Payment Term", "Shipment Term"];
   const lines = [headers.join(",")];
   rows.forEach((r) => {
-    const cells = [r.company, r.name, r.email, r.title, r.tel].map(csvCell);
+    const cells = [r.company, r.name, r.email, r.title, r.tel,
+                   r.currency, r.payment_term, r.shipment_term].map(csvCell);
     lines.push(cells.join(","));
   });
   const csv = "﻿" + lines.join("\r\n"); // BOM for Excel UTF-8
