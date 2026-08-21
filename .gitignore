@@ -7,3 +7,6 @@ gen_out.txt
 out.txt
 check_*.py
 test_*.py
+tmp_*.mjs
+tmp_*.js
+tmp_*.py

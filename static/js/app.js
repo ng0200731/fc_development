@@ -688,8 +688,7 @@ async function fillDummyDevelopment(ctx) {
 }
 
 // Shared thumbnail renderer for the Development / Create image dropzone.
-// After removing an image it re-evaluates Save gating (via devSaveStateFn) and,
-// if the user just cleared the last image, prompts them to add/keep one.
+// After removing an image it re-evaluates Save gating (via devSaveStateFn).
 function renderDevImageThumbs() {
   const imageThumbs = panel.querySelector("#dev-image-thumbs");
   if (!imageThumbs) return;
@@ -717,15 +716,6 @@ function renderDevImageThumbs() {
               devState.images.splice(j, 1);
               if (typeof devSaveStateFn === "function") devSaveStateFn();
               renderDevImageThumbs();
-              // A development needs at least one image — if they removed the
-              // last one, prompt so nothing silently disappears with no feedback.
-              if (devState.images.length === 0) {
-                openConfirmModal(
-                  "No image attached",
-                  "A development needs at least one image. Add or paste an image, or generate one with the Dummy button.",
-                  () => {}
-                );
-              }
             }
           }
         );
@@ -803,6 +793,7 @@ async function renderDevelopmentCreate() {
     <h2>${devEditMode ? "Development / Edit" : "Development / Create"}</h2>
 
     <div class="actions create-actions">
+      ${devEditMode ? '<button class="btn ghost" id="dev-back" type="button">← Back</button>' : ''}
       <button class="btn ghost" id="dev-dummy" type="button">Dummy</button>
       <button class="btn ghost" id="dev-reset" type="button">Reset</button>
       <button class="btn primary" id="dev-save" type="button" disabled>${devEditMode ? "Update" : "Save"}</button>
@@ -1356,15 +1347,6 @@ async function renderDevelopmentCreate() {
                 images.splice(j, 1);
                 renderImageThumbs();
                 updateSaveState();   // re-gate Save now that an image is gone
-                // A development needs at least one image — if they removed the
-                // last one, prompt so nothing silently disappears with no feedback.
-                if (images.length === 0) {
-                  openConfirmModal(
-                    "No image attached",
-                    "A development needs at least one image. Add or paste an image, or generate one with the Dummy button.",
-                    () => {}
-                  );
-                }
               }
             }
           );
@@ -1521,6 +1503,18 @@ async function renderDevelopmentCreate() {
     searchEl, hiddenEl, memberEl, productEl, itemEl, listEl, companies,
     selectCompany, loadMembers, updateNextState, updateSaveState, updateUnlock,
   }));
+
+  // In edit mode, "Back" discards the edit and returns to Development / View
+  // (no save). Only shown when devEditMode is on.
+  const backBtn = panel.querySelector("#dev-back");
+  if (backBtn) {
+    backBtn.addEventListener("click", () => {
+      devEditMode = false;
+      devEditId = null;
+      resetDevState();
+      openTab("development-view");
+    });
+  }
 
   resetBtn.addEventListener("click", () => {
     openConfirmModal(
