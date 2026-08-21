@@ -1010,8 +1010,8 @@ async function renderDevelopmentCreate() {
   const bindDimInputs = () => {
     const h = part3Body.querySelector("#dev-height");
     const w = part3Body.querySelector("#dev-width");
-    if (h) { h.value = devState.height; h.addEventListener("input", () => { devState.height = h.value; }); }
-    if (w) { w.value = devState.width;  w.addEventListener("input",  () => { devState.width  = w.value; }); }
+    if (h) { h.value = devState.height; h.addEventListener("input", () => { devState.height = h.value; updateSaveState(); }); }
+    if (w) { w.value = devState.width;  w.addEventListener("input",  () => { devState.width  = w.value; updateSaveState(); }); }
   };
 
   const renderRaisedSiliconLabel = () => {
@@ -1042,13 +1042,14 @@ async function renderDevelopmentCreate() {
     bindDimInputs();
     const rh = part3Body.querySelector("#dev-raised-height");
     const nc = part3Body.querySelector("#dev-no-of-color");
-    if (rh) { rh.value = devState.raisedHeight; rh.addEventListener("input", () => { devState.raisedHeight = rh.value; }); }
+    if (rh) { rh.value = devState.raisedHeight; rh.addEventListener("input", () => { devState.raisedHeight = rh.value; updateSaveState(); }); }
     if (nc) {
       nc.value = devState.noOfColor;
       // update only the pantone rows (not the whole body) to keep focus
       nc.addEventListener("input", () => {
         devState.noOfColor = nc.value;
         renderPantoneRows();
+        updateSaveState();
       });
     }
     renderPantoneRows();
@@ -1133,6 +1134,7 @@ async function renderDevelopmentCreate() {
         if (!devState.pantones[i]) return;
         devState.pantones[i].value = inp.value;
         showPantoneMatch(i, inp.value);
+        updateSaveState();
       });
     });
 
@@ -1265,11 +1267,41 @@ async function renderDevelopmentCreate() {
     updateNextState();
   });
 
+  // Part 3 (Details) validation: every visible Details field must be filled
+  // before Save/Update is allowed.
+  //   • Height + Width are always required.
+  //   • For "raised silicon label": Raised height + No. of color are required.
+  //   • When No. of color > 1, every Pantone code must be filled and be
+  //     meaningful — its length must be greater than 1 (reject single-char stubs).
+  const part3Valid = () => {
+    const h = (devState.height || "").trim();
+    const w = (devState.width || "").trim();
+    if (h.length === 0 || w.length === 0) return false;   // height + width always required
+
+    if (devState.product === "raised silicon label") {
+      const rh = (devState.raisedHeight || "").trim();
+      if (rh.length === 0) return false;                   // raised height required
+
+      const n = parseInt(devState.noOfColor, 10);
+      if (!n || n < 1) return false;                       // no. of color required (>= 1)
+
+      if (n > 1) {
+        // each color needs a non-trivial Pantone code (length must be > 1)
+        for (const p of devState.pantones) {
+          const v = (p && (p.value || "") || "").trim().length;
+          if (v <= 1) return false;
+        }
+      }
+    }
+    return true;
+  };
+
   // Save gating: every required field filled AND at least one image present.
   const updateSaveState = () => {
     const allFilled = hiddenEl.value !== "" && memberEl.value !== "" &&
                       devState.item && devState.product &&
-                      devState.images.length >= 1;
+                      devState.images.length >= 1 &&
+                      part3Valid();
     saveBtn.disabled = !allFilled;
     saveBtn.classList.toggle("active", allFilled);
   };
