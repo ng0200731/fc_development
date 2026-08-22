@@ -261,24 +261,14 @@ function showMemberStep(companyName, emailSuffix, currency, paymentTerm, shipmen
   memberTab.classList.remove("locked");
   memberTab.disabled = false;
 
-  // the ship-to + project tabs are unlocked once we have a created company id
+  // the project tab is freely accessible once the company exists; the ship-to
+  // tab is also unlocked, but a modal only appears after a ship-to save.
   const unlockLaterTabs = () => {
     ["shipto", "project"].forEach((step) => {
       const tab = subtabs.querySelector(`[data-step="${step}"]`);
       if (tab) { tab.classList.remove("locked"); tab.disabled = false; }
     });
   };
-
-  subtabs.querySelectorAll(".subtab").forEach((t) => {
-    t.classList.toggle("active", t.dataset.step === "member");
-    t.onclick = () => {
-      subtabs.querySelectorAll(".subtab").forEach((x) => x.classList.toggle("active", x === t));
-      ["company", "member", "shipto", "project"].forEach((step) => {
-        const sec = panel.querySelector("#step-" + step);
-        if (sec) sec.style.display = t.dataset.step === step ? "" : "none";
-      });
-    };
-  });
 
   // Store company info on the panel element
   panel.dataset.cmpName = companyName;
@@ -324,7 +314,7 @@ function showMemberStep(companyName, emailSuffix, currency, paymentTerm, shipmen
       </div>
       <div class="actions create-final">
         <button class="btn ghost" id="cmp-reset" type="button">Reset</button>
-        <button class="btn primary" id="cmp-create" type="button" disabled>Create customer</button>
+        <button class="btn primary" id="mbr-next" type="button" disabled>Next</button>
       </div>
     `;
     // Insert after the company subpanel
@@ -335,7 +325,7 @@ function showMemberStep(companyName, emailSuffix, currency, paymentTerm, shipmen
     const titleEl  = memberSec.querySelector("#mbr-title");
     const telEl    = memberSec.querySelector("#mbr-tel");
     const addBtn   = memberSec.querySelector("#mbr-add");
-    const createBtn = memberSec.querySelector("#cmp-create");
+    const nextBtn  = memberSec.querySelector("#mbr-next");
     const listEl   = memberSec.querySelector("#mbr-list");
 
     // pending members for this company
@@ -370,7 +360,8 @@ function showMemberStep(companyName, emailSuffix, currency, paymentTerm, shipmen
       updateCreateBtn();
     };
 
-    const updateCreateBtn = () => { createBtn.disabled = pending.length === 0; };
+    // Member step: at least one member must be added before leaving the step.
+    const updateCreateBtn = () => { nextBtn.disabled = pending.length === 0; };
 
     memberSec.querySelector("#mbr-dummy").addEventListener("click", () => {
       const d = dummyMember();
@@ -397,10 +388,10 @@ function showMemberStep(companyName, emailSuffix, currency, paymentTerm, shipmen
 
     memberSec.querySelector("#cmp-reset").addEventListener("click", renderCustomerCreate);
 
-    createBtn.addEventListener("click", async () => {
-      if (createBtn.disabled) return;
-      createBtn.disabled = true;
-      createBtn.textContent = "Creating…";
+    nextBtn.addEventListener("click", async () => {
+      if (nextBtn.disabled) return;
+      nextBtn.disabled = true;
+      nextBtn.textContent = "Creating…";
       try {
         const company = await saveCustomerWithMembers(
           companyName, emailSuffix, pending,
@@ -411,14 +402,17 @@ function showMemberStep(companyName, emailSuffix, currency, paymentTerm, shipmen
           },
         );
         panel.dataset.cmpId = String(company.id);
+        subtabs.querySelector('[data-step="member"]').classList.add("done");
         unlockLaterTabs();
         showShipToStep(company.id, companyName, emailSuffix);
         showProjectStep(company.id, companyName, emailSuffix);
-        createBtn.textContent = "Created ✓";
-        openCustomerPostSaveModal();
+        nextBtn.textContent = "Created ✓";
+        // After creating the company, jump straight to the Ship to tab
+        // (no post-save modal). The modal appears once a ship-to address is saved.
+        switchCreateTab("shipto");
       } catch (err) {
-        createBtn.textContent = "Create failed — retry";
-        createBtn.disabled = false;
+        nextBtn.textContent = "Create failed — retry";
+        nextBtn.disabled = false;
         alert("Create failed: " + err.message);
       }
     });
@@ -440,6 +434,32 @@ function validateMemberStep() {
              sec.querySelector("#mbr-tel").value.trim();
   const addBtn = sec.querySelector("#mbr-add");
   if (addBtn) addBtn.disabled = !ok;
+}
+
+// Switch the Customer / Create subtab (company/member/shipto/project) and
+// show only the matching panel. Shared by create-finish + the ship-to save flow.
+function switchCreateTab(step) {
+  const subtabs = panel.querySelector("#createSubtabs");
+  if (!subtabs) return;
+  subtabs.querySelectorAll(".subtab").forEach((t) => {
+    t.classList.toggle("active", t.dataset.step === step);
+    t.onclick = () => {
+      // Only allow jumping to a step whose prerequisites are satisfied.
+      // Company -> always; Member -> company filled; Ship to / Project -> company created.
+      const target = t.dataset.step;
+      if (target === "member" && !panel.dataset.cmpName) return;
+      if ((target === "shipto" || target === "project") && !panel.dataset.cmpId) return;
+      subtabs.querySelectorAll(".subtab").forEach((x) => x.classList.toggle("active", x === t));
+      ["company", "member", "shipto", "project"].forEach((s) => {
+        const sec = panel.querySelector("#step-" + s);
+        if (sec) sec.style.display = t.dataset.step === s ? "" : "none";
+      });
+    };
+  });
+  ["company", "member", "shipto", "project"].forEach((s) => {
+    const sec = panel.querySelector("#step-" + s);
+    if (sec) sec.style.display = step === s ? "" : "none";
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -467,8 +487,19 @@ function showShipToStep(companyId, companyName, emailSuffix) {
         <button class="btn" id="ship-add" type="button" disabled>Add address</button>
       </div>
     </div>
+    <div class="actions create-final">
+      <button class="btn ghost" id="ship-back" type="button">Back</button>
+      <button class="btn primary" id="ship-next" type="button">Next</button>
+    </div>
   `;
   panel.querySelector("#step-member").after(sec);
+
+  sec.querySelector("#ship-back").addEventListener("click", () => {
+    switchCreateTab("member");
+  });
+  sec.querySelector("#ship-next").addEventListener("click", () => {
+    switchCreateTab("project");
+  });
 
   const listEl = sec.querySelector("#ship-list");
   const addrEl = sec.querySelector("#ship-addr");
@@ -560,8 +591,44 @@ function showProjectStep(companyId, companyName, emailSuffix) {
         <button class="btn" id="proj-add" type="button" disabled>Add project</button>
       </div>
     </div>
+    <div class="actions create-final">
+      <button class="btn ghost" id="proj-back" type="button">Back</button>
+      <button class="btn primary" id="proj-done" type="button">Created ✓</button>
+    </div>
   `;
   panel.querySelector("#step-shipto").after(sec);
+
+  sec.querySelector("#proj-back").addEventListener("click", () => {
+    switchCreateTab("shipto");
+  });
+  sec.querySelector("#proj-done").addEventListener("click", () => {
+    openCustomerPostSaveModal();
+  });
+
+  // Project step is optional — but the modal helper needs to exist. Reuse the
+  // post-create modal (the only one removed earlier) by re-adding it here.
+  function openCustomerPostSaveModal() {
+    const overlay = document.createElement("div");
+    overlay.className = "modal-overlay";
+    overlay.innerHTML = `
+      <div class="modal" role="dialog" aria-modal="true" style="max-width:440px">
+        <h3>Customer created</h3>
+        <p class="muted">What would you like to do next?</p>
+        <div class="actions modal-actions">
+          <button class="btn ghost" id="cps-keep" type="button">Keep creating new customer</button>
+          <button class="btn primary" id="cps-view" type="button">Go to Customer / View</button>
+        </div>
+      </div>`;
+    document.body.appendChild(overlay);
+    overlay.querySelector("#cps-view").addEventListener("click", () => {
+      overlay.remove();
+      openTab("customer-view");
+    });
+    overlay.querySelector("#cps-keep").addEventListener("click", () => {
+      overlay.remove();
+      renderCustomerCreate();
+    });
+  }
 
   const listEl = sec.querySelector("#proj-list");
   const nameEl = sec.querySelector("#proj-name");
@@ -810,31 +877,6 @@ function openConfirmModal(title, message, onConfirm) {
   });
 }
 
-// Centered post-create modal for Customer / Create: go to Customer / View,
-// or stay and create another customer.
-function openCustomerPostSaveModal() {
-  const overlay = document.createElement("div");
-  overlay.className = "modal-overlay";
-  overlay.innerHTML = `
-    <div class="modal" role="dialog" aria-modal="true" style="max-width:440px">
-      <h3>Customer created</h3>
-      <p class="muted">What would you like to do next?</p>
-      <div class="actions modal-actions">
-        <button class="btn ghost" id="cps-keep" type="button">Keep creating new customer</button>
-        <button class="btn primary" id="cps-view" type="button">Go to Customer / View</button>
-      </div>
-    </div>`;
-  document.body.appendChild(overlay);
-  overlay.querySelector("#cps-view").addEventListener("click", () => {
-    overlay.remove();
-    openTab("customer-view");
-  });
-  overlay.querySelector("#cps-keep").addEventListener("click", () => {
-    overlay.remove();
-    renderCustomerCreate();
-  });
-}
-
 // Centered post-save modal: continue with the same customer, or go to View.
 function openPostSaveModal() {
   const overlay = document.createElement("div");
@@ -1046,6 +1088,7 @@ async function renderDevelopmentCreate() {
       ${devEditMode ? '<button class="btn ghost" id="dev-back" type="button">← Back</button>' : ''}
       <button class="btn ghost" id="dev-dummy" type="button">Dummy</button>
       <button class="btn primary" id="dev-save" type="button" disabled>${devEditMode ? "Update" : "Save"}</button>
+      ${devEditMode ? '<button class="btn primary" id="dev-reset" type="button">Reset</button>' : ''}
     </div>
 
     <div class="dev-2col">
@@ -1126,6 +1169,7 @@ async function renderDevelopmentCreate() {
   const itemEl = panel.querySelector("#dev-item");
   const saveBtn = panel.querySelector("#dev-save");
   const dummyBtn = panel.querySelector("#dev-dummy");
+  const resetBtn = panel.querySelector("#dev-reset");
 
   // --- Part 4 unlock when part 1 AND part 2 are complete ---
   const part3Body = panel.querySelector("#dev-part3-body");
@@ -1578,6 +1622,12 @@ async function renderDevelopmentCreate() {
     const canSave = devEditMode ? (allFilled && isDirty()) : allFilled;
     saveBtn.disabled = !canSave;
     saveBtn.classList.toggle("active", canSave);
+    // "Reset" only makes sense once something changed from the original record.
+    if (resetBtn) {
+      const dirty = devEditMode && isDirty();
+      resetBtn.disabled = !dirty;
+      resetBtn.classList.toggle("active", dirty);
+    }
   };
 
   // initial unlock check (covers restored state on tab switch)
@@ -1796,6 +1846,30 @@ async function renderDevelopmentCreate() {
       devOriginal = null;
       resetDevState();
       openTab("development-view");
+    });
+  }
+
+  // In edit mode, "Reset" restores every field to the originally-loaded record
+  // (the snapshot kept in devOriginal), discarding any edits made this session.
+  // `resetBtn` is already declared earlier in this function scope, so reuse it.
+  if (resetBtn) {
+    resetBtn.addEventListener("click", () => {
+      if (!devOriginal) return;
+      devState.companyId = devOriginal.company_id != null ? String(devOriginal.company_id) : "";
+      devState.companyName = devOriginal.company_name || "";
+      devState.memberId = devOriginal.member_id != null ? String(devOriginal.member_id) : "";
+      devState.memberName = devOriginal.member_name || "";
+      devState.item = devOriginal.item_name || "";
+      devState.product = devOriginal.product_type || "";
+      devState.height = devOriginal.height != null ? String(devOriginal.height) : "";
+      devState.width = devOriginal.width != null ? String(devOriginal.width) : "";
+      devState.raisedHeight = devOriginal.raised_height != null ? String(devOriginal.raised_height) : "";
+      devState.noOfColor = devOriginal.no_of_color != null ? String(devOriginal.no_of_color) : "";
+      devState.pantones = Array.isArray(devOriginal.pantones) ? devOriginal.pantones.map((p) => ({ value: p.value || "", color: p.color || "#000000" })) : [];
+      devState.images = (devOriginal.image_names || []).map((n) => ({ id: "eimg-" + n, name: n, url: assetUrl(n) }));
+      devState.docs = (devOriginal.doc_names || []).map((name, i) => ({ id: "edoc-" + devEditId + "-" + i, name, file: null }));
+      // re-render so inputs + thumbnails reflect the restored original state
+      renderDevelopmentCreate();
     });
   }
 
@@ -2871,11 +2945,12 @@ function escapeHtml(s) {
 
 function exportExcel(rows) {
   const headers = ["Company Name", "Member Name", "Member Email", "Title", "Tel",
-                   "Currency", "Payment Term", "Shipment Term"];
+                   "Currency", "Payment Term", "Shipment Term", "Ship To", "Projects"];
   const lines = [headers.join(",")];
   rows.forEach((r) => {
     const cells = [r.company, r.name, r.email, r.title, r.tel,
-                   r.currency, r.payment_term, r.shipment_term].map(csvCell);
+                   r.currency, r.payment_term, r.shipment_term,
+                   r.shipTo, r.projects].map(csvCell);
     lines.push(cells.join(","));
   });
   const csv = "﻿" + lines.join("\r\n"); // BOM for Excel UTF-8

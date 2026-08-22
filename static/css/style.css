@@ -835,3 +835,41 @@ select:focus-visible,
     scroll-behavior: auto !important;
   }
 }
+
+/* ---- Customer / Create — Ship to + Project steps ---- */
+.member-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  margin-bottom: 6px;
+  background: var(--surface);
+}
+.member-row.default-row { border-color: var(--accent-border); background: var(--accent-weak); }
+.member-row .muted { display: flex; align-items: center; gap: 6px; }
+.ship-list, .proj-list { margin-bottom: 16px; }
+.badge {
+  display: inline-block;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 1px 7px;
+  border-radius: 999px;
+  line-height: 1.6;
+}
+.default-badge { background: var(--accent); color: #fff; }
+.btn.tiny {
+  font-size: 12px;
+  padding: 3px 9px;
+  border-radius: 7px;
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  color: var(--text-soft);
+  cursor: pointer;
+}
+.btn.tiny:hover { border-color: var(--accent); color: var(--accent); }
+#ship-addr { width: 100%; resize: vertical; font: inherit; padding: 8px 10px;
+  border: 1px solid var(--border-strong); border-radius: 8px; }
+#ship-addr:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--ring); }
