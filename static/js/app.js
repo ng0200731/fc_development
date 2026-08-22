@@ -940,7 +940,7 @@ function openPostSaveModal() {
 // Fill every field with random data + 4 random images. `ctx` carries the
 // element references + helpers from renderDevelopmentCreate().
 async function fillDummyDevelopment(ctx) {
-  const { searchEl, hiddenEl, memberEl, productEl, itemEl, companies,
+  const { searchEl, hiddenEl, memberEl, projectEl, productEl, itemEl, companies,
           selectCompany, loadMembers, updateNextState, updateSaveState, updateUnlock } = ctx;
   try {
     // 1) random company
@@ -1925,7 +1925,7 @@ async function renderDevelopmentCreate() {
   // ===== Action buttons: Dummy / Save =====
 
   dummyBtn.addEventListener("click", () => fillDummyDevelopment({
-    searchEl, hiddenEl, memberEl, productEl, itemEl, listEl, companies,
+    searchEl, hiddenEl, memberEl, projectEl, productEl, itemEl, listEl, companies,
     selectCompany, loadMembers, updateNextState, updateSaveState, updateUnlock,
   }));
 
