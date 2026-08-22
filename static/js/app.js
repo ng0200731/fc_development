@@ -69,17 +69,14 @@ sidebar.querySelectorAll(".group-toggle").forEach((btn) => {
 sidebar.querySelectorAll(".nav-item").forEach((item) => {
   item.addEventListener("click", (e) => {
     e.preventDefault();
-    // Opening Development / Create from the sidebar always starts a FRESH,
-    // blank create — never pre-filled from a prior edit or a half-typed
-    // create. The edit session lives on its own "development-edit" mini-tab
-    // and is left untouched here.
+    // Opening Development / Create from the sidebar starts a FRESH, blank
+    // create on the Create tab. The red "edit" mini-tab is a SEPARATE tab
+    // that keeps its own session (devEditMode / devEditState) untouched — so
+    // the red tab stays exactly as it was, and Create is a brand-new draft.
     if (item.dataset.target === "development-create") {
-      devEditMode = false;
-      devEditId = null;
-      devOriginal = null;
-      resetDevState();
+      resetDevState();   // clear only the Create draft, leave the edit alone
     }
-    // Only the Customer edit session (which has its own tab) is cleared here.
+    // Only the Customer edit session (its own tab) is cleared here.
     custEditMode = false;
     custEditId = null;
     custOriginal = null;
@@ -103,6 +100,14 @@ function closeTab(target) {
   openTabs.delete(target);
   if (activeTarget === target) {
     activeTarget = openTabs.size ? [...openTabs][openTabs.size - 1] : null;
+  }
+  // Closing the red "edit" mini-tab ends the edit session; the Create tab is
+  // independent and is NOT affected. (Closing Create does not touch the edit.)
+  if (target === "development-edit") {
+    devEditMode = false;
+    devEditId = null;
+    devOriginal = null;
+    Object.assign(devEditState, blankDevState());
   }
   renderTabs();
   renderPanel();
@@ -161,8 +166,12 @@ async function renderPanel() {
     await renderCustomerEdit();
     return;
   }
-  if (activeTarget === "development-create" || activeTarget === "development-edit") {
+  if (activeTarget === "development-create") {
     await renderDevelopmentCreate();
+    return;
+  }
+  if (activeTarget === "development-edit") {
+    await renderDevelopmentEdit();
     return;
   }
   if (activeTarget === "development-view") {
@@ -1135,20 +1144,20 @@ function findPantoneMatches(query, limit = 8) {
 }
 
 async function renderDevelopmentCreate() {
-  // Point the shared `devState` binding at whichever draft is active so every
-  // downstream read/write (inputs, dummy, save, image/doc stores) hits the
-  // correct tab's own state. The Create tab uses devCreateState; the Edit tab
-  // uses devEditState — they never share or clobber each other.
-  devState = activeTarget === "development-edit" ? devEditState : devCreateState;
+  // The Create tab reads/writes ONLY its own state object (devCreateState).
+  // The Edit tab is a completely separate function (renderDevelopmentEdit)
+  // and shares no code or state with this one.
+  // Point the module-level alias at devCreateState so shared helpers
+  // (buildDevelopmentPayload, fillDummyDevelopment, renderDevImageThumbs)
+  // operate on the correct state.
+  devState = devCreateState;
 
   panel.innerHTML = `
-    <h2>${devEditMode ? "Development / Edit" : "Development / Create"}</h2>
+    <h2>Development / Create</h2>
 
     <div class="actions create-actions">
-      ${devEditMode ? '<button class="btn ghost" id="dev-back" type="button">← Back</button>' : ''}
       <button class="btn ghost" id="dev-dummy" type="button">Dummy</button>
-      <button class="btn primary" id="dev-save" type="button" disabled>${devEditMode ? "Update" : "Save"}</button>
-      ${devEditMode ? '<button class="btn primary dev-reset-spacer" id="dev-reset" type="button">Reset</button>' : ''}
+      <button class="btn primary" id="dev-save" type="button" disabled>Save</button>
     </div>
 
     <div class="dev-2col">
@@ -1239,7 +1248,6 @@ async function renderDevelopmentCreate() {
   const itemEl = panel.querySelector("#dev-item");
   const saveBtn = panel.querySelector("#dev-save");
   const dummyBtn = panel.querySelector("#dev-dummy");
-  const resetBtn = panel.querySelector("#dev-reset");
 
   // --- Part 4 unlock when part 1 AND part 2 are complete ---
   const part3Body = panel.querySelector("#dev-part3-body");
@@ -1273,31 +1281,6 @@ async function renderDevelopmentCreate() {
   if (devState.product) productEl.value = devState.product;
   // restore item name
   if (devState.item) itemEl.value = devState.item;
-
-  // In edit mode, the record is already fully valid: don't blank the company/
-  // member dropdowns while the async member load is still resolving. Seed the
-  // company hidden field + search box AND the member dropdown synchronously so
-  // Part 2 (product) stays enabled and the Save/Update button unlocks without
-  // waiting on the network. Without this, updateNextState()/updateSaveState()
-  // see an empty company and keep Save disabled — the edit appears to do nothing.
-  if (devEditMode && devState.companyId && devState.memberId) {
-    hiddenEl.value = devState.companyId;
-    searchEl.value = devState.companyName;
-    memberEl.innerHTML = `<option value="${devState.memberId}">${escapeHtml(devState.memberName || devState.memberId)}</option>`;
-    memberEl.value = devState.memberId;
-    memberEl.disabled = false;
-    // seed the project dropdown synchronously so a saved project restores
-    // without waiting for the async company load to finish.
-    if (devState.projectId) {
-      projectEl.innerHTML = `<option value="${devState.projectId}">${escapeHtml(devState.projectName || devState.projectId)}</option>`;
-      projectEl.value = devState.projectId;
-      projectEl.disabled = false;
-    }
-    // Load members + projects from the Customer database so the project list is
-    // fully synced with Customer / View (and the saved project is restored only
-    // if it still exists there). Don't reset the member if it's still present.
-    loadMembers(Number(devState.companyId), devState.memberId, devState.projectId);
-  }
 
   // refresh = re-fetch latest companies + members from the customer database
   panel.querySelector("#dev-refresh").addEventListener("click", async (e) => {
@@ -1745,15 +1728,9 @@ async function renderDevelopmentCreate() {
     const allFilled = hiddenEl.value !== "" && memberEl.value !== "" &&
                       devState.item && devState.product &&
                       part3Valid() && hasImage;
-    const canSave = devEditMode ? (allFilled && isDirty()) : allFilled;
+    const canSave = allFilled;
     saveBtn.disabled = !canSave;
     saveBtn.classList.toggle("active", canSave);
-    // "Reset" only makes sense once something changed from the original record.
-    if (resetBtn) {
-      const dirty = devEditMode && isDirty();
-      resetBtn.disabled = !dirty;
-      resetBtn.classList.toggle("active", dirty);
-    }
   };
 
   // initial unlock check (covers restored state on tab switch)
@@ -1965,25 +1942,806 @@ async function renderDevelopmentCreate() {
     selectCompany, loadMembers, updateNextState, updateSaveState, updateUnlock,
   }));
 
-  // In edit mode, "Back" discards the edit and returns to Development / View
-  // (no save). Only shown when devEditMode is on. The edit lives on the
-  // "development-edit" mini-tab; closing it drops back to the View list. Only
-  // the Edit draft is cleared (the Create draft is left intact on its tab).
+  saveBtn.addEventListener("click", async () => {
+    if (saveBtn.disabled) return;
+    const payload = buildDevelopmentPayload();
+    if (!payload) {
+      openConfirmModal("Cannot save", "Please fill company, member, item, and product type.", () => {});
+      return;
+    }
+    saveBtn.disabled = true;
+    saveBtn.textContent = "Saving…";
+    try {
+      await fetchJson(API + "/api/developments", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      saveBtn.textContent = "Saved ✓";
+      openPostSaveModal();
+    } catch (err) {
+      saveBtn.textContent = "Save";
+      saveBtn.disabled = false;
+      openConfirmModal("Save failed", "Could not save development: " + err.message, () => {});
+    }
+  });
+
+}
+
+// ---------------------------------------------------------------------------
+// Development / Edit  — a SEPARATE screen from Create (own function + state).
+//   Loads an existing record (pre-filled), shows a red "edit" mini-tab, and
+//   PUTs changes back via Update. Shares NO code with renderDevelopmentCreate.
+// ---------------------------------------------------------------------------
+
+async function renderDevelopmentEdit() {
+  // The Edit tab reads/writes ONLY its own state object. The Create tab uses
+  // devCreateState and is never touched here.
+  // Point the module-level alias at devEditState so shared helpers
+  // (buildDevelopmentPayload, fillDummyDevelopment, renderDevImageThumbs)
+  // operate on the correct state.
+  devState = devEditState;
+
+  panel.innerHTML = `
+    <h2>Development / Edit</h2>
+
+    <div class="actions create-actions">
+      <button class="btn ghost" id="dev-back" type="button">← Back</button>
+      <button class="btn ghost" id="dev-dummy" type="button">Dummy</button>
+      <button class="btn primary" id="dev-save" type="button" disabled>Update</button>
+      <button class="btn primary dev-reset-spacer" id="dev-reset" type="button" disabled>Reset</button>
+    </div>
+
+    <div class="dev-2col">
+      <div class="dev-part" id="dev-main">
+        <h3 class="subhead part-head">
+          1 · Company &amp; Member
+          <button class="icon-btn" id="dev-refresh" type="button" title="Refresh customer database">⟳</button>
+        </h3>
+
+        <div class="field-stack">
+          <div class="field" id="dev-company-field">
+            <label for="dev-company">Company</label>
+            <div class="combobox" id="dev-company-wrap">
+              <input id="dev-company" type="text" autocomplete="off"
+                     placeholder="Type ≥ 3 letters to search…" disabled />
+              <input type="hidden" id="dev-company-id" />
+              <ul class="combobox-list" id="dev-company-list" role="listbox" hidden></ul>
+            </div>
+          </div>
+
+          <div class="field" id="dev-member-field">
+            <label for="dev-member">Member</label>
+            <select id="dev-member" disabled>
+              <option value="">— select a company first —</option>
+            </select>
+          </div>
+
+          <div class="field" id="dev-project-field">
+            <label for="dev-project">Project <span class="hint">(optional)</span></label>
+            <select id="dev-project" disabled>
+              <option value="">No project</option>
+            </select>
+          </div>
+        </div>
+
+        <h3 class="subhead">2 · Item &amp; Product Type</h3>
+        <div class="dim-row">
+          <div class="field">
+            <label for="dev-item">Item name</label>
+            <input id="dev-item" type="text" placeholder="e.g. Spring Collection Patch" autocomplete="off" />
+          </div>
+          <div class="field">
+            <label for="dev-product">Product type</label>
+            <select id="dev-product" disabled>
+              <option value="">— select —</option>
+              ${PRODUCT_TYPES.map((p) => `<option value="${escapeHtml(p)}">${escapeHtml(p)}</option>`).join("")}
+            </select>
+          </div>
+        </div>
+
+        <h3 class="subhead">3 · Details</h3>
+        <div id="dev-part3-body"></div>
+      </div>
+
+      <div class="dev-part" id="dev-part4">
+        <h3 class="subhead">4 · Image <span class="req-mark">required</span></h3>
+
+        <div class="dropzone" id="dev-image-drop" tabindex="0">
+          <div class="drop-region">
+            <span class="drop-icon">🖼️</span>
+            <p class="muted small drop-hint">Drop or paste an image here — required to save.<br/>A new image replaces the current one.</p>
+          </div>
+          <div class="thumb-grid" id="dev-image-thumbs"></div>
+        </div>
+
+        <h4 class="subhead">Documents <span class="req-mark optional">optional</span></h4>
+        <div class="dropzone" id="dev-doc-drop" tabindex="0">
+          <div class="drop-region">
+            <span class="drop-icon">📁</span>
+            <p class="muted small drop-hint">Drag &amp; drop multiple files here.</p>
+          </div>
+          <div class="file-list" id="dev-doc-list"></div>
+        </div>
+      </div>
+    </div>
+  `;
+
+  const part1 = panel.querySelector("#dev-main");
+  const part2 = panel.querySelector("#dev-product");
+  const searchEl = panel.querySelector("#dev-company");
+  const hiddenEl = panel.querySelector("#dev-company-id");
+  const listEl   = panel.querySelector("#dev-company-list");
+  const memberEl = panel.querySelector("#dev-member");
+  const projectEl = panel.querySelector("#dev-project");
+  const productEl = panel.querySelector("#dev-product");
+  const itemEl = panel.querySelector("#dev-item");
+  const saveBtn = panel.querySelector("#dev-save");
+  const dummyBtn = panel.querySelector("#dev-dummy");
+  const resetBtn = panel.querySelector("#dev-reset");
+
+  const part3Body = panel.querySelector("#dev-part3-body");
+  const part3 = part3Body;
+  const part4 = panel.querySelector("#dev-part4");
+
+  const updateUnlock = () => {
+    part4.classList.remove("locked");
+    renderPart3();
+  };
+
+  let companies = [];
+  try {
+    if (devCompaniesCache) {
+      companies = devCompaniesCache;
+    } else {
+      companies = await fetchJson(API + "/api/companies");
+      devCompaniesCache = companies;
+    }
+  } catch (err) {
+    searchEl.placeholder = "Failed to load companies: " + err.message;
+    searchEl.disabled = true;
+    return;
+  }
+  searchEl.disabled = false;
+
+  if (devState.product) productEl.value = devState.product;
+  if (devState.item) itemEl.value = devState.item;
+
+  // The record is already fully valid: seed company/member/project dropdowns
+  // synchronously so Part 2 stays enabled and Update unlocks without waiting on
+  // the network load (which would otherwise make the edit appear to do nothing).
+  if (devState.companyId && devState.memberId) {
+    hiddenEl.value = devState.companyId;
+    searchEl.value = devState.companyName;
+    memberEl.innerHTML = `<option value="${devState.memberId}">${escapeHtml(devState.memberName || devState.memberId)}</option>`;
+    memberEl.value = devState.memberId;
+    memberEl.disabled = false;
+    if (devState.projectId) {
+      projectEl.innerHTML = `<option value="${devState.projectId}">${escapeHtml(devState.projectName || devState.projectId)}</option>`;
+      projectEl.value = devState.projectId;
+      projectEl.disabled = false;
+    }
+    loadMembers(Number(devState.companyId), devState.memberId, devState.projectId);
+  }
+
+  panel.querySelector("#dev-refresh").addEventListener("click", async (e) => {
+    const btn = e.currentTarget;
+    btn.disabled = true;
+    btn.classList.add("spinning");
+    const prevId = hiddenEl.value;
+    try {
+      companies = await fetchJson(API + "/api/companies");
+      devCompaniesCache = companies;
+      if (prevId !== "") {
+        const stillThere = companies.some((c) => String(c.id) === String(prevId));
+        if (stillThere) {
+          await loadMembers(Number(prevId), devState.memberId || undefined, devState.projectId || undefined);
+        } else {
+          resetCompanySelection();
+        }
+      }
+      updateNextState();
+    } catch (err) {
+      alert("Refresh failed: " + err.message);
+    } finally {
+      btn.disabled = false;
+      btn.classList.remove("spinning");
+    }
+  });
+
+  const updateNextState = () => {
+    const part1Done = hiddenEl.value !== "" && memberEl.value !== "";
+    part2.disabled = !part1Done;
+    productEl.disabled = !part1Done;
+    updateUnlock();
+    updateSaveState();
+  };
+
+  itemEl.addEventListener("input", () => {
+    devState.item = itemEl.value.trim();
+    updateSaveState();
+  });
+
+  // ---- Part 3 dynamic body (depends on product type) ----
+  const renderPart3 = () => {
+    ensurePantoneData();
+    if (devState.product === "raised silicon label") {
+      renderRaisedSiliconLabel();
+    } else {
+      part3Body.innerHTML = `
+        <div class="dim-row">
+          <div class="field">
+            <label for="dev-height">Height (mm)</label>
+            <input id="dev-height" type="number" min="0" step="0.1" placeholder="0.0" autocomplete="off" />
+          </div>
+          <div class="field">
+            <label for="dev-width">Width (mm)</label>
+            <input id="dev-width" type="number" min="0" step="0.1" placeholder="0.0" autocomplete="off" />
+          </div>
+        </div>`;
+      bindDimInputs();
+    }
+  };
+
+  const bindDimInputs = () => {
+    const h = part3Body.querySelector("#dev-height");
+    const w = part3Body.querySelector("#dev-width");
+    if (h) { h.value = devState.height; h.addEventListener("input", () => { devState.height = h.value; updateSaveState(); }); }
+    if (w) { w.value = devState.width;  w.addEventListener("input",  () => { devState.width  = w.value; updateSaveState(); }); }
+  };
+
+  const renderRaisedSiliconLabel = () => {
+    part3Body.innerHTML = `
+      <div class="dim-row">
+        <div class="field">
+          <label for="dev-height">Height (mm)</label>
+          <input id="dev-height" type="number" min="0" step="0.1" placeholder="0.0" autocomplete="off" />
+        </div>
+        <div class="field">
+          <label for="dev-width">Width (mm)</label>
+          <input id="dev-width" type="number" min="0" step="0.1" placeholder="0.0" autocomplete="off" />
+        </div>
+      </div>
+      <div class="dim-row">
+        <div class="field">
+          <label for="dev-raised-height">Raised height (mm)</label>
+          <input id="dev-raised-height" type="number" min="0" step="0.1" placeholder="0.0" autocomplete="off" />
+        </div>
+        <div class="field">
+          <label for="dev-no-of-color">No. of color</label>
+          <input id="dev-no-of-color" type="number" min="1" step="1" placeholder="0" autocomplete="off" />
+        </div>
+      </div>
+      <div id="dev-pantone-wrap"></div>
+    `;
+
+    bindDimInputs();
+    const rh = part3Body.querySelector("#dev-raised-height");
+    const nc = part3Body.querySelector("#dev-no-of-color");
+    if (rh) { rh.value = devState.raisedHeight; rh.addEventListener("input", () => { devState.raisedHeight = rh.value; updateSaveState(); }); }
+    if (nc) {
+      nc.value = devState.noOfColor;
+      nc.addEventListener("input", () => {
+        devState.noOfColor = nc.value;
+        renderPantoneRows();
+        updateSaveState();
+      });
+    }
+    renderPantoneRows();
+  };
+
+  const renderPantoneRows = () => {
+    const wrap = part3Body.querySelector("#dev-pantone-wrap");
+    if (!wrap) return;
+    const n = parseInt(devState.noOfColor, 10);
+    if (!isNaN(n) && n > 0) {
+      while (devState.pantones.length < n) devState.pantones.push({ value: "", color: "#000000" });
+      if (devState.pantones.length > n) devState.pantones.length = n;
+    }
+    if ((parseInt(devState.noOfColor, 10) || 0) <= 0) {
+      wrap.innerHTML = "";
+      return;
+    }
+    wrap.innerHTML = devState.pantones.map((p, i) => `
+      <div class="pantone-row">
+        <div class="field pantone-code">
+          <label for="dev-pantone-${i}">Pantone #${i + 1}</label>
+          <input id="dev-pantone-${i}" type="text" class="pantone-input"
+                 data-idx="${i}" value="${escapeHtml(p.value)}"
+                 placeholder="code (11-0103) or name (egret)" autocomplete="off" />
+          <div class="pantone-match" id="dev-pantone-match-${i}"></div>
+        </div>
+      </div>`).join("");
+    const showPantoneMatch = (i, query) => {
+      const matchEl = wrap.querySelector("#dev-pantone-match-" + i);
+      if (!matchEl) return;
+      const matches = findPantoneMatches(query);
+      if (!matches.length) {
+        matchEl.innerHTML = `<span class="muted small">No match</span>`;
+        return;
+      }
+      const top = matches[0];
+      if (devState.pantones[i]) devState.pantones[i].color = "#" + top.hex;
+
+      matchEl.innerHTML =
+        `<div class="pantone-top">` +
+          `<span class="swatch" style="background:#${escapeHtml(top.hex)}"></span>` +
+          `<span class="muted small">${escapeHtml(top.code)} · ${escapeHtml(top.name)} · ` +
+          `<span class="pantone-type" title="${escapeHtml(pantoneTypeName(top.type))}">${escapeHtml(pantoneTypeName(top.type))}</span> · #${escapeHtml(top.hex)}</span>` +
+        `</div>` +
+        (matches.length > 1
+          ? `<div class="pantone-similar">similar: ` +
+            matches.slice(1).map((m) =>
+              `<span class="pantone-chip" data-code="${escapeHtml(m.code)}" ` +
+              `title="${escapeHtml(m.code)} · ${escapeHtml(m.name)} · ${escapeHtml(pantoneTypeName(m.type))}">` +
+                `<span class="swatch sm" style="background:#${escapeHtml(m.hex)}"></span>` +
+                `${escapeHtml(m.name)} ` +
+                `<span class="pantone-type" title="${escapeHtml(pantoneTypeName(m.type))}">${escapeHtml(pantoneTypeName(m.type))}</span></span>`
+            ).join("") +
+            `</div>`
+          : "");
+
+      matchEl.querySelectorAll(".pantone-chip").forEach((chip) => {
+        chip.addEventListener("click", () => {
+          const inp = wrap.querySelector("#dev-pantone-" + i);
+          if (inp) inp.value = chip.dataset.code;
+          if (devState.pantones[i]) devState.pantones[i].value = chip.dataset.code;
+          const chosen = findPantoneMatches(chip.dataset.code)[0];
+          matchEl.innerHTML = chosen
+            ? `<div class="pantone-top">` +
+              `<span class="swatch" style="background:#${escapeHtml(chosen.hex)}"></span>` +
+              `<span class="muted small">${escapeHtml(chosen.code)} · ${escapeHtml(chosen.name)} · ` +
+              `<span class="pantone-type" title="${escapeHtml(pantoneTypeName(chosen.type))}">${escapeHtml(pantoneTypeName(chosen.type))}</span> · #${escapeHtml(chosen.hex)}</span>` +
+              `</div>`
+            : "";
+          updateSaveState();
+        });
+      });
+    };
+
+    wrap.querySelectorAll(".pantone-input").forEach((inp) => {
+      inp.addEventListener("input", () => {
+        const i = Number(inp.dataset.idx);
+        if (!devState.pantones[i]) return;
+        devState.pantones[i].value = inp.value;
+        showPantoneMatch(i, inp.value);
+        updateSaveState();
+      });
+    });
+
+    devState.pantones.forEach((p, i) => {
+      if (p && p.value) showPantoneMatch(i, p.value);
+    });
+  };
+
+  const resetCompanySelection = () => {
+    hiddenEl.value = "";
+    memberEl.value = "";
+    memberEl.disabled = true;
+    memberEl.innerHTML = `<option value="">— select a company first —</option>`;
+    devState.companyId = "";
+    devState.companyName = "";
+    devState.memberId = "";
+    devState.projectId = "";
+    devState.projectName = "";
+    updateNextState();
+  };
+
+  async function loadMembers(companyId, restoreMemberId, restoreProjectId) {
+    try {
+      const comp = await fetchAnchoredCompany(companyId);
+      const members = comp.members || [];
+      memberEl.innerHTML = members.length
+        ? `<option value="">— select a member —</option>` +
+          members.map((m) =>
+            `<option value="${m.id}">${escapeHtml(m.name)}</option>`).join("")
+        : `<option value="">— no members —</option>`;
+      memberEl.disabled = !members.length;
+      if (restoreMemberId != null && members.some((m) => String(m.id) === String(restoreMemberId))) {
+        memberEl.value = String(restoreMemberId);
+      }
+      const projects = comp.projects || [];
+      projectEl.innerHTML = `<option value="">No project</option>` +
+        (projects.length
+          ? projects.map((p) =>
+              `<option value="${p.id}">${escapeHtml(p.name)}</option>`).join("")
+          : "");
+      projectEl.disabled = false;
+      const wantProject = restoreProjectId != null ? String(restoreProjectId) : (devState.projectId || "");
+      if (wantProject && projects.some((p) => String(p.id) === wantProject)) {
+        projectEl.value = wantProject;
+        const hit = projects.find((p) => String(p.id) === wantProject);
+        devState.projectId = wantProject;
+        devState.projectName = hit.name;
+      } else {
+        devState.projectId = "";
+        devState.projectName = "";
+      }
+    } catch (err) {
+      memberEl.innerHTML = `<option value="">— load failed —</option>`;
+      memberEl.disabled = true;
+      projectEl.innerHTML = `<option value="">No project</option>`;
+      projectEl.disabled = false;
+    }
+    updateNextState();
+  };
+
+  const renderOptions = (matches) => {
+    if (!matches.length) {
+      listEl.innerHTML = `<li class="combobox-empty">No matches</li>`;
+    } else {
+      listEl.innerHTML = matches.map((c, i) =>
+        `<li class="combobox-item" role="option" data-id="${c.id}" data-name="${escapeHtml(c.name)}" data-idx="${i}">` +
+        `${escapeHtml(c.name)}</li>`).join("");
+      listEl.querySelectorAll(".combobox-item").forEach((li) => {
+        li.addEventListener("click", () => selectCompany(Number(li.dataset.id), li.dataset.name));
+      });
+      listEl.querySelectorAll(".combobox-item").forEach((it, i) => {
+        it.classList.toggle("active", i === 0);
+      });
+    }
+    listEl.hidden = false;
+  };
+
+  const selectCompany = (id, name) => {
+    hiddenEl.value = id;
+    searchEl.value = name;
+    listEl.hidden = true;
+    memberEl.value = "";
+    devState.companyId = String(id);
+    devState.companyName = name;
+    devState.memberId = "";
+    devState.projectId = "";
+    devState.projectName = "";
+    loadMembers(id, null, null);
+    updateNextState();
+  };
+
+  searchEl.addEventListener("input", () => {
+    const q = searchEl.value.trim().toLowerCase();
+    hiddenEl.value = "";
+    memberEl.value = "";
+    memberEl.disabled = true;
+    memberEl.innerHTML = `<option value="">— select a company first —</option>`;
+    devState.companyId = "";
+    devState.companyName = "";
+    devState.memberId = "";
+    devState.projectId = "";
+    devState.projectName = "";
+    if (q.length < 3) {
+      listEl.hidden = true;
+      updateNextState();
+      return;
+    }
+    const matches = companies.filter((c) => fuzzyMatch(c.name, q)).slice(0, 12);
+    renderOptions(matches);
+    updateNextState();
+  });
+
+  searchEl.addEventListener("blur", () => {
+    setTimeout(() => { listEl.hidden = true; }, 120);
+  });
+
+  searchEl.addEventListener("keydown", (e) => {
+    if (listEl.hidden) return;
+    const items = [...listEl.querySelectorAll(".combobox-item")];
+    if (!items.length) return;
+    const active = listEl.querySelector(".combobox-item.active");
+    let idx = items.indexOf(active);
+    if (idx < 0) idx = 0;
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      idx = Math.min(items.length - 1, idx + 1);
+      items.forEach((it) => it.classList.remove("active"));
+      if (items[idx]) { items[idx].classList.add("active"); items[idx].scrollIntoView({ block: "nearest" }); }
+    } else if (e.key === "ArrowUp") {
+      e.preventDefault();
+      idx = Math.max(0, idx - 1);
+      items.forEach((it) => it.classList.remove("active"));
+      if (items[idx]) { items[idx].classList.add("active"); items[idx].scrollIntoView({ block: "nearest" }); }
+    } else if (e.key === "Enter" || e.key === "Tab") {
+      e.preventDefault();
+      const pick = items[idx] || items[0];
+      if (pick) selectCompany(Number(pick.dataset.id), pick.dataset.name);
+    } else if (e.key === "Escape") {
+      listEl.hidden = true;
+    }
+  });
+
+  memberEl.addEventListener("change", () => {
+    devState.memberId = memberEl.value;
+    updateNextState();
+  });
+  projectEl.addEventListener("change", () => {
+    if (projectEl.value) {
+      devState.projectId = projectEl.value;
+      devState.projectName = projectEl.options[projectEl.selectedIndex]?.textContent || "";
+    } else {
+      devState.projectId = "";
+      devState.projectName = "";
+    }
+    updateSaveState();
+  });
+  productEl.addEventListener("change", () => {
+    devState.product = productEl.value;
+    updateNextState();
+  });
+
+  const part3Valid = () => {
+    const h = (devState.height || "").trim();
+    const w = (devState.width || "").trim();
+    if (h.length === 0 || w.length === 0) return false;
+
+    if (devState.product === "raised silicon label") {
+      const rh = (devState.raisedHeight || "").trim();
+      if (rh.length === 0) return false;
+
+      const n = parseInt(devState.noOfColor, 10);
+      if (!n || n < 1) return false;
+
+      if (n >= 1) {
+        for (const p of devState.pantones) {
+          const v = (p && (p.value || "") || "").trim().length;
+          if (v <= 1) return false;
+        }
+      }
+    }
+    return true;
+  };
+
+  // Compare the current editable fields against the originally-loaded record.
+  // Update only enables (and Reset only matters) once something actually changed.
+  const currentSignature = () => ({
+    company_id: devState.companyId ? Number(devState.companyId) : null,
+    member_id: devState.memberId ? Number(devState.memberId) : null,
+    project_id: devState.projectId ? Number(devState.projectId) : null,
+    item_name: (devState.item || "").trim(),
+    product_type: devState.product || "",
+    height: devState.height ? Number(devState.height) : null,
+    width: devState.width ? Number(devState.width) : null,
+    raised_height: devState.raisedHeight ? Number(devState.raisedHeight) : null,
+    no_of_color: devState.noOfColor ? Number(devState.noOfColor) : null,
+    pantones: devState.pantones.filter((p) => p && p.value).map((p) => ({ value: p.value.trim(), color: p.color })),
+    image_names: devState.images.map((i) => i.name).sort(),
+    doc_names: devState.docs.map((d) => d.name).sort(),
+  });
+
+  const sigEq = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+  const isDirty = () => !devOriginal || !sigEq(currentSignature(), {
+    company_id: devOriginal.company_id != null ? Number(devOriginal.company_id) : null,
+    member_id: devOriginal.member_id != null ? Number(devOriginal.member_id) : null,
+    project_id: devOriginal.project_id != null ? Number(devOriginal.project_id) : null,
+    item_name: (devOriginal.item_name || "").trim(),
+    product_type: devOriginal.product_type || "",
+    height: devOriginal.height != null ? Number(devOriginal.height) : null,
+    width: devOriginal.width != null ? Number(devOriginal.width) : null,
+    raised_height: devOriginal.raised_height != null ? Number(devOriginal.raised_height) : null,
+    no_of_color: devOriginal.no_of_color != null ? Number(devOriginal.no_of_color) : null,
+    pantones: (devOriginal.pantones || []).map((p) => ({ value: (p.value || "").trim(), color: p.color })),
+    image_names: (devOriginal.image_names || []).slice().sort(),
+    doc_names: (devOriginal.doc_names || []).slice().sort(),
+  });
+
+  // Save gating for the Edit tab: all required fields filled AND a real change
+  // detected (an existing image alone does NOT enable Update).
+  const updateSaveState = () => {
+    const hasImage = devState.images.length >= 1;
+    const allFilled = hiddenEl.value !== "" && memberEl.value !== "" &&
+                      devState.item && devState.product &&
+                      part3Valid() && hasImage;
+    const dirty = isDirty();
+    const canSave = allFilled && dirty;
+    saveBtn.disabled = !canSave;
+    saveBtn.classList.toggle("active", canSave);
+    resetBtn.disabled = !dirty;
+    resetBtn.classList.toggle("active", dirty);
+  };
+
+  updateNextState();
+  updateSaveState();
+  devSaveStateFn = updateSaveState;
+
+  // ===== 4th part: image dropzone + documents =====
+  const imageDrop = panel.querySelector("#dev-image-drop");
+  const imageThumbs = panel.querySelector("#dev-image-thumbs");
+  const docDrop = panel.querySelector("#dev-doc-drop");
+  const docList = panel.querySelector("#dev-doc-list");
+
+  const images = devState.images;
+  const docs = devState.docs;
+
+  const isImageFile = (f) => f && f.type && f.type.startsWith("image/");
+
+  const renderImageThumbs = () => {
+    if (!images.length) {
+      imageThumbs.innerHTML = "";
+      imageDrop.classList.remove("has-items");
+      return;
+    }
+    imageDrop.classList.add("has-items");
+    imageThumbs.innerHTML = images.map((img) => `
+      <div class="thumb" data-id="${img.id}">
+        <img src="${img.url}" alt="${escapeHtml(img.name)}" />
+        <div class="thumb-name">${escapeHtml(img.name)}</div>
+        ${img.uploading ? '<span class="thumb-badge uploading">uploading…</span>' : ''}
+        <button class="icon-btn danger thumb-rm" data-rm="${img.id}" title="Remove">✕</button>
+      </div>`).join("");
+    imageThumbs.querySelectorAll("[data-rm]").forEach((b) => {
+      b.addEventListener("click", () => {
+        const id = b.dataset.rm;
+        const idx = images.findIndex((x) => x.id === id);
+        if (idx >= 0) {
+          openConfirmModal(
+            "Remove image?",
+            "Remove this image from the development?",
+            () => {
+              const j = images.findIndex((x) => x.id === id);
+              if (j >= 0) {
+                if (images[j].url && images[j].url.startsWith("blob:")) {
+                  URL.revokeObjectURL(images[j].url);
+                }
+                images.splice(j, 1);
+                renderImageThumbs();
+                updateSaveState();
+              }
+            }
+          );
+        }
+      });
+    });
+  };
+
+  const addImageFile = (file) => {
+    if (!isImageFile(file)) return;
+    if (images.length) URL.revokeObjectURL(images[0].url);
+    const localUrl = URL.createObjectURL(file);
+    const id = "img-" + Date.now() + "-0";
+    images.length = 0;
+    images.push({ id, name: file.name, url: localUrl, uploading: true });
+    renderImageThumbs();
+    updateSaveState();
+    uploadImageFile(file, id);
+  };
+
+  const uploadImageFile = async (file, id) => {
+    const entry = images.find((x) => x.id === id);
+    if (!entry) return;
+    try {
+      const fd = new FormData();
+      fd.append("file", file);
+      const data = await fetchJson(API + "/api/uploads", { method: "POST", body: fd });
+      entry.name = data.path;
+      entry.url = data.url;
+      entry.uploading = false;
+      renderImageThumbs();
+      updateSaveState();
+    } catch (err) {
+      if (entry) entry.uploading = false;
+      openConfirmModal("Upload failed", "Could not upload image: " + err.message, () => {});
+    }
+  };
+
+  ["dragenter", "dragover"].forEach((ev) =>
+    imageDrop.addEventListener(ev, (e) => {
+      e.preventDefault();
+      imageDrop.classList.add("dragover");
+    })
+  );
+  ["dragleave", "drop"].forEach((ev) =>
+    imageDrop.addEventListener(ev, (e) => {
+      e.preventDefault();
+      if (ev === "dragleave" && imageDrop.contains(e.relatedTarget)) return;
+      imageDrop.classList.remove("dragover");
+    })
+  );
+  imageDrop.addEventListener("drop", (e) => {
+    const first = [...(e.dataTransfer?.files || [])].find(isImageFile);
+    if (first) addImageFile(first);
+  });
+
+  imageDrop.addEventListener("paste", (e) => {
+    const items = e.clipboardData?.items || [];
+    for (const it of items) {
+      if (it.kind === "file" && it.type.startsWith("image/")) {
+        const f = it.getAsFile();
+        if (f) { addImageFile(f); e.preventDefault(); break; }
+      }
+    }
+  });
+
+  const renderDocList = () => {
+    if (!docs.length) {
+      docList.innerHTML = "";
+      docDrop.classList.remove("has-items");
+      return;
+    }
+    docDrop.classList.add("has-items");
+    docList.innerHTML = docs.map((d) => `
+      <div class="doc-row" data-id="${d.id}">
+        <span class="doc-icon">📄</span>
+        <input class="doc-name" data-id="${d.id}" type="text" value="${escapeHtml(d.name)}" />
+        <span class="doc-size muted small">${d.file ? formatBytes(d.file.size) : "saved"}</span>
+        ${d.uploading ? '<span class="thumb-badge uploading">uploading…</span>' : ''}
+        <button class="icon-btn danger doc-rm" data-rm="${d.id}" title="Remove">✕</button>
+      </div>`).join("");
+    docList.querySelectorAll(".doc-rm").forEach((b) => {
+      b.addEventListener("click", () => {
+        const id = b.dataset.rm;
+        const idx = docs.findIndex((x) => x.id === id);
+        if (idx >= 0) { docs.splice(idx, 1); renderDocList(); updateSaveState(); }
+      });
+    });
+    docList.querySelectorAll(".doc-name").forEach((inp) => {
+      inp.addEventListener("input", () => {
+        const d = docs.find((x) => x.id === inp.dataset.id);
+        if (d) { d.name = inp.value; updateSaveState(); }
+      });
+    });
+    updateSaveState();
+  };
+
+  const addDocFiles = async (fileList) => {
+    for (const f of fileList) {
+      const id = "doc-" + Date.now() + "-" + docs.length;
+      const entry = { id, name: f.name, file: f, uploading: true };
+      docs.push(entry);
+      renderDocList();
+      try {
+        const r = await uploadFile(f);
+        entry.name = r.path;
+        entry.url = API + r.path;
+        entry.uploading = false;
+      } catch (err) {
+        entry.uploading = false;
+        openConfirmModal("Upload failed", "Could not upload document: " + err.message, () => {});
+      }
+      renderDocList();
+    }
+  };
+
+  ["dragenter", "dragover"].forEach((ev) =>
+    docDrop.addEventListener(ev, (e) => {
+      e.preventDefault();
+      docDrop.classList.add("dragover");
+    })
+  );
+  ["dragleave", "drop"].forEach((ev) =>
+    docDrop.addEventListener(ev, (e) => {
+      e.preventDefault();
+      if (ev === "dragleave" && docDrop.contains(e.relatedTarget)) return;
+      docDrop.classList.remove("dragover");
+    })
+  );
+  docDrop.addEventListener("drop", (e) => {
+    addDocFiles(e.dataTransfer?.files || []);
+  });
+
+  renderImageThumbs();
+  renderDocList();
+
+  updateNextState();
+  updateSaveState();
+
+  // ===== Action buttons: Dummy / Update / Reset / Back =====
+
+  dummyBtn.addEventListener("click", () => fillDummyDevelopment({
+    searchEl, hiddenEl, memberEl, projectEl, productEl, itemEl, listEl, companies,
+    selectCompany, loadMembers, updateNextState, updateSaveState, updateUnlock,
+  }));
+
+  // Back: discard the edit, clear only the Edit state, return to View.
   const backBtn = panel.querySelector("#dev-back");
   if (backBtn) {
     backBtn.addEventListener("click", () => {
       devEditMode = false;
       devEditId = null;
       devOriginal = null;
-      // clear only the Edit tab's state, not the Create tab's
       Object.assign(devEditState, blankDevState());
       openTab("development-view");
     });
   }
 
-  // In edit mode, "Reset" restores every field to the originally-loaded record
-  // (the snapshot kept in devOriginal), discarding any edits made this session.
-  // Operates on the Edit tab's own state (devEditState).
+  // Reset: restore every field to the originally-loaded record.
   if (resetBtn) {
     resetBtn.addEventListener("click", () => {
       if (!devOriginal) return;
@@ -2003,8 +2761,7 @@ async function renderDevelopmentCreate() {
       s.pantones = Array.isArray(devOriginal.pantones) ? devOriginal.pantones.map((p) => ({ value: p.value || "", color: p.color || "#000000" })) : [];
       s.images = (devOriginal.image_names || []).map((n) => ({ id: "eimg-" + n, name: n, url: assetUrl(n) }));
       s.docs = (devOriginal.doc_names || []).map((name, i) => ({ id: "edoc-" + devEditId + "-" + i, name, file: null }));
-      // re-render so inputs + thumbnails reflect the restored original state
-      renderDevelopmentCreate();
+      renderDevelopmentEdit();   // re-render with restored data
     });
   }
 
@@ -2017,30 +2774,20 @@ async function renderDevelopmentCreate() {
     }
     saveBtn.disabled = true;
     saveBtn.textContent = "Saving…";
-    const verb = devEditMode ? "Update" : "Save";
+    const verb = "Update";
     try {
-      if (devEditMode && devEditId != null) {
-        await fetchJson(API + `/api/developments/${devEditId}`, {
-          method: "PUT",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(payload),
-        });
-        devEditMode = false;
-        devEditId = null;
-        devOriginal = null;
-        saveBtn.textContent = "Updated ✓";
-        // close the "development-edit" mini-tab and return to the View list
-        if (openTabs.has("development-edit")) openTabs.delete("development-edit");
-        openTab("development-view");
-      } else {
-        await fetchJson(API + "/api/developments", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(payload),
-        });
-        saveBtn.textContent = "Updated ✓";
-        openPostSaveModal();
-      }
+      await fetchJson(API + `/api/developments/${devEditId}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      devEditMode = false;
+      devEditId = null;
+      devOriginal = null;
+      Object.assign(devEditState, blankDevState());
+      saveBtn.textContent = "Updated ✓";
+      if (openTabs.has("development-edit")) openTabs.delete("development-edit");
+      openTab("development-view");
     } catch (err) {
       saveBtn.textContent = verb;
       saveBtn.disabled = false;
