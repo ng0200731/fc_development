@@ -1460,6 +1460,9 @@ async function renderDevelopmentCreate() {
               `<span class="pantone-type" title="${escapeHtml(pantoneTypeName(chosen.type))}">${escapeHtml(pantoneTypeName(chosen.type))}</span> · #${escapeHtml(chosen.hex)}</span>` +
               `</div>`
             : "";
+          // picking a suggestion sets the value programmatically, which does NOT
+          // fire the input event — re-gate Save/Update so the button can light up.
+          updateSaveState();
         });
       });
     };
@@ -1988,6 +1991,7 @@ async function renderDevelopmentCreate() {
         devEditMode = false;
         devEditId = null;
         devOriginal = null;
+        saveBtn.textContent = "Updated ✓";
         openTab("development-view");
       } else {
         await fetchJson(API + "/api/developments", {
@@ -1995,6 +1999,7 @@ async function renderDevelopmentCreate() {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(payload),
         });
+        saveBtn.textContent = "Updated ✓";
         openPostSaveModal();
       }
     } catch (err) {
