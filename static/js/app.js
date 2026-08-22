@@ -1157,7 +1157,7 @@ async function renderDevelopmentCreate() {
           <div class="field" id="dev-project-field">
             <label for="dev-project">Project <span class="hint">(optional)</span></label>
             <select id="dev-project" disabled>
-              <option value="">— no project —</option>
+              <option value="">No project</option>
             </select>
           </div>
         </div>
@@ -1271,6 +1271,10 @@ async function renderDevelopmentCreate() {
       projectEl.value = devState.projectId;
       projectEl.disabled = false;
     }
+    // Load members + projects from the Customer database so the project list is
+    // fully synced with Customer / View (and the saved project is restored only
+    // if it still exists there). Don't reset the member if it's still present.
+    loadMembers(Number(devState.companyId), devState.memberId, devState.projectId);
   }
 
   // refresh = re-fetch latest companies + members from the customer database
@@ -1286,16 +1290,15 @@ async function renderDevelopmentCreate() {
       if (prevId !== "") {
         const stillThere = companies.some((c) => String(c.id) === String(prevId));
         if (stillThere) {
-          await loadMembers(Number(prevId));
+          // keep the currently-selected member if it still exists in the
+          // customer database (don't reset it on refresh)
+          await loadMembers(Number(prevId), devState.memberId || undefined, devState.projectId || undefined);
         } else {
           resetCompanySelection();
         }
       }
-      // re-run the current search to refresh matches
-      const q = searchEl.value.trim().toLowerCase();
-      const matches = companies.filter((c) => fuzzyMatch(c.name, q)).slice(0, 12);
-      renderOptions(matches);
-      listEl.hidden = false;
+      // silent refresh: update the data only, don't re-open/pop the search list
+      // or auto-highlight any company name.
       updateNextState();
     } catch (err) {
       alert("Refresh failed: " + err.message);
@@ -1496,7 +1499,7 @@ async function renderDevelopmentCreate() {
     updateNextState();
   };
 
-  const loadMembers = async (companyId, restoreMemberId) => {
+  async function loadMembers(companyId, restoreMemberId, restoreProjectId) {
     try {
       const comp = await fetchAnchoredCompany(companyId);
       const members = comp.members || [];
@@ -1512,15 +1515,19 @@ async function renderDevelopmentCreate() {
       }
       // populate the project dropdown from this company's saved projects
       const projects = comp.projects || [];
-      projectEl.innerHTML = projects.length
-        ? `<option value="">— no project —</option>` +
-          projects.map((p) =>
-            `<option value="${p.id}">${escapeHtml(p.name)}</option>`).join("")
-        : `<option value="">— no project —</option>`;
+      projectEl.innerHTML = `<option value="">No project</option>` +
+        (projects.length
+          ? projects.map((p) =>
+              `<option value="${p.id}">${escapeHtml(p.name)}</option>`).join("")
+          : "");
       projectEl.disabled = false;
-      // restore previously selected project if it still exists
-      if (devState.projectId && projects.some((p) => String(p.id) === String(devState.projectId))) {
-        projectEl.value = String(devState.projectId);
+      // restore previously selected project if it still exists in the customer DB
+      const wantProject = restoreProjectId != null ? String(restoreProjectId) : (devState.projectId || "");
+      if (wantProject && projects.some((p) => String(p.id) === wantProject)) {
+        projectEl.value = wantProject;
+        const hit = projects.find((p) => String(p.id) === wantProject);
+        devState.projectId = wantProject;
+        devState.projectName = hit.name;
       } else {
         devState.projectId = "";
         devState.projectName = "";
@@ -1528,7 +1535,7 @@ async function renderDevelopmentCreate() {
     } catch (err) {
       memberEl.innerHTML = `<option value="">— load failed —</option>`;
       memberEl.disabled = true;
-      projectEl.innerHTML = `<option value="">— no project —</option>`;
+      projectEl.innerHTML = `<option value="">No project</option>`;
       projectEl.disabled = false;
     }
     updateNextState();
@@ -1563,7 +1570,7 @@ async function renderDevelopmentCreate() {
     devState.memberId = "";
     devState.projectId = "";
     devState.projectName = "";
-    loadMembers(id);
+    loadMembers(id, null, null);
     updateNextState();
   };
 
@@ -2037,7 +2044,14 @@ async function renderDevelopmentView() {
   panel.innerHTML = '<h2>Development / View</h2><p class="empty">Loading…</p>';
   devViewSelected.clear();
   try {
-    devViewData = await fetchJson(API + "/api/developments");
+    // On load, also pull the full customer database (companies/members/projects)
+    // so any project changes made in Customer / View are reflected here too.
+    const [devs, companies] = await Promise.all([
+      await fetchJson(API + "/api/developments"),
+      (async () => { try { return await fetchJson(API + "/api/companies"); } catch { return null; } })(),
+    ]);
+    devViewData = devs;
+    if (companies) devCompaniesCache = companies;
     if (!devViewData.length) {
       panel.innerHTML = '<h2>Development / View</h2><p class="empty">No developments saved yet.</p>';
       return;
@@ -2120,6 +2134,7 @@ function paintDevelopmentView() {
     <div class="view-head">
       <h2>Development / View</h2>
       <div class="view-actions">
+        <button class="btn ghost" id="dev-refresh" type="button" title="Refresh all customer database">⟳ Refresh</button>
         <button class="btn ghost" id="dev-export" type="button">Export Excel</button>
       </div>
     </div>
@@ -2159,6 +2174,28 @@ function paintDevelopmentView() {
 
   panel.querySelector("#dev-export").addEventListener("click", () =>
     exportDevelopmentExcel(shown));
+
+  const refreshBtn = panel.querySelector("#dev-refresh");
+  if (refreshBtn) {
+    refreshBtn.addEventListener("click", async () => {
+      const btn = refreshBtn;
+      btn.disabled = true;
+      btn.classList.add("spinning");
+      try {
+        // refresh the company master list cache so the Create screen's data is
+        // also current on next open
+        devCompaniesCache = await fetchJson(API + "/api/companies");
+        viewCustomers = await fetchJson(API + "/api/customers");
+        devViewData = await fetchJson(API + "/api/developments");
+        paintDevelopmentView();
+      } catch (err) {
+        openConfirmModal("Refresh failed", err.message, () => {});
+      } finally {
+        btn.disabled = false;
+        btn.classList.remove("spinning");
+      }
+    });
+  }
 
   // --- batch selection ---
   const selectAll = panel.querySelector("#select-all");

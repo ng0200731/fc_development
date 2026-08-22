@@ -317,7 +317,8 @@ select:focus-visible,
   padding: 0;
   border-radius: var(--radius-sm);
 }
-#dev-refresh.spinning { animation: dev-spin .6s linear infinite; }
+#dev-refresh.spinning,
+.btn.ghost.spinning { animation: dev-spin .6s linear infinite; }
 @keyframes dev-spin { from { transform: rotate(0); } to { transform: rotate(360deg); } }
 .combobox-list {
   position: absolute;
