@@ -30,6 +30,7 @@ async function fetchJson(url, opts) {
 const labels = {
   "customer-create": "Customer / Create",
   "customer-view":   "Customer / View",
+  "customer-edit":   "Customer / Edit",
   "development-create": "Development / Create",
   "development-view":   "Development / View",
 };
@@ -71,6 +72,9 @@ sidebar.querySelectorAll(".nav-item").forEach((item) => {
     devEditMode = false;
     devEditId = null;
     devOriginal = null;
+    custEditMode = false;
+    custEditId = null;
+    custOriginal = null;
     openTab(item.dataset.target);
   });
 });
@@ -78,6 +82,8 @@ sidebar.querySelectorAll(".nav-item").forEach((item) => {
 function openTab(target) {
   // editing an existing development only applies while on the Create screen
   if (target !== "development-create") { devEditMode = false; devEditId = null; devOriginal = null; }
+  // customer edit session only applies to its own tab
+  if (target !== "customer-edit") { custEditMode = false; custEditId = null; custOriginal = null; }
   openTabs.add(target);
   activeTarget = target;
   renderTabs();
@@ -103,9 +109,11 @@ function renderTabs() {
     tab.setAttribute("role", "tab");
 
     const label = document.createElement("span");
-    label.textContent = (target === "development-create" && devEditMode) ? "edit" : (labels[target] || target);
+    const editingDev = (target === "development-create" && devEditMode);
+    const editingCust = (target === "customer-edit" && custEditMode);
+    label.textContent = editingDev ? "edit" : editingCust ? "customer edit" : (labels[target] || target);
     tab.appendChild(label);
-    if (target === "development-create" && devEditMode) tab.classList.add("edit-mode");
+    if (editingDev || editingCust) tab.classList.add("edit-mode");
 
     const close = document.createElement("button");
     close.className = "close";
@@ -139,6 +147,10 @@ async function renderPanel() {
   }
   if (activeTarget === "customer-view") {
     await renderCustomerView();
+    return;
+  }
+  if (activeTarget === "customer-edit") {
+    await renderCustomerEdit();
     return;
   }
   if (activeTarget === "development-create") {
@@ -1088,7 +1100,7 @@ async function renderDevelopmentCreate() {
       ${devEditMode ? '<button class="btn ghost" id="dev-back" type="button">← Back</button>' : ''}
       <button class="btn ghost" id="dev-dummy" type="button">Dummy</button>
       <button class="btn primary" id="dev-save" type="button" disabled>${devEditMode ? "Update" : "Save"}</button>
-      ${devEditMode ? '<button class="btn primary" id="dev-reset" type="button">Reset</button>' : ''}
+      ${devEditMode ? '<button class="btn primary dev-reset-spacer" id="dev-reset" type="button">Reset</button>' : ''}
     </div>
 
     <div class="dev-2col">
@@ -2423,6 +2435,24 @@ let viewCustomers = [];      // raw data from /api/customers
 let viewFilters = {};         // {company, name, email, title, tel}
 let viewSelected = new Set(); // selected keys: "c:<companyId>" or "m:<memberId>"
 
+// Customer / Edit session state (mirrors the Development edit model).
+// `custEdit` holds the working copy (every edit goes here); `custOriginal`
+// holds the pristine record so each section's Reset restores only itself and
+// the dirty-state is computed per section.
+let custEditMode = false;
+let custEditId = null;
+let custOriginal = null;     // pristine { name, email_suffix, currency, payment_term, shipment_term, members[], ship_to[], projects[] }
+let custEdit = {
+  name: "",
+  emailSuffix: "",
+  currency: "",
+  payment: "",
+  shipment: "",
+  members: [],    // [{ id, name, email_prefix, title, tel, _new? }]
+  shipTo: [],     // [{ id, address, is_default }]
+  projects: [],   // [{ id, name }]
+};
+
 async function renderCustomerView() {
   panel.innerHTML = '<h2>Customer / View</h2><p class="empty">Loading…</p>';
   viewSelected.clear();
@@ -2621,7 +2651,7 @@ function paintView() {
   batchDelete.addEventListener("click", () => batchDeleteSelected());
 
   panel.querySelectorAll("[data-edit]").forEach((b) => {
-    b.addEventListener("click", () => openEditModal(Number(b.dataset.edit)));
+    b.addEventListener("click", () => openCustomerEdit(Number(b.dataset.edit)));
   });
   panel.querySelectorAll("[data-del-company]").forEach((b) => {
     b.addEventListener("click", () => deleteCompany(Number(b.dataset.delCompany)));
@@ -2664,169 +2694,660 @@ async function batchDeleteSelected() {
 }
 
 // ---------------------------------------------------------------------------
-// Edit modal (company + members)
+// Customer / Edit  — mini-tab (red "customer edit")
+//   Loads the saved customer and exposes four sections (Company / Member /
+//   Ship to / Project). Each section has its own Update (commits only that
+//   section) and Reset (restores only that section from custOriginal).
 // ---------------------------------------------------------------------------
 
-function openEditModal(companyId) {
-  const company = viewCustomers.find((c) => c.id === companyId);
-  if (!company) return;
-  const members = company.members || [];
+// Load a saved customer into the edit session and open the red mini-tab.
+async function openCustomerEdit(companyId) {
+  let rec;
+  try {
+    rec = await fetchJson(API + `/api/companies/${companyId}`);
+  } catch (err) {
+    openConfirmModal("Load failed", err.message, () => {});
+    return;
+  }
+  custOriginal = {
+    name: rec.name || "",
+    email_suffix: rec.email_suffix || "",
+    currency: rec.currency || "",
+    payment_term: rec.payment_term || "",
+    shipment_term: rec.shipment_term || "",
+    members: (rec.members || []).map((m) => ({ ...m })),
+    ship_to: (rec.ship_to || []).map((s) => ({ ...s })),
+    projects: (rec.projects || []).map((p) => ({ ...p })),
+  };
+  seedCustEditFromOriginal();
+  custEditMode = true;
+  custEditId = rec.id;
+  openTab("customer-edit");
+}
 
-  const overlay = document.createElement("div");
-  overlay.className = "modal-overlay";
-  overlay.innerHTML = `
-    <div class="modal" role="dialog" aria-modal="true">
-      <h3>Edit customer</h3>
-      <div class="field">
-        <label for="ed-name">Company name</label>
-        <input id="ed-name" type="text" value="${escapeHtml(company.name)}" />
-      </div>
-      <div class="field">
-        <label for="ed-suffix">Email suffix <span class="hint">(no “@”)</span></label>
-        <div class="input-affix">
-          <span class="at">@</span>
-          <input id="ed-suffix" type="text" value="${escapeHtml(company.email_suffix)}" />
-        </div>
-      </div>
+// Copy custOriginal -> custEdit (fresh working copy, no shared references).
+function seedCustEditFromOriginal() {
+  custEdit = {
+    name: custOriginal.name,
+    emailSuffix: custOriginal.email_suffix,
+    currency: custOriginal.currency,
+    payment: custOriginal.payment_term,
+    shipment: custOriginal.shipment_term,
+    members: custOriginal.members.map((m) => ({ id: m.id, name: m.name, email_prefix: m.email_prefix, title: m.title, tel: m.tel })),
+    shipTo: custOriginal.ship_to.map((s) => ({ id: s.id, address: s.address, is_default: !!s.is_default })),
+    projects: custOriginal.projects.map((p) => ({ id: p.id, name: p.name })),
+  };
+}
 
-      <div class="dim-row">
-        <div class="field">
-          <label for="ed-currency">Currency</label>
-          <select id="ed-currency">
-            <option value="">— select —</option>
-            ${CURRENCIES.map((c) =>
-              `<option value="${escapeHtml(c)}" ${c === (company.currency || "") ? "selected" : ""}>${escapeHtml(c)}</option>`).join("")}
-          </select>
-        </div>
-        <div class="field">
-          <label for="ed-payment">Payment term</label>
-          <select id="ed-payment">
-            <option value="">— select —</option>
-            ${PAYMENT_TERMS.map((p) =>
-              `<option value="${escapeHtml(p)}" ${p === (company.payment_term || "") ? "selected" : ""}>${escapeHtml(p)}</option>`).join("")}
-          </select>
-        </div>
-        <div class="field">
-          <label for="ed-shipment">Shipment term</label>
-          <select id="ed-shipment">
-            <option value="">— select —</option>
-            ${SHIPMENT_TERMS.map((s) =>
-              `<option value="${escapeHtml(s)}" ${s === (company.shipment_term || "") ? "selected" : ""}>${escapeHtml(s)}</option>`).join("")}
-          </select>
-        </div>
-      </div>
+// Render the whole Customer / Edit screen (subtabs + 4 sections).
+async function renderCustomerEdit() {
+  if (!custEditMode || custEditId == null) {
+    panel.innerHTML = '<h2>Customer / Edit</h2><p class="empty">Open a customer from Customer / View to edit it.</p>';
+    return;
+  }
+  const companyId = custEditId;
 
-      <h4 class="subhead">Members</h4>
-      <div class="member-list" id="ed-members"></div>
+  panel.innerHTML = `
+    <h2>Customer / Edit</h2>
+    <p class="ctx">Editing: <strong>${escapeHtml(custEdit.name)}</strong>
+       <span class="muted">(email suffix @${escapeHtml(custEdit.emailSuffix)})</span></p>
 
-      <div class="member-form">
-        <div class="field">
-          <label for="ed-m-name">Name</label>
-          <input id="ed-m-name" type="text" placeholder="Jane Doe" />
-        </div>
-        <div class="field">
-          <label for="ed-m-prefix">Email prefix</label>
-          <input id="ed-m-prefix" type="text" placeholder="jane.doe" />
-        </div>
-        <div class="field">
-          <label for="ed-m-title">Title</label>
-          <input id="ed-m-title" type="text" placeholder="Engineer" />
-        </div>
-        <div class="field">
-          <label for="ed-m-tel">Tel</label>
-          <input id="ed-m-tel" type="text" placeholder="+1 555 0100" />
-        </div>
-        <div class="actions">
-          <button class="btn" id="ed-m-add" type="button" disabled>Add member</button>
-        </div>
-      </div>
+    <div class="subtabs" id="custSubtabs" role="tablist">
+      <button class="subtab active" data-step="company" role="tab">Company</button>
+      <button class="subtab" data-step="member" role="tab">Member</button>
+      <button class="subtab" data-step="shipto" role="tab">Ship to</button>
+      <button class="subtab" data-step="project" role="tab">Project</button>
+    </div>
 
-      <div class="actions modal-actions">
-        <button class="btn ghost" id="ed-cancel" type="button">Cancel</button>
-        <button class="btn primary" id="ed-save" type="button">Save</button>
+    <div class="subpanel" id="cust-company"></div>
+    <div class="subpanel" id="cust-member" style="display:none"></div>
+    <div class="subpanel" id="cust-shipto" style="display:none"></div>
+    <div class="subpanel" id="cust-project" style="display:none"></div>
+  `;
+
+  const subtabs = panel.querySelector("#custSubtabs");
+  const switchTab = (step) => {
+    subtabs.querySelectorAll(".subtab").forEach((t) =>
+      t.classList.toggle("active", t.dataset.step === step));
+    ["company", "member", "shipto", "project"].forEach((s) => {
+      const sec = panel.querySelector("#cust-" + s);
+      if (sec) sec.style.display = s === step ? "" : "none";
+    });
+  };
+  subtabs.querySelectorAll(".subtab").forEach((t) => {
+    t.addEventListener("click", () => switchTab(t.dataset.step));
+  });
+
+  renderCustCompanySection(companyId);
+  renderCustMemberSection(companyId);
+  renderCustShipToSection(companyId);
+  renderCustProjectSection(companyId);
+
+  switchTab("company");
+}
+
+// --- Company section ---------------------------------------------------------
+function renderCustCompanySection(companyId) {
+  const sec = panel.querySelector("#cust-company");
+  if (!sec) return;
+  sec.innerHTML = `
+    <div class="field">
+      <label for="ce-name">Company name</label>
+      <input id="ce-name" type="text" value="${escapeHtml(custEdit.name)}" autocomplete="off" />
+    </div>
+    <div class="field">
+      <label for="ce-suffix">Company email suffix <span class="hint">(no “@”)</span></label>
+      <div class="input-affix">
+        <span class="at">@</span>
+        <input id="ce-suffix" type="text" value="${escapeHtml(custEdit.emailSuffix)}" autocomplete="off" />
       </div>
     </div>
+    <div class="field">
+      <label for="ce-currency">Currency</label>
+      <select id="ce-currency">
+        <option value="">— select —</option>
+        ${CURRENCIES.map((c) => `<option value="${escapeHtml(c)}" ${c === custEdit.currency ? "selected" : ""}>${escapeHtml(c)}</option>`).join("")}
+      </select>
+    </div>
+    <div class="field">
+      <label for="ce-payment">Payment term</label>
+      <select id="ce-payment">
+        <option value="">— select —</option>
+        ${PAYMENT_TERMS.map((p) => `<option value="${escapeHtml(p)}" ${p === custEdit.payment ? "selected" : ""}>${escapeHtml(p)}</option>`).join("")}
+      </select>
+    </div>
+    <div class="field">
+      <label for="ce-shipment">Shipment term</label>
+      <select id="ce-shipment">
+        <option value="">— select —</option>
+        ${SHIPMENT_TERMS.map((s) => `<option value="${escapeHtml(s)}" ${s === custEdit.shipment ? "selected" : ""}>${escapeHtml(s)}</option>`).join("")}
+      </select>
+    </div>
+    <div class="actions create-final">
+      <button class="btn ghost" id="ce-reset" type="button">Reset</button>
+      <button class="btn primary" id="ce-update" type="button">Update</button>
+    </div>
   `;
-  document.body.appendChild(overlay);
-  const suffix = () => overlay.querySelector("#ed-suffix").value.trim().replace(/^@/, "");
 
-  const renderMembers = () => {
-    const list = overlay.querySelector("#ed-members");
-    if (!members.length) {
-      list.innerHTML = '<p class="muted small">No members.</p>';
+  const nameEl = sec.querySelector("#ce-name");
+  const suffixEl = sec.querySelector("#ce-suffix");
+  const currEl = sec.querySelector("#ce-currency");
+  const payEl = sec.querySelector("#ce-payment");
+  const shipEl = sec.querySelector("#ce-shipment");
+  const updateBtn = sec.querySelector("#ce-update");
+  const resetBtn = sec.querySelector("#ce-reset");
+
+  const isDirty = () =>
+    nameEl.value.trim() !== custEdit.name ||
+    suffixEl.value.trim().replace(/^@/, "") !== custEdit.emailSuffix ||
+    currEl.value !== custEdit.currency ||
+    payEl.value !== custEdit.payment ||
+    shipEl.value !== custEdit.shipment;
+  const refreshState = () => { updateBtn.disabled = !isDirty(); resetBtn.disabled = !isDirty(); };
+  [nameEl, suffixEl, currEl, payEl, shipEl].forEach((el) => el.addEventListener("input", refreshState));
+  refreshState();
+
+  resetBtn.addEventListener("click", () => {
+    nameEl.value = custEdit.name;
+    suffixEl.value = custEdit.emailSuffix;
+    currEl.value = custEdit.currency;
+    payEl.value = custEdit.payment;
+    shipEl.value = custEdit.shipment;
+    refreshState();
+  });
+
+  updateBtn.addEventListener("click", async () => {
+    if (updateBtn.disabled) return;
+    const name = nameEl.value.trim();
+    const suffix = suffixEl.value.trim().replace(/^@/, "");
+    if (!name || !suffix) { openConfirmModal("Missing", "Company name and email suffix are required.", () => {}); return; }
+    updateBtn.disabled = true;
+    updateBtn.textContent = "Updating…";
+    try {
+      await apiPutCompany(companyId, name, suffix, {
+        currency: currEl.value || null,
+        payment_term: payEl.value || null,
+        shipment_term: shipEl.value || null,
+      });
+      custEdit.name = name;
+      custEdit.emailSuffix = suffix;
+      custEdit.currency = currEl.value;
+      custEdit.payment = payEl.value;
+      custEdit.shipment = shipEl.value;
+      custOriginal.name = name;
+      custOriginal.email_suffix = suffix;
+      custOriginal.currency = currEl.value;
+      custOriginal.payment_term = payEl.value;
+      custOriginal.shipment_term = shipEl.value;
+      updateBtn.textContent = "Updated ✓";
+      refreshState();
+    } catch (err) {
+      updateBtn.textContent = "Update";
+      updateBtn.disabled = false;
+      openConfirmModal("Update failed", err.message, () => {});
+    }
+  });
+}
+
+// --- Member section ----------------------------------------------------------
+function renderCustMemberSection(companyId) {
+  const sec = panel.querySelector("#cust-member");
+  if (!sec) return;
+
+  const renderMemberList = () => {
+    const listEl = sec.querySelector("#cem-list");
+    if (!custEdit.members.length) {
+      listEl.innerHTML = '<p class="muted small">No members.</p>';
     } else {
-      list.innerHTML = members.map((m) => `
+      listEl.innerHTML = custEdit.members.map((m, i) => `
         <div class="member-row">
-          <span><strong>${escapeHtml(m.name)}</strong>
-            <span class="muted">${escapeHtml(m.email_prefix)}@${escapeHtml(company.email_suffix)}</span></span>
-          <span class="muted">${escapeHtml(m.title)} · ${escapeHtml(m.tel)}</span>
-          <button class="icon-btn danger" data-del="${m.id}" title="Remove">✕</button>
+          <span><strong data-f="name" data-i="${i}">${escapeHtml(m.name)}</strong>
+            <span class="muted" data-f="email" data-i="${i}">${escapeHtml(m.email_prefix)}@${escapeHtml(custEdit.emailSuffix)}</span></span>
+          <span class="muted">
+            <span data-f="title" data-i="${i}">${escapeHtml(m.title)}</span> ·
+            <span data-f="tel" data-i="${i}">${escapeHtml(m.tel)}</span>
+          </span>
+          <button class="icon-btn danger" data-rm="${i}" title="Remove">✕</button>
         </div>`).join("");
-      list.querySelectorAll("[data-del]").forEach((b) => {
+      listEl.querySelectorAll("[data-rm]").forEach((b) => {
         b.addEventListener("click", () => {
-          const id = Number(b.dataset.del);
-          members.splice(members.findIndex((m) => m.id === id), 1);
-          renderMembers();
+          const i = Number(b.dataset.rm);
+          const m = custEdit.members[i];
+          // confirm only for already-saved members (persisted delete)
+          const doRemove = () => { custEdit.members.splice(i, 1); renderMemberList(); refreshState(); };
+          if (typeof m.id === "number" || (typeof m.id !== "string" || !m.id.startsWith("new-"))) {
+            openConfirmModal("Remove member?", "Remove this member from the company?", doRemove);
+          } else {
+            doRemove();
+          }
         });
       });
     }
+    refreshState();
   };
-  renderMembers();
 
-  const v = () => {
-    const ok = overlay.querySelector("#ed-m-name").value.trim() &&
-               overlay.querySelector("#ed-m-prefix").value.trim() &&
-               overlay.querySelector("#ed-m-title").value.trim() &&
-               overlay.querySelector("#ed-m-tel").value.trim();
-    overlay.querySelector("#ed-m-add").disabled = !ok;
+  const refreshState = () => {
+    const names = custEdit.members.map((m) => `${m.name}|${m.email_prefix}|${m.title}|${m.tel}`).join(";");
+    const origNames = custOriginal.members.map((m) => `${m.name}|${m.email_prefix}|${m.title}|${m.tel}`).join(";");
+    const dirty = names !== origNames ||
+      custEdit.members.length !== custOriginal.members.length ||
+      custEdit.members.some((m) => typeof m.id === "string" && m.id.startsWith("new-")) ||
+      custEdit.members.some((m) => {
+        if (typeof m.id !== "number") return false;
+        const o = custOriginal.members.find((x) => x.id === m.id);
+        return !o || o.name !== m.name || o.email_prefix !== m.email_prefix || o.title !== m.title || o.tel !== m.tel;
+      });
+    sec.querySelector("#cem-update").disabled = !dirty;
+    sec.querySelector("#cem-reset").disabled = !dirty;
   };
-  ["#ed-m-name", "#ed-m-prefix", "#ed-m-title", "#ed-m-tel"].forEach((s) =>
-    overlay.querySelector(s).addEventListener("input", v));
 
-  overlay.querySelector("#ed-m-add").addEventListener("click", () => {
-    if (overlay.querySelector("#ed-m-add").disabled) return;
-    members.push({
+  sec.innerHTML = `
+    <div class="member-list" id="cem-list"></div>
+    <div class="member-form">
+      <h3 class="subhead">Add member</h3>
+      <div class="field">
+        <label for="cem-name">Name</label>
+        <input id="cem-name" type="text" placeholder="Jane Doe" autocomplete="off" />
+      </div>
+      <div class="field">
+        <label for="cem-prefix">Email prefix <span class="hint">(suffix follows company)</span></label>
+        <div class="input-affix">
+          <input id="cem-prefix" type="text" placeholder="jane.doe" autocomplete="off" />
+          <span class="suffix">@${escapeHtml(custEdit.emailSuffix)}</span>
+        </div>
+      </div>
+      <div class="field">
+        <label for="cem-title">Title</label>
+        <input id="cem-title" type="text" placeholder="Engineer" autocomplete="off" />
+      </div>
+      <div class="field">
+        <label for="cem-tel">Tel</label>
+        <input id="cem-tel" type="text" placeholder="+1 555 0100" autocomplete="off" />
+      </div>
+      <div class="actions">
+        <button class="btn" id="cem-add" type="button" disabled>Add member</button>
+      </div>
+    </div>
+    <div class="actions create-final">
+      <button class="btn ghost" id="cem-reset" type="button">Reset</button>
+      <button class="btn primary" id="cem-update" type="button">Update</button>
+    </div>
+  `;
+
+  const nameEl = sec.querySelector("#cem-name");
+  const prefixEl = sec.querySelector("#cem-prefix");
+  const titleEl = sec.querySelector("#cem-title");
+  const telEl = sec.querySelector("#cem-tel");
+  const addBtn = sec.querySelector("#cem-add");
+
+  const validateAdd = () => {
+    addBtn.disabled = !(nameEl.value.trim() && prefixEl.value.trim() && titleEl.value.trim() && telEl.value.trim());
+  };
+  [nameEl, prefixEl, titleEl, telEl].forEach((el) => el.addEventListener("input", validateAdd));
+
+  addBtn.addEventListener("click", () => {
+    if (addBtn.disabled) return;
+    custEdit.members.push({
       id: "new-" + Date.now(),
-      name: overlay.querySelector("#ed-m-name").value.trim(),
-      email_prefix: overlay.querySelector("#ed-m-prefix").value.trim(),
-      title: overlay.querySelector("#ed-m-title").value.trim(),
-      tel: overlay.querySelector("#ed-m-tel").value.trim(),
+      name: nameEl.value.trim(),
+      email_prefix: prefixEl.value.trim(),
+      title: titleEl.value.trim(),
+      tel: telEl.value.trim(),
     });
-    ["#ed-m-name", "#ed-m-prefix", "#ed-m-title", "#ed-m-tel"].forEach((s) => overlay.querySelector(s).value = "");
-    v();
-    renderMembers();
+    nameEl.value = prefixEl.value = titleEl.value = telEl.value = "";
+    validateAdd();
+    renderMemberList();
   });
 
-  overlay.querySelector("#ed-cancel").addEventListener("click", () => overlay.remove());
-  overlay.addEventListener("click", (e) => { if (e.target === overlay) overlay.remove(); });
+  // inline edit of a member field on click (name/title/tel/prefix)
+  sec.querySelector("#cem-list").addEventListener("click", (e) => {
+    const f = e.target.dataset.f;
+    if (!f) return;
+    const i = Number(e.target.dataset.i);
+    const m = custEdit.members[i];
+    if (!m || f === "email") return;
+    const cur = m[f];
+    openInlineEdit(e.target, cur, (val) => {
+      m[f] = val.trim();
+      renderMemberList();
+    });
+  });
 
-  overlay.querySelector("#ed-save").addEventListener("click", async () => {
-    const name = overlay.querySelector("#ed-name").value.trim();
-    const suf = suffix();
-    if (!name || !suf) { alert("Company name and email suffix are required."); return; }
-    const currency = overlay.querySelector("#ed-currency").value || null;
-    const payment_term = overlay.querySelector("#ed-payment").value || null;
-    const shipment_term = overlay.querySelector("#ed-shipment").value || null;
-    const saveBtn = overlay.querySelector("#ed-save");
-    saveBtn.disabled = true;
-    saveBtn.textContent = "Saving…";
+  sec.querySelector("#cem-reset").addEventListener("click", () => {
+    custEdit.members = custOriginal.members.map((m) => ({ id: m.id, name: m.name, email_prefix: m.email_prefix, title: m.title, tel: m.tel }));
+    renderMemberList();
+  });
+
+  sec.querySelector("#cem-update").addEventListener("click", async () => {
+    const btn = sec.querySelector("#cem-update");
+    if (btn.disabled) return;
+    btn.disabled = true;
+    btn.textContent = "Updating…";
     try {
-      await apiPutCompany(companyId, name, suf, { currency, payment_term, shipment_term });
-      for (const m of members) {
+      // delete removed (saved) members
+      const origIds = custOriginal.members.filter((m) => typeof m.id === "number").map((m) => m.id);
+      const curIds = custEdit.members.filter((m) => typeof m.id === "number").map((m) => m.id);
+      for (const id of origIds) {
+        if (!curIds.includes(id)) {
+          await fetchJson(API + `/api/members/${id}`, { method: "DELETE" });
+        }
+      }
+      // add new + put edited
+      for (const m of custEdit.members) {
         if (typeof m.id === "string" && m.id.startsWith("new-")) {
-          await apiAddMember(companyId, m);
-        } else {
+          const created = await apiAddMember(companyId, m);
+          m.id = created.id;
+        } else if (typeof m.id === "number") {
           await apiPutMember(m.id, m);
         }
       }
-      overlay.remove();
-      await renderCustomerView();
+      const fresh = await fetchJson(API + `/api/companies/${companyId}`);
+      custOriginal.members = (fresh.members || []).map((m) => ({ ...m }));
+      custEdit.members = custOriginal.members.map((m) => ({ id: m.id, name: m.name, email_prefix: m.email_prefix, title: m.title, tel: m.tel }));
+      btn.textContent = "Updated ✓";
+      renderMemberList();
     } catch (err) {
-      saveBtn.disabled = false;
-      saveBtn.textContent = "Save";
-      alert("Save failed: " + err.message);
+      btn.textContent = "Update";
+      btn.disabled = false;
+      openConfirmModal("Update failed", err.message, () => {});
     }
   });
+
+  renderMemberList();
+}
+
+// Inline edit: replace the clicked element's text with an input, commit on blur/Enter.
+function openInlineEdit(target, currentValue, onCommit) {
+  if (target.querySelector("input")) return;
+  const input = document.createElement("input");
+  input.type = "text";
+  input.value = currentValue;
+  input.style.width = "100%";
+  target.textContent = "";
+  target.appendChild(input);
+  input.focus();
+  input.select();
+  let done = false;
+  const commit = () => {
+    if (done) return;
+    done = true;
+    onCommit(input.value);
+  };
+  input.addEventListener("blur", commit);
+  input.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") { e.preventDefault(); commit(); }
+    else if (e.key === "Escape") { done = true; }
+  });
+}
+
+// --- Ship to section ---------------------------------------------------------
+function renderCustShipToSection(companyId) {
+  const sec = panel.querySelector("#cust-shipto");
+  if (!sec) return;
+
+  const refreshState = () => {
+    const cur = custEdit.shipTo.map((s) => `${s.id}:${s.address}:${s.is_default ? 1 : 0}`).join(";");
+    const orig = custOriginal.ship_to.map((s) => `${s.id}:${s.address}:${s.is_default ? 1 : 0}`).join(";");
+    const dirty = cur !== orig ||
+      custEdit.shipTo.length !== custOriginal.ship_to.length ||
+      custEdit.shipTo.some((s) => typeof s.id === "string" && s.id.startsWith("new-"));
+    sec.querySelector("#ces-update").disabled = !dirty;
+    sec.querySelector("#ces-reset").disabled = !dirty;
+  };
+
+  const renderShipList = () => {
+    const listEl = sec.querySelector("#ces-list");
+    if (!custEdit.shipTo.length) {
+      listEl.innerHTML = '<p class="muted small">No ship-to addresses yet.</p>';
+    } else {
+      listEl.innerHTML = custEdit.shipTo.map((s, i) => `
+        <div class="member-row ${s.is_default ? "default-row" : ""}">
+          <span>
+            <strong data-i="${i}">${escapeHtml(s.address)}</strong>
+            ${s.is_default ? '<span class="badge default-badge">default</span>' : ""}
+          </span>
+          <span class="muted">
+            ${s.is_default ? "" : `<button class="btn tiny" data-default="${i}" title="Set as default">Set default</button>`}
+            <button class="icon-btn danger" data-rm="${i}" title="Remove">✕</button>
+          </span>
+        </div>`).join("");
+      listEl.querySelectorAll("[data-default]").forEach((b) => {
+        b.addEventListener("click", () => {
+          const i = Number(b.dataset.default);
+          custEdit.shipTo.forEach((s, idx) => { s.is_default = idx === i; });
+          renderShipList();
+        });
+      });
+      listEl.querySelectorAll("[data-rm]").forEach((b) => {
+        b.addEventListener("click", () => {
+          const i = Number(b.dataset.rm);
+          const s = custEdit.shipTo[i];
+          const doRemove = () => { custEdit.shipTo.splice(i, 1); renderShipList(); refreshState(); };
+          if (typeof s.id === "number" || (typeof s.id !== "string" || !s.id.startsWith("new-"))) {
+            openConfirmModal("Remove address?", "Remove this ship-to address from the company?", doRemove);
+          } else {
+            doRemove();
+          }
+        });
+      });
+      listEl.querySelectorAll("strong[data-i]").forEach((el) => {
+        el.addEventListener("click", () => {
+          const i = Number(el.dataset.i);
+          openInlineEdit(el, custEdit.shipTo[i].address, (val) => {
+            const v = val.trim();
+            if (v) custEdit.shipTo[i].address = v;
+            renderShipList();
+          });
+        });
+      });
+    }
+    refreshState();
+  };
+
+  sec.innerHTML = `
+    <div class="ship-list" id="ces-list"></div>
+    <div class="member-form">
+      <h3 class="subhead">Add ship-to address</h3>
+      <div class="field">
+        <label for="ces-addr">Address</label>
+        <textarea id="ces-addr" rows="3" placeholder="Full shipping address…" autocomplete="off"></textarea>
+      </div>
+      <div class="actions">
+        <button class="btn" id="ces-add" type="button" disabled>Add address</button>
+      </div>
+    </div>
+    <div class="actions create-final">
+      <button class="btn ghost" id="ces-reset" type="button">Reset</button>
+      <button class="btn primary" id="ces-update" type="button">Update</button>
+    </div>
+  `;
+
+  const addrEl = sec.querySelector("#ces-addr");
+  const addBtn = sec.querySelector("#ces-add");
+  addrEl.addEventListener("input", () => { addBtn.disabled = !addrEl.value.trim(); });
+
+  addBtn.addEventListener("click", () => {
+    if (addBtn.disabled) return;
+    const address = addrEl.value.trim();
+    custEdit.shipTo.push({ id: "new-" + Date.now(), address, is_default: false });
+    addrEl.value = "";
+    addBtn.disabled = true;
+    renderShipList();
+  });
+
+  sec.querySelector("#ces-reset").addEventListener("click", () => {
+    custEdit.shipTo = custOriginal.ship_to.map((s) => ({ id: s.id, address: s.address, is_default: !!s.is_default }));
+    renderShipList();
+  });
+
+  sec.querySelector("#ces-update").addEventListener("click", async () => {
+    const btn = sec.querySelector("#ces-update");
+    if (btn.disabled) return;
+    btn.disabled = true;
+    btn.textContent = "Updating…";
+    try {
+      const origIds = custOriginal.ship_to.filter((s) => typeof s.id === "number").map((s) => s.id);
+      const curIds = custEdit.shipTo.filter((s) => typeof s.id === "number").map((s) => s.id);
+      const newOnes = [];
+      for (const s of custEdit.shipTo) {
+        if (typeof s.id === "string" && s.id.startsWith("new-")) {
+          const created = await fetchJson(API + `/api/ship-to/${companyId}`, {
+            method: "POST", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ address: s.address }),
+          });
+          newOnes.push(created.id != null ? created.id : created);
+        }
+      }
+      for (const id of origIds) {
+        if (!curIds.includes(id)) {
+          await fetchJson(API + `/api/ship-to/${id}`, { method: "DELETE" });
+        }
+      }
+      // set default if any flagged
+      const def = custEdit.shipTo.find((s) => s.is_default);
+      if (def) {
+        const defId = typeof def.id === "number" ? def.id : newOnes[0];
+        if (defId != null) await fetchJson(API + `/api/ship-to/${defId}/default`, { method: "PUT" });
+      }
+      const fresh = await fetchJson(API + `/api/companies/${companyId}`);
+      custOriginal.ship_to = (fresh.ship_to || []).map((s) => ({ ...s }));
+      custEdit.shipTo = custOriginal.ship_to.map((s) => ({ id: s.id, address: s.address, is_default: !!s.is_default }));
+      btn.textContent = "Updated ✓";
+      renderShipList();
+    } catch (err) {
+      btn.textContent = "Update";
+      btn.disabled = false;
+      openConfirmModal("Update failed", err.message, () => {});
+    }
+  });
+
+  renderShipList();
+}
+
+// --- Project section ---------------------------------------------------------
+function renderCustProjectSection(companyId) {
+  const sec = panel.querySelector("#cust-project");
+  if (!sec) return;
+
+  const refreshState = () => {
+    const cur = custEdit.projects.map((p) => `${p.id}:${p.name}`).join(";");
+    const orig = custOriginal.projects.map((p) => `${p.id}:${p.name}`).join(";");
+    const dirty = cur !== orig ||
+      custEdit.projects.length !== custOriginal.projects.length ||
+      custEdit.projects.some((p) => typeof p.id === "string" && p.id.startsWith("new-"));
+    sec.querySelector("#cep-update").disabled = !dirty;
+    sec.querySelector("#cep-reset").disabled = !dirty;
+  };
+
+  const renderProjList = () => {
+    const listEl = sec.querySelector("#cep-list");
+    if (!custEdit.projects.length) {
+      listEl.innerHTML = '<p class="muted small">No projects yet.</p>';
+    } else {
+      listEl.innerHTML = custEdit.projects.map((p, i) => `
+        <div class="member-row">
+          <span><strong data-i="${i}">${escapeHtml(p.name)}</strong></span>
+          <span class="muted">
+            <button class="icon-btn danger" data-rm="${i}" title="Remove">✕</button>
+          </span>
+        </div>`).join("");
+      listEl.querySelectorAll("[data-rm]").forEach((b) => {
+        b.addEventListener("click", () => {
+          const i = Number(b.dataset.rm);
+          const p = custEdit.projects[i];
+          const doRemove = () => { custEdit.projects.splice(i, 1); renderProjList(); refreshState(); };
+          if (typeof p.id === "number" || (typeof p.id !== "string" || !p.id.startsWith("new-"))) {
+            openConfirmModal("Remove project?", "Remove this project from the company?", doRemove);
+          } else {
+            doRemove();
+          }
+        });
+      });
+      listEl.querySelectorAll("strong[data-i]").forEach((el) => {
+        el.addEventListener("click", () => {
+          const i = Number(el.dataset.i);
+          openInlineEdit(el, custEdit.projects[i].name, (val) => {
+            const v = val.trim();
+            if (v) custEdit.projects[i].name = v;
+            renderProjList();
+          });
+        });
+      });
+    }
+    refreshState();
+  };
+
+  sec.innerHTML = `
+    <div class="proj-list" id="cep-list"></div>
+    <div class="member-form">
+      <h3 class="subhead">Add project</h3>
+      <div class="field">
+        <label for="cep-name">Project name</label>
+        <input id="cep-name" type="text" placeholder="e.g. Spring 2026 Collection" autocomplete="off" />
+      </div>
+      <div class="actions">
+        <button class="btn" id="cep-add" type="button" disabled>Add project</button>
+      </div>
+    </div>
+    <div class="actions create-final">
+      <button class="btn ghost" id="cep-reset" type="button">Reset</button>
+      <button class="btn primary" id="cep-update" type="button">Update</button>
+    </div>
+  `;
+
+  const nameEl = sec.querySelector("#cep-name");
+  const addBtn = sec.querySelector("#cep-add");
+  nameEl.addEventListener("input", () => { addBtn.disabled = !nameEl.value.trim(); });
+
+  addBtn.addEventListener("click", async () => {
+    if (addBtn.disabled) return;
+    const name = nameEl.value.trim();
+    addBtn.disabled = true;
+    nameEl.value = "";
+    custEdit.projects.push({ id: "new-" + Date.now(), name });
+    renderProjList();
+  });
+
+  sec.querySelector("#cep-reset").addEventListener("click", () => {
+    custEdit.projects = custOriginal.projects.map((p) => ({ id: p.id, name: p.name }));
+    renderProjList();
+  });
+
+  sec.querySelector("#cep-update").addEventListener("click", async () => {
+    const btn = sec.querySelector("#cep-update");
+    if (btn.disabled) return;
+    btn.disabled = true;
+    btn.textContent = "Updating…";
+    try {
+      const origIds = custOriginal.projects.filter((p) => typeof p.id === "number").map((p) => p.id);
+      const curIds = custEdit.projects.filter((p) => typeof p.id === "number").map((p) => p.id);
+      for (const id of origIds) {
+        if (!curIds.includes(id)) {
+          await fetchJson(API + `/api/projects/${id}`, { method: "DELETE" });
+        }
+      }
+      for (const p of custEdit.projects) {
+        if (typeof p.id === "string" && p.id.startsWith("new-")) {
+          const created = await fetchJson(API + `/api/projects/${companyId}`, {
+            method: "POST", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ name: p.name }),
+          });
+          p.id = created.id != null ? created.id : created;
+        }
+      }
+      const fresh = await fetchJson(API + `/api/companies/${companyId}`);
+      custOriginal.projects = (fresh.projects || []).map((p) => ({ ...p }));
+      custEdit.projects = custOriginal.projects.map((p) => ({ id: p.id, name: p.name }));
+      btn.textContent = "Updated ✓";
+      renderProjList();
+    } catch (err) {
+      btn.textContent = "Update";
+      btn.disabled = false;
+      openConfirmModal("Update failed", err.message, () => {});
+    }
+  });
+
+  renderProjList();
 }
 
 async function removeMember(memberId) {

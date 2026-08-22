@@ -304,6 +304,8 @@ select:focus-visible,
   border-color: #cbd5e1;
   cursor: not-allowed;
 }
+/* pushes Reset to the right edge of the action row (same level as Back/Dummy/Update) */
+.create-actions .dev-reset-spacer { margin-left: auto; }
 
 /* ---- Development / Create ---- */
 .combobox { position: relative; }
