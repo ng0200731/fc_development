@@ -396,6 +396,24 @@ select:focus-visible,
   font-size: 14px;
   flex: 0 0 auto;
 }
+/* "required" / "optional" markers on part headings */
+.req-mark {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: .03em;
+  text-transform: uppercase;
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: var(--destructive-weak);
+  color: var(--destructive);
+  border: 1px solid var(--destructive-border);
+  vertical-align: middle;
+}
+.req-mark.optional {
+  background: #f1f5f9;
+  color: var(--muted);
+  border-color: var(--border-strong);
+}
 .dev-part .field:last-of-type { margin-bottom: 0; }
 
 /* ---- Development / Create: full-width single parts below the grid ---- */

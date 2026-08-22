@@ -851,8 +851,8 @@ function buildDevelopmentPayload() {
   const item = (itemEl ? itemEl.value.trim() : devState.item) || devState.item;
   const product = (productEl ? productEl.value : devState.product) || devState.product;
   if (!companyName || !item || !product) return null;
-  // Part 4 (image / document) is optional in both create and edit — attachments
-  // never block SAVE or UPDATE.
+  // Part 4 image is REQUIRED to save/update on both Create and Edit (enforced
+  // by updateSaveState). Documents remain optional and never block Save/Update.
   const memberName = memberEl && memberEl.value
     ? memberEl.options[memberEl.selectedIndex]?.textContent || ""
     : "";
@@ -1181,19 +1181,19 @@ async function renderDevelopmentCreate() {
         <div id="dev-part3-body"></div>
       </div>
 
-      <!-- 4th part: image + documents (locked until part 1 + part 2 are complete) -->
-      <div class="dev-part locked" id="dev-part4">
-        <h3 class="subhead">4 · Image</h3>
+      <!-- 4th part: image + documents. -->
+      <div class="dev-part" id="dev-part4">
+        <h3 class="subhead">4 · Image <span class="req-mark">required</span></h3>
 
         <div class="dropzone" id="dev-image-drop" tabindex="0">
           <div class="drop-region">
             <span class="drop-icon">🖼️</span>
-            <p class="muted small drop-hint">Drop or paste an image here (optional).<br/>A new image replaces the current one.</p>
+            <p class="muted small drop-hint">Drop or paste an image here — required to save.<br/>A new image replaces the current one.</p>
           </div>
           <div class="thumb-grid" id="dev-image-thumbs"></div>
         </div>
 
-        <h4 class="subhead">Documents</h4>
+        <h4 class="subhead">Documents <span class="req-mark optional">optional</span></h4>
         <div class="dropzone" id="dev-doc-drop" tabindex="0">
           <div class="drop-region">
             <span class="drop-icon">📁</span>
@@ -1224,10 +1224,9 @@ async function renderDevelopmentCreate() {
   const part4 = panel.querySelector("#dev-part4");
 
   const updateUnlock = () => {
-    // Part 4 (image / documents) is optional on both create and edit, so it is
-    // never locked behind the other steps — it stays available the whole time.
+    // Part 4 stays unlocked (always available) — only its image requirement
+    // gates Save/Update. Documents there are optional; the image is required.
     part4.classList.remove("locked");
-    // Part 3 (details) is always visible; only Part 4 (image/docs) is gated.
     renderPart3();
   };
 
@@ -1711,14 +1710,18 @@ async function renderDevelopmentCreate() {
     doc_names: (devOriginal.doc_names || []).slice().sort(),
   });
 
-  // Save gating: every required field filled AND at least one image present.
-  // In edit mode the button is "Update" and must reflect a real change.
+  // Save gating: Parts 1–3 valid AND at least one image attached. The image
+  // (Part 4) is REQUIRED to save or update on both Create and Edit; documents
+  // stay optional. In edit mode the button is "Update" and must reflect a real
+  // change — so an existing image alone does NOT enable Update unless something
+  // else also changed (i.e. isDirty() is true).
   const updateSaveState = () => {
-    // attachments (Part 4) are NEVER required — on both create and edit, SAVE /
-    // UPDATE only depends on the core fields (1–3) being valid.
+    // Image is a required field: at least one attachment must be present to
+    // save or update. Documents are optional and never gate Save/Update.
+    const hasImage = devState.images.length >= 1;
     const allFilled = hiddenEl.value !== "" && memberEl.value !== "" &&
                       devState.item && devState.product &&
-                      part3Valid();
+                      part3Valid() && hasImage;
     const canSave = devEditMode ? (allFilled && isDirty()) : allFilled;
     saveBtn.disabled = !canSave;
     saveBtn.classList.toggle("active", canSave);
