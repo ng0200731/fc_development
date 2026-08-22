@@ -33,6 +33,7 @@ const labels = {
   "customer-edit":   "Customer / Edit",
   "development-create": "Development / Create",
   "development-view":   "Development / View",
+  "development-edit":   "Development / Edit",
 };
 
 // Selectable product types for the Development form.
@@ -68,10 +69,17 @@ sidebar.querySelectorAll(".group-toggle").forEach((btn) => {
 sidebar.querySelectorAll(".nav-item").forEach((item) => {
   item.addEventListener("click", (e) => {
     e.preventDefault();
-    // leaving any edit session when navigating via the sidebar
-    devEditMode = false;
-    devEditId = null;
-    devOriginal = null;
+    // Opening Development / Create from the sidebar always starts a FRESH,
+    // blank create — never pre-filled from a prior edit or a half-typed
+    // create. The edit session lives on its own "development-edit" mini-tab
+    // and is left untouched here.
+    if (item.dataset.target === "development-create") {
+      devEditMode = false;
+      devEditId = null;
+      devOriginal = null;
+      resetDevState();
+    }
+    // Only the Customer edit session (which has its own tab) is cleared here.
     custEditMode = false;
     custEditId = null;
     custOriginal = null;
@@ -80,9 +88,9 @@ sidebar.querySelectorAll(".nav-item").forEach((item) => {
 });
 
 function openTab(target) {
-  // editing an existing development only applies while on the Create screen
-  if (target !== "development-create") { devEditMode = false; devEditId = null; devOriginal = null; }
-  // customer edit session only applies to its own tab
+  // A Development edit session is parked on its own "development-edit" mini-tab
+  // (devEditMode stays on so its state/tab survive a re-open of Create/View).
+  // The Customer edit session has its own tab and is cleared anywhere else.
   if (target !== "customer-edit") { custEditMode = false; custEditId = null; custOriginal = null; }
   openTabs.add(target);
   activeTarget = target;
@@ -109,11 +117,11 @@ function renderTabs() {
     tab.setAttribute("role", "tab");
 
     const label = document.createElement("span");
-    const editingDev = (target === "development-create" && devEditMode);
-    const editingCust = (target === "customer-edit" && custEditMode);
-    label.textContent = editingDev ? "edit" : editingCust ? "customer edit" : (labels[target] || target);
-    tab.appendChild(label);
-    if (editingDev || editingCust) tab.classList.add("edit-mode");
+  const editingDev = (target === "development-edit" && devEditMode);
+  const editingCust = (target === "customer-edit" && custEditMode);
+  label.textContent = editingDev ? "edit" : editingCust ? "customer edit" : (labels[target] || target);
+  tab.appendChild(label);
+  if (editingDev || editingCust) tab.classList.add("edit-mode");
 
     const close = document.createElement("button");
     close.className = "close";
@@ -153,7 +161,7 @@ async function renderPanel() {
     await renderCustomerEdit();
     return;
   }
-  if (activeTarget === "development-create") {
+  if (activeTarget === "development-create" || activeTarget === "development-edit") {
     await renderDevelopmentCreate();
     return;
   }
@@ -708,27 +716,35 @@ function showProjectStep(companyId, companyName, emailSuffix) {
 //   - product type dropdown
 // ---------------------------------------------------------------------------
 
-// Persistent state for the Development / Create tab. Hoisted to module scope so
-// switching to another mini-tab and back does NOT lose what the user entered
-// (company / member / product / dimensions / pasted images / dropped docs).
-let devState = {
-  companyId: "",
-  companyName: "",
-  memberId: "",
-  memberName: "",
-  projectId: "",
-  projectName: "",
-  item: "",
-  product: "",
-  // Part 3 details (persisted so tab switches keep them)
-  height: "",
-  width: "",
-  raisedHeight: "",
-  noOfColor: "",
-  pantones: [],   // [{ value, color }]  one entry per color
-  images: [],   // [{ id, name, url }]
-  docs: [],     // [{ id, name, file }]
-};
+// Persistent state for the Development forms. There are TWO independent copies:
+//   • devCreateState — the Create tab's working draft
+//   • devEditState   — the Edit tab's working copy (seeded from a saved record)
+// `devState` is a mutable binding that points at whichever one is currently
+// active, so the Create and Edit tabs each keep their own data and can be
+// switched between freely without clobbering each other.
+function blankDevState() {
+  return {
+    companyId: "",
+    companyName: "",
+    memberId: "",
+    memberName: "",
+    projectId: "",
+    projectName: "",
+    item: "",
+    product: "",
+    // Part 3 details
+    height: "",
+    width: "",
+    raisedHeight: "",
+    noOfColor: "",
+    pantones: [],   // [{ value, color }]  one entry per color
+    images: [],   // [{ id, name, url }]
+    docs: [],     // [{ id, name, file }]
+  };
+}
+const devCreateState = blankDevState();
+const devEditState   = blankDevState();
+let devState = devCreateState;
 
 // Pool of sample images (from C:\Users\ng\Desktop\canvas_source) used by the
 // Dummy button and the Development / View image column. Fetched once.
@@ -822,24 +838,25 @@ function imageUrl(name) {
   return API + "/sample-images/" + encodeURI(name);
 }
 
-// Reset the persistent development state (used by Reset button + post-save
-// "continue with same customer" path that only clears parts 2+).
+// Clear the Create tab's working draft. The Edit tab uses its own separate
+// state (devEditState) so a fresh Create never inherits edit data.
 function resetDevState() {
-  devState.companyId = "";
-  devState.companyName = "";
-  devState.memberId = "";
-  devState.memberName = "";
-  devState.projectId = "";
-  devState.projectName = "";
-  devState.item = "";
-  devState.product = "";
-  devState.height = "";
-  devState.width = "";
-  devState.raisedHeight = "";
-  devState.noOfColor = "";
-  devState.pantones = [];
-  devState.images = [];
-  devState.docs = [];
+  const s = devCreateState;
+  s.companyId = "";
+  s.companyName = "";
+  s.memberId = "";
+  s.memberName = "";
+  s.projectId = "";
+  s.projectName = "";
+  s.item = "";
+  s.product = "";
+  s.height = "";
+  s.width = "";
+  s.raisedHeight = "";
+  s.noOfColor = "";
+  s.pantones = [];
+  s.images = [];
+  s.docs = [];
 }
 
 // Build the development payload from current devState + DOM inputs.
@@ -925,14 +942,14 @@ function openPostSaveModal() {
   });
   overlay.querySelector("#ps-continue").addEventListener("click", () => {
     overlay.remove();
-    // keep Part 1 (company/member), clear the rest
-    const keepCompanyId = devState.companyId;
-    const keepCompanyName = devState.companyName;
-    const keepMemberId = devState.memberId;
+    // keep Part 1 (company/member) on the Create tab, clear the rest
+    const keepCompanyId = devCreateState.companyId;
+    const keepCompanyName = devCreateState.companyName;
+    const keepMemberId = devCreateState.memberId;
     resetDevState();
-    devState.companyId = keepCompanyId;
-    devState.companyName = keepCompanyName;
-    devState.memberId = keepMemberId;
+    devCreateState.companyId = keepCompanyId;
+    devCreateState.companyName = keepCompanyName;
+    devCreateState.memberId = keepMemberId;
     renderDevelopmentCreate();
   });
 }
@@ -1118,6 +1135,12 @@ function findPantoneMatches(query, limit = 8) {
 }
 
 async function renderDevelopmentCreate() {
+  // Point the shared `devState` binding at whichever draft is active so every
+  // downstream read/write (inputs, dummy, save, image/doc stores) hits the
+  // correct tab's own state. The Create tab uses devCreateState; the Edit tab
+  // uses devEditState — they never share or clobber each other.
+  devState = activeTarget === "development-edit" ? devEditState : devCreateState;
+
   panel.innerHTML = `
     <h2>${devEditMode ? "Development / Edit" : "Development / Create"}</h2>
 
@@ -1943,39 +1966,43 @@ async function renderDevelopmentCreate() {
   }));
 
   // In edit mode, "Back" discards the edit and returns to Development / View
-  // (no save). Only shown when devEditMode is on.
+  // (no save). Only shown when devEditMode is on. The edit lives on the
+  // "development-edit" mini-tab; closing it drops back to the View list. Only
+  // the Edit draft is cleared (the Create draft is left intact on its tab).
   const backBtn = panel.querySelector("#dev-back");
   if (backBtn) {
     backBtn.addEventListener("click", () => {
       devEditMode = false;
       devEditId = null;
       devOriginal = null;
-      resetDevState();
+      // clear only the Edit tab's state, not the Create tab's
+      Object.assign(devEditState, blankDevState());
       openTab("development-view");
     });
   }
 
   // In edit mode, "Reset" restores every field to the originally-loaded record
   // (the snapshot kept in devOriginal), discarding any edits made this session.
-  // `resetBtn` is already declared earlier in this function scope, so reuse it.
+  // Operates on the Edit tab's own state (devEditState).
   if (resetBtn) {
     resetBtn.addEventListener("click", () => {
       if (!devOriginal) return;
-      devState.companyId = devOriginal.company_id != null ? String(devOriginal.company_id) : "";
-      devState.companyName = devOriginal.company_name || "";
-      devState.memberId = devOriginal.member_id != null ? String(devOriginal.member_id) : "";
-      devState.memberName = devOriginal.member_name || "";
-      devState.projectId = devOriginal.project_id != null ? String(devOriginal.project_id) : "";
-      devState.projectName = devOriginal.project_name || "";
-      devState.item = devOriginal.item_name || "";
-      devState.product = devOriginal.product_type || "";
-      devState.height = devOriginal.height != null ? String(devOriginal.height) : "";
-      devState.width = devOriginal.width != null ? String(devOriginal.width) : "";
-      devState.raisedHeight = devOriginal.raised_height != null ? String(devOriginal.raised_height) : "";
-      devState.noOfColor = devOriginal.no_of_color != null ? String(devOriginal.no_of_color) : "";
-      devState.pantones = Array.isArray(devOriginal.pantones) ? devOriginal.pantones.map((p) => ({ value: p.value || "", color: p.color || "#000000" })) : [];
-      devState.images = (devOriginal.image_names || []).map((n) => ({ id: "eimg-" + n, name: n, url: assetUrl(n) }));
-      devState.docs = (devOriginal.doc_names || []).map((name, i) => ({ id: "edoc-" + devEditId + "-" + i, name, file: null }));
+      const s = devEditState;
+      s.companyId = devOriginal.company_id != null ? String(devOriginal.company_id) : "";
+      s.companyName = devOriginal.company_name || "";
+      s.memberId = devOriginal.member_id != null ? String(devOriginal.member_id) : "";
+      s.memberName = devOriginal.member_name || "";
+      s.projectId = devOriginal.project_id != null ? String(devOriginal.project_id) : "";
+      s.projectName = devOriginal.project_name || "";
+      s.item = devOriginal.item_name || "";
+      s.product = devOriginal.product_type || "";
+      s.height = devOriginal.height != null ? String(devOriginal.height) : "";
+      s.width = devOriginal.width != null ? String(devOriginal.width) : "";
+      s.raisedHeight = devOriginal.raised_height != null ? String(devOriginal.raised_height) : "";
+      s.noOfColor = devOriginal.no_of_color != null ? String(devOriginal.no_of_color) : "";
+      s.pantones = Array.isArray(devOriginal.pantones) ? devOriginal.pantones.map((p) => ({ value: p.value || "", color: p.color || "#000000" })) : [];
+      s.images = (devOriginal.image_names || []).map((n) => ({ id: "eimg-" + n, name: n, url: assetUrl(n) }));
+      s.docs = (devOriginal.doc_names || []).map((name, i) => ({ id: "edoc-" + devEditId + "-" + i, name, file: null }));
       // re-render so inputs + thumbnails reflect the restored original state
       renderDevelopmentCreate();
     });
@@ -2002,6 +2029,8 @@ async function renderDevelopmentCreate() {
         devEditId = null;
         devOriginal = null;
         saveBtn.textContent = "Updated ✓";
+        // close the "development-edit" mini-tab and return to the View list
+        if (openTabs.has("development-edit")) openTabs.delete("development-edit");
         openTab("development-view");
       } else {
         await fetchJson(API + "/api/developments", {
@@ -2288,8 +2317,9 @@ async function deleteDevelopment(id) {
 }
 
 // Load an existing development into the Create screen (pre-filled) and switch
-// the mini-tab to "edit" (red background / black text). Reuses devState so the
-// Create renderer restores every field, then the Update button PUTs the record.
+// the mini-tab to "edit" (red background / black text). Reuses devEditState so
+// the Create renderer restores every field, then the Update button PUTs the
+// record. The Edit tab keeps its OWN state separate from the Create tab.
 async function editDevelopmentInCreate(id) {
   let rec;
   try {
@@ -2299,26 +2329,26 @@ async function editDevelopmentInCreate(id) {
     return;
   }
 
-  // seed the persistent state from the record
-  resetDevState();
-  devState.companyId = rec.company_id != null ? String(rec.company_id) : "";
-  devState.companyName = rec.company_name || "";
-  devState.memberId = rec.member_id != null ? String(rec.member_id) : "";
-  devState.memberName = rec.member_name || "";
-  devState.projectId = rec.project_id != null ? String(rec.project_id) : "";
-  devState.projectName = rec.project_name || "";
-  devState.item = rec.item_name || "";
-  devState.product = rec.product_type || "";
+  // seed the Edit tab's own state from the record (never the Create draft)
+  const s = devEditState;
+  s.companyId = rec.company_id != null ? String(rec.company_id) : "";
+  s.companyName = rec.company_name || "";
+  s.memberId = rec.member_id != null ? String(rec.member_id) : "";
+  s.memberName = rec.member_name || "";
+  s.projectId = rec.project_id != null ? String(rec.project_id) : "";
+  s.projectName = rec.project_name || "";
+  s.item = rec.item_name || "";
+  s.product = rec.product_type || "";
 
   // Part 3 details
-  devState.height = rec.height != null ? String(rec.height) : "";
-  devState.width = rec.width != null ? String(rec.width) : "";
-  devState.raisedHeight = rec.raised_height != null ? String(rec.raised_height) : "";
-  devState.noOfColor = rec.no_of_color != null ? String(rec.no_of_color) : "";
-  devState.pantones = Array.isArray(rec.pantones) ? rec.pantones.map((p) => ({ value: p.value || "", color: p.color || "#000000" })) : [];
+  s.height = rec.height != null ? String(rec.height) : "";
+  s.width = rec.width != null ? String(rec.width) : "";
+  s.raisedHeight = rec.raised_height != null ? String(rec.raised_height) : "";
+  s.noOfColor = rec.no_of_color != null ? String(rec.no_of_color) : "";
+  s.pantones = Array.isArray(rec.pantones) ? rec.pantones.map((p) => ({ value: p.value || "", color: p.color || "#000000" })) : [];
 
   // images — resolve each saved name to its servable URL (sample or upload).
-  devState.images = (rec.image_names || []).map((n) => ({
+  s.images = (rec.image_names || []).map((n) => ({
     id: "eimg-" + n,
     name: n,
     url: assetUrl(n),
@@ -2327,7 +2357,7 @@ async function editDevelopmentInCreate(id) {
   // documents — seed from saved doc_names. The bytes are gone after a reload,
   // so we keep just the name (file: null → shows "saved"). They re-link to the
   // persisted /uploads/ file when edited/saved again.
-  devState.docs = (rec.doc_names || []).map((name, i) => ({
+  s.docs = (rec.doc_names || []).map((name, i) => ({
     id: "edoc-" + rec.id + "-" + i,
     name,
     file: null,
@@ -2336,7 +2366,7 @@ async function editDevelopmentInCreate(id) {
   devEditMode = true;
   devEditId = rec.id;
   devOriginal = rec;   // keep the pristine record for dirty comparison
-  openTab("development-create");
+  openTab("development-edit");
 }
 
 // Edit modal for a development record. Prefilled with all fields + images.
