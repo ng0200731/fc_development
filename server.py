@@ -76,6 +76,8 @@ def init_db():
             company_name  TEXT NOT NULL,
             member_id     INTEGER,
             member_name   TEXT,
+            project_id    INTEGER,
+            project_name  TEXT,
             item_name     TEXT NOT NULL,
             product_type  TEXT NOT NULL,
             height        REAL,
@@ -141,6 +143,8 @@ def _ensure_company_columns(conn):
 # is { column_name: SQL type }. init_db() adds any that are missing.
 _DEV_MISSING_COLUMNS = {
     "doc_names": "TEXT",
+    "project_id": "INTEGER",
+    "project_name": "TEXT",
 }
 
 
@@ -468,11 +472,14 @@ def api_delete_company(handler, cid):
     if not comp:
         conn.close()
         return json_response(handler, {"error": "company not found"}, 404)
-    # delete members, ship-to addresses, and projects first (FK enforcement may
-    # be off in older SQLite sessions), then the company row itself.
+    # delete members, ship-to addresses, projects, and developments first
+    # (FK enforcement may be off in older SQLite sessions, and developments has
+    # no FK at all), then the company row itself. This removes the whole company
+    # and every record tied to it.
     conn.execute("DELETE FROM members WHERE company_id = ?", (cid,))
     conn.execute("DELETE FROM ship_to WHERE company_id = ?", (cid,))
     conn.execute("DELETE FROM projects WHERE company_id = ?", (cid,))
+    conn.execute("DELETE FROM developments WHERE company_id = ?", (cid,))
     conn.execute("DELETE FROM companies WHERE id = ?", (cid,))
     conn.commit()
     conn.close()
@@ -700,6 +707,8 @@ def _dev_insert_or_update(conn, did, data):
         company_name,
         data.get("member_id") if data.get("member_id") is not None else None,
         (data.get("member_name") or "").strip() or None,
+        data.get("project_id") if data.get("project_id") is not None else None,
+        (data.get("project_name") or "").strip() or None,
         item_name,
         product_type,
         _to_float(data.get("height")),
@@ -714,17 +723,17 @@ def _dev_insert_or_update(conn, did, data):
         cur = conn.cursor()
         cur.execute(
             "INSERT INTO developments "
-            "(company_id, company_name, member_id, member_name, item_name, "
-            "product_type, height, width, raised_height, no_of_color, pantones, "
+            "(company_id, company_name, member_id, member_name, project_id, project_name, "
+            "item_name, product_type, height, width, raised_height, no_of_color, pantones, "
             "image_names, doc_names, created_at, updated_at) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             vals + (now_iso(), now_iso()),
         )
         return cur.lastrowid
     conn.execute(
         "UPDATE developments SET "
-        "company_id=?, company_name=?, member_id=?, member_name=?, item_name=?, "
-        "product_type=?, height=?, width=?, raised_height=?, no_of_color=?, "
+        "company_id=?, company_name=?, member_id=?, member_name=?, project_id=?, project_name=?, "
+        "item_name=?, product_type=?, height=?, width=?, raised_height=?, no_of_color=?, "
         "pantones=?, image_names=?, doc_names=?, updated_at=? WHERE id=?",
         vals + (now_iso(), did),
     )

@@ -716,6 +716,8 @@ let devState = {
   companyName: "",
   memberId: "",
   memberName: "",
+  projectId: "",
+  projectName: "",
   item: "",
   product: "",
   // Part 3 details (persisted so tab switches keep them)
@@ -827,6 +829,8 @@ function resetDevState() {
   devState.companyName = "";
   devState.memberId = "";
   devState.memberName = "";
+  devState.projectId = "";
+  devState.projectName = "";
   devState.item = "";
   devState.product = "";
   devState.height = "";
@@ -846,7 +850,9 @@ function buildDevelopmentPayload() {
   const companyName = devState.companyName;
   const item = (itemEl ? itemEl.value.trim() : devState.item) || devState.item;
   const product = (productEl ? productEl.value : devState.product) || devState.product;
-  if (!companyName || !item || !product || devState.images.length < 1) return null;
+  if (!companyName || !item || !product) return null;
+  // Part 4 (image / document) is optional in both create and edit — attachments
+  // never block SAVE or UPDATE.
   const memberName = memberEl && memberEl.value
     ? memberEl.options[memberEl.selectedIndex]?.textContent || ""
     : "";
@@ -855,6 +861,8 @@ function buildDevelopmentPayload() {
     company_name: companyName,
     member_id: devState.memberId ? Number(devState.memberId) : null,
     member_name: memberName || null,
+    project_id: devState.projectId ? Number(devState.projectId) : null,
+    project_name: devState.projectName || null,
     item_name: item,
     product_type: product,
     height: devState.height || null,
@@ -887,6 +895,14 @@ function openConfirmModal(title, message, onConfirm) {
     overlay.remove();
     onConfirm();
   });
+}
+
+function showToast(message, isError) {
+  const el = document.createElement("div");
+  el.className = "toast" + (isError ? " toast-error" : "");
+  el.textContent = message;
+  document.body.appendChild(el);
+  setTimeout(() => el.remove(), 3500);
 }
 
 // Centered post-save modal: continue with the same customer, or go to View.
@@ -942,6 +958,14 @@ async function fillDummyDevelopment(ctx) {
       memberEl.value = m.value;
       devState.memberId = m.value;
     }
+    // pick a saved project for this company if one exists (optional)
+    const projOpts = [...projectEl.querySelectorAll("option")].filter((o) => o.value !== "");
+    if (projOpts.length) {
+      const p = rnd(projOpts);
+      projectEl.value = p.value;
+      devState.projectId = p.value;
+      devState.projectName = p.textContent;
+    }
 
     // 2) item name + product type
     const ITEMS = ["Spring Patch", "Logo Badge", "Care Label", "Brand Tab", "Woven Emblem",
@@ -970,7 +994,8 @@ async function fillDummyDevelopment(ctx) {
       devState.pantones.length = 0;
     }
 
-    // 4) single image from the pool (a development requires exactly one image)
+    // 4) single image from the pool (attachments are optional — but the Dummy
+    //    flow still seeds one so the record has a thumbnail)
     const images = await ensureImagePool();
     // Clear in place (length = 0) rather than reassigning — the Render closure
     // captured `devState.images` by reference, so a reassignment would orphan
@@ -1111,8 +1136,9 @@ async function renderDevelopmentCreate() {
           <button class="icon-btn" id="dev-refresh" type="button" title="Refresh customer database">⟳</button>
         </h3>
 
-        <div class="dim-row">
+        <div class="field-stack">
           <div class="field" id="dev-company-field">
+            <label for="dev-company">Company</label>
             <div class="combobox" id="dev-company-wrap">
               <input id="dev-company" type="text" autocomplete="off"
                      placeholder="Type ≥ 3 letters to search…" disabled />
@@ -1122,8 +1148,16 @@ async function renderDevelopmentCreate() {
           </div>
 
           <div class="field" id="dev-member-field">
+            <label for="dev-member">Member</label>
             <select id="dev-member" disabled>
               <option value="">— select a company first —</option>
+            </select>
+          </div>
+
+          <div class="field" id="dev-project-field">
+            <label for="dev-project">Project <span class="hint">(optional)</span></label>
+            <select id="dev-project" disabled>
+              <option value="">— no project —</option>
             </select>
           </div>
         </div>
@@ -1154,7 +1188,7 @@ async function renderDevelopmentCreate() {
         <div class="dropzone" id="dev-image-drop" tabindex="0">
           <div class="drop-region">
             <span class="drop-icon">🖼️</span>
-            <p class="muted small drop-hint">Drop or paste <strong>one</strong> image here.<br/>A new image replaces the current one.</p>
+            <p class="muted small drop-hint">Drop or paste an image here (optional).<br/>A new image replaces the current one.</p>
           </div>
           <div class="thumb-grid" id="dev-image-thumbs"></div>
         </div>
@@ -1177,6 +1211,7 @@ async function renderDevelopmentCreate() {
   const hiddenEl = panel.querySelector("#dev-company-id");
   const listEl   = panel.querySelector("#dev-company-list");
   const memberEl = panel.querySelector("#dev-member");
+  const projectEl = panel.querySelector("#dev-project");
   const productEl = panel.querySelector("#dev-product");
   const itemEl = panel.querySelector("#dev-item");
   const saveBtn = panel.querySelector("#dev-save");
@@ -1189,10 +1224,9 @@ async function renderDevelopmentCreate() {
   const part4 = panel.querySelector("#dev-part4");
 
   const updateUnlock = () => {
-    // In edit mode the record is already complete, so trust restored state and
-    // unlock immediately instead of waiting for the async member load.
-    const allDone = (hiddenEl.value !== "" && memberEl.value !== "" && devState.product) || devEditMode;
-    part4.classList.toggle("locked", !allDone);
+    // Part 4 (image / documents) is optional on both create and edit, so it is
+    // never locked behind the other steps — it stays available the whole time.
+    part4.classList.remove("locked");
     // Part 3 (details) is always visible; only Part 4 (image/docs) is gated.
     renderPart3();
   };
@@ -1230,6 +1264,13 @@ async function renderDevelopmentCreate() {
     memberEl.innerHTML = `<option value="${devState.memberId}">${escapeHtml(devState.memberName || devState.memberId)}</option>`;
     memberEl.value = devState.memberId;
     memberEl.disabled = false;
+    // seed the project dropdown synchronously so a saved project restores
+    // without waiting for the async company load to finish.
+    if (devState.projectId) {
+      projectEl.innerHTML = `<option value="${devState.projectId}">${escapeHtml(devState.projectName || devState.projectId)}</option>`;
+      projectEl.value = devState.projectId;
+      projectEl.disabled = false;
+    }
   }
 
   // refresh = re-fetch latest companies + members from the customer database
@@ -1447,6 +1488,8 @@ async function renderDevelopmentCreate() {
     devState.companyId = "";
     devState.companyName = "";
     devState.memberId = "";
+    devState.projectId = "";
+    devState.projectName = "";
     updateNextState();
   };
 
@@ -1464,9 +1507,26 @@ async function renderDevelopmentCreate() {
       if (restoreMemberId != null && members.some((m) => String(m.id) === String(restoreMemberId))) {
         memberEl.value = String(restoreMemberId);
       }
+      // populate the project dropdown from this company's saved projects
+      const projects = comp.projects || [];
+      projectEl.innerHTML = projects.length
+        ? `<option value="">— no project —</option>` +
+          projects.map((p) =>
+            `<option value="${p.id}">${escapeHtml(p.name)}</option>`).join("")
+        : `<option value="">— no project —</option>`;
+      projectEl.disabled = false;
+      // restore previously selected project if it still exists
+      if (devState.projectId && projects.some((p) => String(p.id) === String(devState.projectId))) {
+        projectEl.value = String(devState.projectId);
+      } else {
+        devState.projectId = "";
+        devState.projectName = "";
+      }
     } catch (err) {
       memberEl.innerHTML = `<option value="">— load failed —</option>`;
       memberEl.disabled = true;
+      projectEl.innerHTML = `<option value="">— no project —</option>`;
+      projectEl.disabled = false;
     }
     updateNextState();
   };
@@ -1498,6 +1558,8 @@ async function renderDevelopmentCreate() {
     devState.companyId = String(id);
     devState.companyName = name;
     devState.memberId = "";
+    devState.projectId = "";
+    devState.projectName = "";
     loadMembers(id);
     updateNextState();
   };
@@ -1511,6 +1573,8 @@ async function renderDevelopmentCreate() {
     devState.companyId = "";
     devState.companyName = "";
     devState.memberId = "";
+    devState.projectId = "";
+    devState.projectName = "";
     if (q.length < 3) {
       listEl.hidden = true;
       updateNextState();
@@ -1557,6 +1621,17 @@ async function renderDevelopmentCreate() {
     devState.memberId = memberEl.value;
     updateNextState();
   });
+  projectEl.addEventListener("change", () => {
+    // Project is optional; store the selected id + name (or clear both).
+    if (projectEl.value) {
+      devState.projectId = projectEl.value;
+      devState.projectName = projectEl.options[projectEl.selectedIndex]?.textContent || "";
+    } else {
+      devState.projectId = "";
+      devState.projectName = "";
+    }
+    updateSaveState();
+  });
   productEl.addEventListener("change", () => {
     devState.product = productEl.value;
     updateNextState();
@@ -1598,6 +1673,7 @@ async function renderDevelopmentCreate() {
   const currentSignature = () => ({
     company_id: devState.companyId ? Number(devState.companyId) : null,
     member_id: devState.memberId ? Number(devState.memberId) : null,
+    project_id: devState.projectId ? Number(devState.projectId) : null,
     item_name: (devState.item || "").trim(),
     product_type: devState.product || "",
     height: devState.height ? Number(devState.height) : null,
@@ -1613,6 +1689,7 @@ async function renderDevelopmentCreate() {
   const isDirty = () => !devOriginal || !sigEq(currentSignature(), {
     company_id: devOriginal.company_id != null ? Number(devOriginal.company_id) : null,
     member_id: devOriginal.member_id != null ? Number(devOriginal.member_id) : null,
+    project_id: devOriginal.project_id != null ? Number(devOriginal.project_id) : null,
     item_name: (devOriginal.item_name || "").trim(),
     product_type: devOriginal.product_type || "",
     height: devOriginal.height != null ? Number(devOriginal.height) : null,
@@ -1627,9 +1704,10 @@ async function renderDevelopmentCreate() {
   // Save gating: every required field filled AND at least one image present.
   // In edit mode the button is "Update" and must reflect a real change.
   const updateSaveState = () => {
+    // attachments (Part 4) are NEVER required — on both create and edit, SAVE /
+    // UPDATE only depends on the core fields (1–3) being valid.
     const allFilled = hiddenEl.value !== "" && memberEl.value !== "" &&
                       devState.item && devState.product &&
-                      devState.images.length >= 1 &&
                       part3Valid();
     const canSave = devEditMode ? (allFilled && isDirty()) : allFilled;
     saveBtn.disabled = !canSave;
@@ -1785,15 +1863,18 @@ async function renderDevelopmentCreate() {
       b.addEventListener("click", () => {
         const id = b.dataset.rm;
         const idx = docs.findIndex((x) => x.id === id);
-        if (idx >= 0) { docs.splice(idx, 1); renderDocList(); }
+        if (idx >= 0) { docs.splice(idx, 1); renderDocList(); updateSaveState(); }
       });
     });
     docList.querySelectorAll(".doc-name").forEach((inp) => {
       inp.addEventListener("input", () => {
         const d = docs.find((x) => x.id === inp.dataset.id);
-        if (d) d.name = inp.value;
+        if (d) { d.name = inp.value; updateSaveState(); }
       });
     });
+    // A doc add/remove/rename changes the dirty signature — re-evaluate now so
+    // the Update button lights up whenever Part 4 actually changed.
+    updateSaveState();
   };
 
   // Documents are never stored as blob URLs — they're uploaded to /api/uploads
@@ -1871,6 +1952,8 @@ async function renderDevelopmentCreate() {
       devState.companyName = devOriginal.company_name || "";
       devState.memberId = devOriginal.member_id != null ? String(devOriginal.member_id) : "";
       devState.memberName = devOriginal.member_name || "";
+      devState.projectId = devOriginal.project_id != null ? String(devOriginal.project_id) : "";
+      devState.projectName = devOriginal.project_name || "";
       devState.item = devOriginal.item_name || "";
       devState.product = devOriginal.product_type || "";
       devState.height = devOriginal.height != null ? String(devOriginal.height) : "";
@@ -1889,7 +1972,7 @@ async function renderDevelopmentCreate() {
     if (saveBtn.disabled) return;
     const payload = buildDevelopmentPayload();
     if (!payload) {
-      openConfirmModal("Cannot save", "Please fill company, member, item, product type, and at least one image.", () => {});
+      openConfirmModal("Cannot save", "Please fill company, member, item, and product type.", () => {});
       return;
     }
     saveBtn.disabled = true;
@@ -2177,6 +2260,8 @@ async function editDevelopmentInCreate(id) {
   devState.companyName = rec.company_name || "";
   devState.memberId = rec.member_id != null ? String(rec.member_id) : "";
   devState.memberName = rec.member_name || "";
+  devState.projectId = rec.project_id != null ? String(rec.project_id) : "";
+  devState.projectName = rec.project_name || "";
   devState.item = rec.item_name || "";
   devState.product = rec.product_type || "";
 
@@ -2543,7 +2628,7 @@ function paintView() {
     const checked = viewSelected.has("c:" + r.companyId);
     const editBtn = r.memberId != null
       ? `<button class="icon-btn" data-edit="${r.companyId}" title="Edit">✎</button>
-         <button class="icon-btn danger" data-del-company="${r.companyId}" title="Delete company">🗑</button>`
+         <button class="icon-btn danger" data-del-member="${r.memberId}" title="Delete member">🗑</button>`
       : `<button class="icon-btn" data-edit="${r.companyId}" title="Edit company">✎</button>
          <button class="icon-btn danger" data-del-company="${r.companyId}" title="Delete company">🗑</button>`;
     return `
@@ -2656,6 +2741,9 @@ function paintView() {
   panel.querySelectorAll("[data-del-company]").forEach((b) => {
     b.addEventListener("click", () => deleteCompany(Number(b.dataset.delCompany)));
   });
+  panel.querySelectorAll("[data-del-member]").forEach((b) => {
+    b.addEventListener("click", () => removeMember(Number(b.dataset.delMember)));
+  });
 }
 
 // helper: are all selectable company keys currently selected?
@@ -2664,14 +2752,19 @@ async function deleteCompany(companyId) {
   const company = viewCustomers.find((c) => c.id === companyId);
   const name = company ? company.name : ("#" + companyId);
   const count = company ? (company.members || []).length : 0;
-  if (!confirm(`Delete company "${name}"${count ? ` and its ${count} member(s)` : ""}?`)) return;
-  try {
-    await fetchJson(API + `/api/companies/${companyId}`, { method: "DELETE" });
-    viewSelected.delete("c:" + companyId);
-    await renderCustomerView();
-  } catch (err) {
-    alert("Delete failed: " + err.message);
-  }
+  openConfirmModal(
+    "Delete company",
+    `Delete company "${name}"${count ? ` and its ${count} member(s)` : ""}?`,
+    async () => {
+      try {
+        await fetchJson(API + `/api/companies/${companyId}`, { method: "DELETE" });
+        viewSelected.delete("c:" + companyId);
+        await renderCustomerView();
+      } catch (err) {
+        showToast("Delete failed: " + err.message, true);
+      }
+    }
+  );
 }
 
 // Unified batch delete: companies only (each company takes its members with it).
@@ -3015,6 +3108,8 @@ function renderCustMemberSection(companyId) {
 
   sec.querySelector("#cem-reset").addEventListener("click", () => {
     custEdit.members = custOriginal.members.map((m) => ({ id: m.id, name: m.name, email_prefix: m.email_prefix, title: m.title, tel: m.tel }));
+    nameEl.value = prefixEl.value = titleEl.value = telEl.value = "";
+    validateAdd();
     renderMemberList();
   });
 
@@ -3177,6 +3272,8 @@ function renderCustShipToSection(companyId) {
 
   sec.querySelector("#ces-reset").addEventListener("click", () => {
     custEdit.shipTo = custOriginal.ship_to.map((s) => ({ id: s.id, address: s.address, is_default: !!s.is_default }));
+    addrEl.value = "";
+    addBtn.disabled = true;
     renderShipList();
   });
 
@@ -3310,6 +3407,8 @@ function renderCustProjectSection(companyId) {
 
   sec.querySelector("#cep-reset").addEventListener("click", () => {
     custEdit.projects = custOriginal.projects.map((p) => ({ id: p.id, name: p.name }));
+    nameEl.value = "";
+    addBtn.disabled = true;
     renderProjList();
   });
 
@@ -3351,13 +3450,18 @@ function renderCustProjectSection(companyId) {
 }
 
 async function removeMember(memberId) {
-  if (!confirm("Remove this member?")) return;
-  try {
-    await fetchJson(API + `/api/members/${memberId}`, { method: "DELETE" });
-    await renderCustomerView();
-  } catch (err) {
-    alert("Remove failed: " + err.message);
-  }
+  openConfirmModal(
+    "Delete member",
+    "Delete 1 member?",
+    async () => {
+      try {
+        await fetchJson(API + `/api/members/${memberId}`, { method: "DELETE" });
+        await renderCustomerView();
+      } catch (err) {
+        showToast("Remove failed: " + err.message, true);
+      }
+    }
+  );
 }
 
 // ---------------------------------------------------------------------------
