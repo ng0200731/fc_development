@@ -125,6 +125,12 @@ def init_db():
             project_id    INTEGER,
             project_name  TEXT,
             item_name     TEXT,
+            product_type  TEXT,
+            height        REAL,
+            width         REAL,
+            raised_height REAL,
+            no_of_color   INTEGER,
+            pantones      TEXT,
             image_names   TEXT,
             doc_names     TEXT,
             created_at    TEXT NOT NULL,
@@ -180,6 +186,12 @@ def _ensure_dev_columns(conn):
 _ENQUIRY_MISSING_COLUMNS = {
     "project_id": "INTEGER",
     "project_name": "TEXT",
+    "product_type": "TEXT",
+    "height": "REAL",
+    "width": "REAL",
+    "raised_height": "REAL",
+    "no_of_color": "INTEGER",
+    "pantones": "TEXT",
     "doc_names": "TEXT",
 }
 
@@ -919,7 +931,7 @@ def api_delete_development(handler, did):
 
 def _enquiry_row_to_payload(row):
     out = dict(row)
-    for k in ("image_names", "doc_names"):
+    for k in ("pantones", "image_names", "doc_names"):
         if out.get(k):
             try:
                 out[k] = json.loads(out[k])
@@ -953,6 +965,10 @@ def _enquiry_validate(data):
 def _enquiry_insert_or_update(conn, eid, data):
     company_name = (data.get("company_name") or "").strip()
     item_name = (data.get("item_name") or "").strip()
+    product_type = (data.get("product_type") or "").strip()
+    pantones = data.get("pantones")
+    if isinstance(pantones, (list, dict)):
+        pantones = json.dumps(pantones, ensure_ascii=False)
     image_names = data.get("image_names")
     if isinstance(image_names, (list, dict)):
         image_names = json.dumps(image_names, ensure_ascii=False)
@@ -967,6 +983,12 @@ def _enquiry_insert_or_update(conn, eid, data):
         data.get("project_id") if data.get("project_id") is not None else None,
         (data.get("project_name") or "").strip() or None,
         item_name,
+        product_type,
+        _to_float(data.get("height")),
+        _to_float(data.get("width")),
+        _to_float(data.get("raised_height")),
+        _to_int(data.get("no_of_color")),
+        pantones,
         image_names,
         doc_names,
     )
@@ -975,15 +997,17 @@ def _enquiry_insert_or_update(conn, eid, data):
         cur.execute(
             "INSERT INTO enquiries "
             "(company_id, company_name, member_id, member_name, project_id, project_name, "
-            "item_name, image_names, doc_names, created_at, updated_at) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+            "item_name, product_type, height, width, raised_height, no_of_color, pantones, "
+            "image_names, doc_names, created_at, updated_at) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             vals + (now_iso(), now_iso()),
         )
         return cur.lastrowid
     conn.execute(
         "UPDATE enquiries SET "
         "company_id=?, company_name=?, member_id=?, member_name=?, project_id=?, project_name=?, "
-        "item_name=?, image_names=?, doc_names=?, updated_at=? WHERE id=?",
+        "item_name=?, product_type=?, height=?, width=?, raised_height=?, no_of_color=?, "
+        "pantones=?, image_names=?, doc_names=?, updated_at=? WHERE id=?",
         vals + (now_iso(), eid),
     )
     return eid

@@ -780,11 +780,12 @@ const devCreateState = blankDevState();
 const devEditState   = blankDevState();
 let devState = devCreateState;
 
-// Persistent state for the Enquiry forms. Enquiry is just a company + member
-// + (optional project) + image capture — Parts 2 & 3 (Item / Product type /
-// Details) are intentionally NOT part of the model. There is a single working
-// draft (enquiryCreateState); like Development, `enqState` is the mutable alias
-// the shared helpers bind to.
+// Persistent state for the Enquiry forms. Enquiry is now structurally identical
+// to Development — it carries the same Part 1–4 fields (company/member/project,
+// item + product type, Part-3 details, image + documents). The ONLY behavioural
+// difference is that Enquiry's Part-4 image supports MULTIPLE images (Development
+// replaces the single image). We keep one Create draft (enquiryCreateState) and
+// one Edit working copy (enquiryEditState), exactly like Development.
 function blankEnquiryState() {
   return {
     companyId: "",
@@ -793,7 +794,16 @@ function blankEnquiryState() {
     memberName: "",
     projectId: "",
     projectName: "",
-    images: [],   // [{ id, name, url }] — multiple images allowed
+    item: "",
+    product: "",
+    // Part 3 details
+    height: "",
+    width: "",
+    raisedHeight: "",
+    noOfColor: "",
+    pantones: [],   // [{ value, color }]  one entry per color
+    images: [],   // [{ id, name, url }] — MULTIPLE images allowed (unlike Development)
+    docs: [],     // [{ id, name, file }]
   };
 }
 const enquiryCreateState = blankEnquiryState();
@@ -1110,6 +1120,81 @@ async function fillDummyDevelopment(ctx) {
   }
 }
 
+// Fill every field with random data + 2–4 random images. Mirrors
+// fillDummyDevelopment() but seeds MULTIPLE images (Enquiry supports >1 image),
+// while still filling item/product/Part-3 details just like Development.
+async function fillDummyEnquiry(ctx) {
+  const { searchEl, hiddenEl, memberEl, projectEl, productEl, itemEl, companies,
+          selectCompany, loadMembers, updateNextState, updateSaveState, updateUnlock,
+          renderImageThumbs } = ctx;
+  try {
+    const pool = companies && companies.length ? companies : (devCompaniesCache || []);
+    if (!pool.length) {
+      openConfirmModal("No companies", "There are no companies in the customer database yet. Create one first.", () => {});
+      return;
+    }
+    const comp = rnd(pool);
+    selectCompany(Number(comp.id), comp.name);
+    await loadMembers(Number(comp.id));
+    const memberOpts = [...memberEl.querySelectorAll("option")].filter((o) => o.value !== "");
+    if (memberOpts.length) {
+      const m = rnd(memberOpts);
+      memberEl.value = m.value;
+      devState.memberId = m.value;
+    }
+    const projOpts = [...projectEl.querySelectorAll("option")].filter((o) => o.value !== "");
+    if (projOpts.length) {
+      const p = rnd(projOpts);
+      projectEl.value = p.value;
+      devState.projectId = p.value;
+      devState.projectName = p.textContent;
+    }
+
+    const ITEMS = ["Spring Patch", "Logo Badge", "Care Label", "Brand Tab", "Woven Emblem",
+                   "Silicone Grip", "Heat Transfer", "Glitter Transfer", "Reflective Tape"];
+    itemEl.value = rnd(ITEMS) + " " + (Math.floor(Math.random() * 900) + 100);
+    devState.item = itemEl.value;
+    const pt = rnd(PRODUCT_TYPES);
+    productEl.value = pt;
+    devState.product = pt;
+
+    if (pt === "raised silicon label") {
+      devState.height = (Math.random() * 40 + 10).toFixed(1);
+      devState.width = (Math.random() * 40 + 10).toFixed(1);
+      devState.raisedHeight = (Math.random() * 3 + 0.5).toFixed(1);
+      devState.noOfColor = String(Math.floor(Math.random() * 4) + 1);
+      devState.pantones = [];
+      for (let i = 0; i < Number(devState.noOfColor); i++) {
+        devState.pantones.push({ value: "19-" + (Math.floor(Math.random() * 400) + 100) + " TCX", color: "#888888" });
+      }
+    } else {
+      devState.height = (Math.random() * 40 + 10).toFixed(1);
+      devState.width = (Math.random() * 40 + 10).toFixed(1);
+      devState.raisedHeight = "";
+      devState.noOfColor = "";
+      devState.pantones.length = 0;
+    }
+
+    // MULTIPLE images (2–4) so Enquiry's multi-image dropzone is exercised.
+    const images = await ensureImagePool();
+    devState.images.length = 0;
+    if (images && images.length) {
+      const count = Math.min(images.length, 2 + Math.floor(Math.random() * 3));
+      const picked = [...images].sort(() => Math.random() - 0.5).slice(0, count);
+      picked.forEach((s, i) => {
+        devState.images.push({ id: "enq-img-" + Date.now() + "-" + i, name: s.name, url: s.url });
+      });
+    }
+
+    updateNextState();
+    updateUnlock();
+    renderImageThumbs();   // draw the seeded images in Part 4
+    updateSaveState();
+  } catch (err) {
+    openConfirmModal("Dummy failed", String(err && err.message ? err.message : err), () => {});
+  }
+}
+
 // Shared thumbnail renderer for the Development / Create image dropzone.
 // After removing an image it re-evaluates Save gating (via devSaveStateFn).
 function renderDevImageThumbs() {
@@ -1224,13 +1309,18 @@ function resetEnquiryState() {
 }
 
 // Build the enquiry payload from current devState (the active Enquiry draft —
-// either enquiryCreateState on Create or enquiryEditState on Edit). Enquiry no
-// longer collects an item name (Parts 2/3 removed) — item_name is optional on
-// the backend, so we leave it out of the payload entirely.
+// either enquiryCreateState on Create or enquiryEditState on Edit). Enquiry now
+// carries the same fields as Development (item/product/details), so the payload
+// shape mirrors buildDevelopmentPayload. The only conceptual difference is that
+// Enquiry allows multiple images, but that's already expressed by the images[].
 function buildEnquiryPayload() {
-  const companyName = devState.companyName;
-  if (!companyName) return null;
+  const itemEl = panel.querySelector("#enq-item");
+  const productEl = panel.querySelector("#enq-product");
   const memberEl = panel.querySelector("#enq-member");
+  const companyName = devState.companyName;
+  const item = (itemEl ? itemEl.value.trim() : devState.item) || devState.item;
+  const product = (productEl ? productEl.value : devState.product) || devState.product;
+  if (!companyName || !item || !product) return null;
   const memberName = memberEl && memberEl.value
     ? memberEl.options[memberEl.selectedIndex]?.textContent || ""
     : "";
@@ -1241,19 +1331,26 @@ function buildEnquiryPayload() {
     member_name: memberName || null,
     project_id: devState.projectId ? Number(devState.projectId) : null,
     project_name: devState.projectName || null,
+    item_name: item,
+    product_type: product,
+    height: devState.height || null,
+    width: devState.width || null,
+    raised_height: devState.raisedHeight || null,
+    no_of_color: devState.noOfColor ? Number(devState.noOfColor) : null,
+    pantones: devState.pantones.filter((p) => p && p.value).map((p) => ({ value: p.value, color: p.color })),
     image_names: devState.images.map((i) => i.name),
-    doc_names: [],
+    doc_names: devState.docs.map((d) => d.name),
   };
 }
 
 async function renderEnquiryCreate() {
-  // Enquiry / Create collects only:
-  //   Part 1 — Company & Member (full, required)
-  //   Part 4 — Images (multiple, required to save; no documents)
-  // Parts 2 & 3 (Item / Product type / Details) are intentionally NOT shown —
-  // an Enquiry is just a company + member + image capture. Save posts to
-  // /api/enquiries. The shared alias points at enquiryCreateState so the image
-  // renderer helpers operate on the Enquiry draft.
+  // Enquiry / Create is structurally IDENTICAL to Development / Create (Parts 1–4).
+  // The ONLY difference is Part 4's image dropzone: Enquiry allows MULTIPLE
+  // images (each new drop/paste appends), whereas Development replaces the single
+  // image. We reuse the Development markup word-for-word, just namespaced with the
+  // `enq-` prefix so it can coexist on the page, and the shared alias points at
+  // enquiryCreateState so the image/doc renderer helpers operate on the Enquiry
+  // draft. Save posts to /api/enquiries.
   devState = enquiryCreateState;
 
   panel.innerHTML = `
@@ -1265,6 +1362,7 @@ async function renderEnquiryCreate() {
     </div>
 
     <div class="dev-2col">
+      <!-- Parts 1 + 2 + 3 stacked in one card -->
       <div class="dev-part" id="enq-main">
         <h3 class="subhead part-head">
           1 · Company &amp; Member
@@ -1296,11 +1394,29 @@ async function renderEnquiryCreate() {
             </select>
           </div>
         </div>
+
+        <h3 class="subhead">2 · Item &amp; Product Type</h3>
+        <div class="dim-row">
+          <div class="field">
+            <label for="enq-item">Item name</label>
+            <input id="enq-item" type="text" placeholder="e.g. Spring Collection Patch" autocomplete="off" />
+          </div>
+          <div class="field">
+            <label for="enq-product">Product type</label>
+            <select id="enq-product" disabled>
+              <option value="">— select —</option>
+              ${PRODUCT_TYPES.map((p) => `<option value="${escapeHtml(p)}">${escapeHtml(p)}</option>`).join("")}
+            </select>
+          </div>
+        </div>
+
+        <h3 class="subhead">3 · Details</h3>
+        <div id="enq-part3-body"></div>
       </div>
 
-      <!-- 4th part: image only (multiple images allowed; no documents) -->
+      <!-- 4th part: images (multiple) + documents. -->
       <div class="dev-part" id="enq-part4">
-        <h3 class="subhead">2 · Images <span class="req-mark">required</span></h3>
+        <h3 class="subhead">4 · Images <span class="req-mark">required</span></h3>
 
         <div class="dropzone" id="enq-image-drop" tabindex="0">
           <div class="drop-region">
@@ -1309,17 +1425,40 @@ async function renderEnquiryCreate() {
           </div>
           <div class="thumb-grid" id="enq-image-thumbs"></div>
         </div>
+
+        <h4 class="subhead">Documents <span class="req-mark optional">optional</span></h4>
+        <div class="dropzone" id="enq-doc-drop" tabindex="0">
+          <div class="drop-region">
+            <span class="drop-icon">📁</span>
+            <p class="muted small drop-hint">Drag &amp; drop multiple files here.</p>
+          </div>
+          <div class="file-list" id="enq-doc-list"></div>
+        </div>
       </div>
     </div>
   `;
 
+  const part1 = panel.querySelector("#enq-main");
+  const part2 = panel.querySelector("#enq-product");
   const searchEl = panel.querySelector("#enq-company");
   const hiddenEl = panel.querySelector("#enq-company-id");
   const listEl   = panel.querySelector("#enq-company-list");
   const memberEl = panel.querySelector("#enq-member");
   const projectEl = panel.querySelector("#enq-project");
+  const productEl = panel.querySelector("#enq-product");
+  const itemEl = panel.querySelector("#enq-item");
   const saveBtn = panel.querySelector("#enq-save");
   const dummyBtn = panel.querySelector("#enq-dummy");
+
+  // --- Part 4 unlock when part 1 AND part 2 are complete ---
+  const part3Body = panel.querySelector("#enq-part3-body");
+  const part3 = part3Body;
+  const part4 = panel.querySelector("#enq-part4");
+
+  const updateUnlock = () => {
+    part4.classList.remove("locked");
+    renderPart3();
+  };
 
   // enable search once we have the company list
   let companies = [];
@@ -1336,6 +1475,11 @@ async function renderEnquiryCreate() {
     return;
   }
   searchEl.disabled = false;
+
+  // restore product selection
+  if (devState.product) productEl.value = devState.product;
+  // restore item name
+  if (devState.item) itemEl.value = devState.item;
 
   // When the Create draft still carries a company/member/project (e.g. after a
   // "same customer" post-save), repopulate the dropdowns so Part 1 stays filled
@@ -1363,19 +1507,14 @@ async function renderEnquiryCreate() {
     try {
       companies = await fetchJson(API + "/api/companies");
       devCompaniesCache = companies;
-      // if a company was chosen, reload its members so the list is current
       if (prevId !== "") {
         const stillThere = companies.some((c) => String(c.id) === String(prevId));
         if (stillThere) {
-          // keep the currently-selected member if it still exists in the
-          // customer database (don't reset it on refresh)
           await loadMembers(Number(prevId), devState.memberId || undefined, devState.projectId || undefined);
         } else {
           resetCompanySelection();
         }
       }
-      // silent refresh: update the data only, don't re-open/pop the search list
-      // or auto-highlight any company name.
       updateNextState();
     } catch (err) {
       openConfirmModal("Refresh failed", err.message, () => {});
@@ -1388,7 +1527,171 @@ async function renderEnquiryCreate() {
   // -- helpers --
   const updateNextState = () => {
     const part1Done = hiddenEl.value !== "" && memberEl.value !== "";
+    part2.disabled = !part1Done;
+    productEl.disabled = !part1Done;
+    updateUnlock();
     updateSaveState();   // company/member change affects Save gating
+  };
+
+  // Track item name input into devState and re-evaluate Save gating.
+  itemEl.addEventListener("input", () => {
+    devState.item = itemEl.value.trim();
+    updateSaveState();
+  });
+
+  // ---- Part 3 dynamic body (depends on product type) ----
+  const renderPart3 = () => {
+    ensurePantoneData();   // load the TCX dataset (no-op if already cached)
+    if (devState.product === "raised silicon label") {
+      renderRaisedSiliconLabel();
+    } else {
+      // default: just height + width
+      part3Body.innerHTML = `
+        <div class="dim-row">
+          <div class="field">
+            <label for="enq-height">Height (mm)</label>
+            <input id="enq-height" type="number" min="0" step="0.1" placeholder="0.0" autocomplete="off" />
+          </div>
+          <div class="field">
+            <label for="enq-width">Width (mm)</label>
+            <input id="enq-width" type="number" min="0" step="0.1" placeholder="0.0" autocomplete="off" />
+          </div>
+        </div>`;
+      bindDimInputs();
+    }
+  };
+
+  const bindDimInputs = () => {
+    const h = part3Body.querySelector("#enq-height");
+    const w = part3Body.querySelector("#enq-width");
+    if (h) { h.value = devState.height; h.addEventListener("input", () => { devState.height = h.value; updateSaveState(); }); }
+    if (w) { w.value = devState.width;  w.addEventListener("input",  () => { devState.width  = w.value; updateSaveState(); }); }
+  };
+
+  const renderRaisedSiliconLabel = () => {
+    part3Body.innerHTML = `
+      <div class="dim-row">
+        <div class="field">
+          <label for="enq-height">Height (mm)</label>
+          <input id="enq-height" type="number" min="0" step="0.1" placeholder="0.0" autocomplete="off" />
+        </div>
+        <div class="field">
+          <label for="enq-width">Width (mm)</label>
+          <input id="enq-width" type="number" min="0" step="0.1" placeholder="0.0" autocomplete="off" />
+        </div>
+      </div>
+      <div class="dim-row">
+        <div class="field">
+          <label for="enq-raised-height">Raised height (mm)</label>
+          <input id="enq-raised-height" type="number" min="0" step="0.1" placeholder="0.0" autocomplete="off" />
+        </div>
+        <div class="field">
+          <label for="enq-no-of-color">No. of color</label>
+          <input id="enq-no-of-color" type="number" min="1" step="1" placeholder="0" autocomplete="off" />
+        </div>
+      </div>
+      <div id="enq-pantone-wrap"></div>
+    `;
+
+    bindDimInputs();
+    const rh = part3Body.querySelector("#enq-raised-height");
+    const nc = part3Body.querySelector("#enq-no-of-color");
+    if (rh) { rh.value = devState.raisedHeight; rh.addEventListener("input", () => { devState.raisedHeight = rh.value; updateSaveState(); }); }
+    if (nc) {
+      nc.value = devState.noOfColor;
+      nc.addEventListener("input", () => {
+        devState.noOfColor = nc.value;
+        renderPantoneRows();
+        updateSaveState();
+      });
+    }
+    renderPantoneRows();
+  };
+
+  // re-render only the pantone input rows (keeps focus on the No. of color field)
+  const renderPantoneRows = () => {
+    const wrap = part3Body.querySelector("#enq-pantone-wrap");
+    if (!wrap) return;
+    const n = parseInt(devState.noOfColor, 10);
+    if (!isNaN(n) && n > 0) {
+      while (devState.pantones.length < n) devState.pantones.push({ value: "", color: "#000000" });
+      if (devState.pantones.length > n) devState.pantones.length = n;
+    }
+    if ((parseInt(devState.noOfColor, 10) || 0) <= 0) {
+      wrap.innerHTML = "";
+      return;
+    }
+    wrap.innerHTML = devState.pantones.map((p, i) => `
+      <div class="pantone-row">
+        <div class="field pantone-code">
+          <label for="enq-pantone-${i}">Pantone #${i + 1}</label>
+          <input id="enq-pantone-${i}" type="text" class="pantone-input"
+                 data-idx="${i}" value="${escapeHtml(p.value)}"
+                 placeholder="code (11-0103) or name (egret)" autocomplete="off" />
+          <div class="pantone-match" id="enq-pantone-match-${i}"></div>
+        </div>
+      </div>`).join("");
+    // Build + fill the match display for row i from a query string.
+    const showPantoneMatch = (i, query) => {
+      const matchEl = wrap.querySelector("#enq-pantone-match-" + i);
+      if (!matchEl) return;
+      const matches = findPantoneMatches(query);
+      if (!matches.length) {
+        matchEl.innerHTML = `<span class="muted small">No match</span>`;
+        return;
+      }
+      const top = matches[0];
+      if (devState.pantones[i]) devState.pantones[i].color = "#" + top.hex;
+
+      matchEl.innerHTML =
+        `<div class="pantone-top">` +
+          `<span class="swatch" style="background:#${escapeHtml(top.hex)}"></span>` +
+          `<span class="muted small">${escapeHtml(top.code)} · ${escapeHtml(top.name)} · ` +
+          `<span class="pantone-type" title="${escapeHtml(pantoneTypeName(top.type))}">${escapeHtml(pantoneTypeName(top.type))}</span> · #${escapeHtml(top.hex)}</span>` +
+        `</div>` +
+        (matches.length > 1
+          ? `<div class="pantone-similar">similar: ` +
+            matches.slice(1).map((m) =>
+              `<span class="pantone-chip" data-code="${escapeHtml(m.code)}" ` +
+              `title="${escapeHtml(m.code)} · ${escapeHtml(m.name)} · ${escapeHtml(pantoneTypeName(m.type))}">` +
+                `<span class="swatch sm" style="background:#${escapeHtml(m.hex)}"></span>` +
+                `${escapeHtml(m.name)} ` +
+                `<span class="pantone-type" title="${escapeHtml(pantoneTypeName(m.type))}">${escapeHtml(pantoneTypeName(m.type))}</span></span>`
+            ).join("") +
+            `</div>`
+          : "");
+
+      matchEl.querySelectorAll(".pantone-chip").forEach((chip) => {
+        chip.addEventListener("click", () => {
+          const inp = wrap.querySelector("#enq-pantone-" + i);
+          if (inp) inp.value = chip.dataset.code;
+          if (devState.pantones[i]) devState.pantones[i].value = chip.dataset.code;
+          const chosen = findPantoneMatches(chip.dataset.code)[0];
+          matchEl.innerHTML = chosen
+            ? `<div class="pantone-top">` +
+              `<span class="swatch" style="background:#${escapeHtml(chosen.hex)}"></span>` +
+              `<span class="muted small">${escapeHtml(chosen.code)} · ${escapeHtml(chosen.name)} · ` +
+              `<span class="pantone-type" title="${escapeHtml(pantoneTypeName(chosen.type))}">${escapeHtml(pantoneTypeName(chosen.type))}</span> · #${escapeHtml(chosen.hex)}</span>` +
+              `</div>`
+            : "";
+          updateSaveState();
+        });
+      });
+    };
+
+    wrap.querySelectorAll(".pantone-input").forEach((inp) => {
+      inp.addEventListener("input", () => {
+        const i = Number(inp.dataset.idx);
+        if (!devState.pantones[i]) return;
+        devState.pantones[i].value = inp.value;
+        showPantoneMatch(i, inp.value);
+        updateSaveState();
+      });
+    });
+
+    devState.pantones.forEach((p, i) => {
+      if (p && p.value) showPantoneMatch(i, p.value);
+    });
   };
 
   const resetCompanySelection = () => {
@@ -1414,11 +1717,9 @@ async function renderEnquiryCreate() {
             `<option value="${m.id}">${escapeHtml(m.name)}</option>`).join("")
         : `<option value="">— no members —</option>`;
       memberEl.disabled = !members.length;
-      // restore previously selected member if it still exists
       if (restoreMemberId != null && members.some((m) => String(m.id) === String(restoreMemberId))) {
         memberEl.value = String(restoreMemberId);
       }
-      // populate the project dropdown from this company's saved projects
       const projects = comp.projects || [];
       projectEl.innerHTML = `<option value="">No project</option>` +
         (projects.length
@@ -1426,7 +1727,6 @@ async function renderEnquiryCreate() {
               `<option value="${p.id}">${escapeHtml(p.name)}</option>`).join("")
           : "");
       projectEl.disabled = false;
-      // restore previously selected project if it still exists in the customer DB
       const wantProject = restoreProjectId != null ? String(restoreProjectId) : (devState.projectId || "");
       if (wantProject && projects.some((p) => String(p.id) === wantProject)) {
         projectEl.value = wantProject;
@@ -1457,7 +1757,6 @@ async function renderEnquiryCreate() {
       listEl.querySelectorAll(".combobox-item").forEach((li) => {
         li.addEventListener("click", () => selectCompany(Number(li.dataset.id), li.dataset.name));
       });
-      // auto-highlight the first match so Enter/Tab can accept it immediately
       listEl.querySelectorAll(".combobox-item").forEach((it, i) => {
         it.classList.toggle("active", i === 0);
       });
@@ -1501,7 +1800,6 @@ async function renderEnquiryCreate() {
   });
 
   searchEl.addEventListener("blur", () => {
-    // delay so click on option registers
     setTimeout(() => { listEl.hidden = true; }, 120);
   });
 
@@ -1523,8 +1821,6 @@ async function renderEnquiryCreate() {
       items.forEach((it) => it.classList.remove("active"));
       if (items[idx]) { items[idx].classList.add("active"); items[idx].scrollIntoView({ block: "nearest" }); }
     } else if (e.key === "Enter" || e.key === "Tab") {
-      // accept the highlighted (or first) match without moving focus away
-      e.preventDefault();
       const pick = items[idx] || items[0];
       if (pick) selectCompany(Number(pick.dataset.id), pick.dataset.name);
     } else if (e.key === "Escape") {
@@ -1537,7 +1833,6 @@ async function renderEnquiryCreate() {
     updateNextState();
   });
   projectEl.addEventListener("change", () => {
-    // Project is optional; store the selected id + name (or clear both).
     if (projectEl.value) {
       devState.projectId = projectEl.value;
       devState.projectName = projectEl.options[projectEl.selectedIndex]?.textContent || "";
@@ -1547,12 +1842,42 @@ async function renderEnquiryCreate() {
     }
     updateSaveState();
   });
+  productEl.addEventListener("change", () => {
+    devState.product = productEl.value;
+    updateNextState();
+  });
 
-  // Save gating: Part 1 complete AND at least one image attached. The image
-  // (Part 4) is REQUIRED to save an Enquiry. Documents are not used.
+  // Part 3 (Details) validation: every visible Details field must be filled
+  // before Save/Update is allowed.
+  const part3Valid = () => {
+    const h = (devState.height || "").trim();
+    const w = (devState.width || "").trim();
+    if (h.length === 0 || w.length === 0) return false;   // height + width always required
+
+    if (devState.product === "raised silicon label") {
+      const rh = (devState.raisedHeight || "").trim();
+      if (rh.length === 0) return false;                   // raised height required
+
+      const n = parseInt(devState.noOfColor, 10);
+      if (!n || n < 1) return false;                       // no. of color required (>= 1)
+
+      if (n >= 1) {
+        for (const p of devState.pantones) {
+          const v = (p && (p.value || "") || "").trim().length;
+          if (v <= 1) return false;
+        }
+      }
+    }
+    return true;
+  };
+
+  // Save gating: Parts 1–3 valid AND at least one image attached. Documents stay
+  // optional and never gate Save. Images are required (>=1) to save an Enquiry.
   const updateSaveState = () => {
     const hasImage = devState.images.length >= 1;
-    const allFilled = hiddenEl.value !== "" && memberEl.value !== "" && hasImage;
+    const allFilled = hiddenEl.value !== "" && memberEl.value !== "" &&
+                      devState.item && devState.product &&
+                      part3Valid() && hasImage;
     const canSave = allFilled;
     saveBtn.disabled = !canSave;
     saveBtn.classList.toggle("active", canSave);
@@ -1561,14 +1886,17 @@ async function renderEnquiryCreate() {
   // initial unlock check (covers restored state on tab switch)
   updateNextState();
   updateSaveState();
-  devSaveStateFn = updateSaveState;   // let the shared image renderer re-gate Save
+  enqSaveStateFn = updateSaveState;   // let the shared image renderer re-gate Save
 
-  // ===== image dropzone (no documents) =====
+  // ===== 4th part: image dropzone (multiple) + documents =====
   const imageDrop = panel.querySelector("#enq-image-drop");
   const imageThumbs = panel.querySelector("#enq-image-thumbs");
+  const docDrop = panel.querySelector("#enq-doc-drop");
+  const docList = panel.querySelector("#enq-doc-list");
 
-  // use the persisted store so pasted images survive tab switches
+  // use the persisted stores so pasted images / dropped docs survive tab switches
   const images = devState.images;
+  const docs = devState.docs;
 
   const isImageFile = (f) => f && f.type && f.type.startsWith("image/");
 
@@ -1595,7 +1923,6 @@ async function renderEnquiryCreate() {
             "Remove image?",
             "Remove this image from the enquiry?",
             () => {
-              // Only remove after the user confirms "Yes".
               const j = images.findIndex((x) => x.id === id);
               if (j >= 0) {
                 if (images[j].url && images[j].url.startsWith("blob:")) {
@@ -1603,7 +1930,7 @@ async function renderEnquiryCreate() {
                 }
                 images.splice(j, 1);
                 renderImageThumbs();
-                updateSaveState();   // re-gate Save now that an image is gone
+                updateSaveState();
               }
             }
           );
@@ -1614,7 +1941,8 @@ async function renderEnquiryCreate() {
 
   const addImageFile = (file) => {
     if (!isImageFile(file)) return;
-    // Enquiry allows multiple images — each dropped/pasted file is appended.
+    // Enquiry allows MULTIPLE images — each dropped/pasted file is appended
+    // (Development REPLACES the single image here).
     const localUrl = URL.createObjectURL(file);
     const id = "enq-img-" + Date.now() + "-" + images.length;
     images.push({ id, name: file.name, url: localUrl, uploading: true });
@@ -1623,7 +1951,6 @@ async function renderEnquiryCreate() {
     uploadImageFile(file, id);
   };
 
-  // Upload a dropped/pasted image to /api/uploads and link it to the sequence.
   const uploadImageFile = async (file, id) => {
     const entry = images.find((x) => x.id === id);
     if (!entry) return;
@@ -1631,8 +1958,8 @@ async function renderEnquiryCreate() {
       const fd = new FormData();
       fd.append("file", file);
       const data = await fetchJson(API + "/api/uploads", { method: "POST", body: fd });
-      entry.name = data.path;          // e.g. "uploads/<uuid>__<file>"
-      entry.url = data.url;            // e.g. "/uploads/<uuid>__<file>"
+      entry.name = data.path;
+      entry.url = data.url;
       entry.uploading = false;
       renderImageThumbs();
       updateSaveState();
@@ -1642,7 +1969,6 @@ async function renderEnquiryCreate() {
     }
   };
 
-  // drag & drop for images
   ["dragenter", "dragover"].forEach((ev) =>
     imageDrop.addEventListener(ev, (e) => {
       e.preventDefault();
@@ -1662,7 +1988,6 @@ async function renderEnquiryCreate() {
     files.forEach((f) => addImageFile(f));
   });
 
-  // Ctrl+V paste images — add every pasted image (Enquiry allows multiple).
   imageDrop.addEventListener("paste", (e) => {
     const items = e.clipboardData?.items || [];
     for (const it of items) {
@@ -1673,57 +1998,99 @@ async function renderEnquiryCreate() {
     }
   });
 
+  // ---- documents ----
+  const renderDocList = () => {
+    if (!docs.length) {
+      docList.innerHTML = "";
+      docDrop.classList.remove("has-items");
+      return;
+    }
+    docDrop.classList.add("has-items");
+    docList.innerHTML = docs.map((d) => {
+      const downloadUrl = d.name ? docUrl(d.name) : (d.url || "");
+      const dlLink = downloadUrl
+        ? `<a class="doc-dl" href="${escapeHtml(downloadUrl)}" target="_blank" rel="noopener" download title="Download ${escapeHtml(displayName(d.name))}">⬇ Download attached doc</a>`
+        : "";
+      return `
+      <div class="doc-row" data-id="${d.id}">
+        <span class="doc-icon">📄</span>
+        <input class="doc-name" data-id="${d.id}" type="text" value="${escapeHtml(d.name)}" />
+        <span class="doc-size muted small">${d.file ? formatBytes(d.file.size) : "saved"}</span>
+        ${d.uploading ? '<span class="thumb-badge uploading">uploading…</span>' : ''}
+        ${dlLink}
+        <button class="icon-btn danger doc-rm" data-rm="${d.id}" title="Remove">✕</button>
+      </div>`;
+    }).join("");
+    docList.querySelectorAll(".doc-rm").forEach((b) => {
+      b.addEventListener("click", () => {
+        const id = b.dataset.rm;
+        const idx = docs.findIndex((x) => x.id === id);
+        if (idx >= 0) { docs.splice(idx, 1); renderDocList(); updateSaveState(); }
+      });
+    });
+    docList.querySelectorAll(".doc-name").forEach((inp) => {
+      inp.addEventListener("input", () => {
+        const d = docs.find((x) => x.id === inp.dataset.id);
+        if (d) { d.name = inp.value; updateSaveState(); }
+      });
+    });
+    updateSaveState();
+  };
+
+  const addDocFiles = async (fileList) => {
+    for (const f of fileList) {
+      const id = "enq-doc-" + Date.now() + "-" + docs.length;
+      const entry = { id, name: f.name, file: f, uploading: true };
+      docs.push(entry);
+      renderDocList();
+      try {
+        const r = await uploadFile(f);
+        entry.name = r.path;
+        entry.url = API + r.path;
+        entry.uploading = false;
+      } catch (err) {
+        entry.uploading = false;
+        openConfirmModal("Upload failed", "Could not upload document: " + err.message, () => {});
+      }
+      renderDocList();
+    }
+  };
+
+  ["dragenter", "dragover"].forEach((ev) =>
+    docDrop.addEventListener(ev, (e) => {
+      e.preventDefault();
+      docDrop.classList.add("dragover");
+    })
+  );
+  ["dragleave", "drop"].forEach((ev) =>
+    docDrop.addEventListener(ev, (e) => {
+      e.preventDefault();
+      if (ev === "dragleave" && docDrop.contains(e.relatedTarget)) return;
+      docDrop.classList.remove("dragover");
+    })
+  );
+  docDrop.addEventListener("drop", (e) => {
+    addDocFiles(e.dataTransfer?.files || []);
+  });
+
   renderImageThumbs();
+  renderDocList();
 
   updateNextState();
   updateSaveState();
 
-  // ===== Action: Dummy =====
-  if (dummyBtn) {
-    dummyBtn.addEventListener("click", async () => {
-      const pool = companies && companies.length ? companies : (devCompaniesCache || []);
-      if (!pool.length) {
-        openConfirmModal("No companies", "There are no companies in the customer database yet. Create one first.", () => {});
-        return;
-      }
-      try {
-        const comp = rnd(pool);
-        selectCompany(Number(comp.id), comp.name);
-        await loadMembers(Number(comp.id));
-        const memberOpts = [...memberEl.querySelectorAll("option")].filter((o) => o.value !== "");
-        if (memberOpts.length) {
-          const m = rnd(memberOpts);
-          memberEl.value = m.value;
-          devState.memberId = m.value;
-        }
-        const projOpts = [...projectEl.querySelectorAll("option")].filter((o) => o.value !== "");
-        if (projOpts.length) {
-          const p = rnd(projOpts);
-          projectEl.value = p.value;
-          devState.projectId = p.value;
-          devState.projectName = p.textContent;
-        }
-        // attach one image from the pool so Save can enable
-        const images = await ensureImagePool();
-        devState.images.length = 0;
-        if (images && images.length) {
-          const s = images[Math.floor(Math.random() * images.length)];
-          devState.images.push({ id: "enq-img-" + Date.now() + "-0", name: s.name, url: s.url });
-        }
-        updateNextState();
-        updateSaveState();
-      } catch (err) {
-        openConfirmModal("Dummy failed", String(err && err.message ? err.message : err), () => {});
-      }
-    });
-  }
+  // ===== Action buttons: Dummy / Save =====
+  dummyBtn.addEventListener("click", () => fillDummyEnquiry({
+    searchEl, hiddenEl, memberEl, projectEl, productEl, itemEl, listEl, companies,
+    selectCompany, loadMembers, updateNextState, updateSaveState, updateUnlock,
+    renderImageThumbs,
+  }));
 
-  // ===== Action: Save =====
   saveBtn.addEventListener("click", async () => {
     if (saveBtn.disabled) return;
     const payload = buildEnquiryPayload();
     if (!payload) {
-      openConfirmModal("Cannot save", "Please select a company, member, and add at least one image.", () => {});
+      openConfirmModal("Cannot save", "Please fill company, member, item, and product type.", () => {});
       return;
     }
     saveBtn.disabled = true;
@@ -1748,9 +2115,9 @@ async function renderEnquiryCreate() {
 // ---------------------------------------------------------------------------
 // Enquiry / Edit — a SEPARATE screen from Create (own function + state).
 //   Loads an existing record (pre-filled), shows a red "edit" mini-tab, and
-//   PUTs changes back via Update. Mirrors Development / Edit exactly in logic
-//   (own state, dirty-check gating, Back/Reset), but only collects the same
-//   fields as Enquiry Create: Company & Member (Part 1) + Images (Part 4).
+//   PUTs changes back via Update. Structurally IDENTICAL to Development / Edit
+//   (Parts 1–4, dirty-check gating, Back/Reset), with the same single
+//   behavioural difference as Create: the Part-4 image supports MULTIPLE images.
 // ---------------------------------------------------------------------------
 
 async function renderEnquiryEdit() {
@@ -1800,10 +2167,28 @@ async function renderEnquiryEdit() {
             </select>
           </div>
         </div>
+
+        <h3 class="subhead">2 · Item &amp; Product Type</h3>
+        <div class="dim-row">
+          <div class="field">
+            <label for="enq-item">Item name</label>
+            <input id="enq-item" type="text" placeholder="e.g. Spring Collection Patch" autocomplete="off" />
+          </div>
+          <div class="field">
+            <label for="enq-product">Product type</label>
+            <select id="enq-product" disabled>
+              <option value="">— select —</option>
+              ${PRODUCT_TYPES.map((p) => `<option value="${escapeHtml(p)}">${escapeHtml(p)}</option>`).join("")}
+            </select>
+          </div>
+        </div>
+
+        <h3 class="subhead">3 · Details</h3>
+        <div id="enq-part3-body"></div>
       </div>
 
       <div class="dev-part" id="enq-part4">
-        <h3 class="subhead">2 · Images <span class="req-mark">required</span></h3>
+        <h3 class="subhead">4 · Images <span class="req-mark">required</span></h3>
 
         <div class="dropzone" id="enq-image-drop" tabindex="0">
           <div class="drop-region">
@@ -1812,18 +2197,40 @@ async function renderEnquiryEdit() {
           </div>
           <div class="thumb-grid" id="enq-image-thumbs"></div>
         </div>
+
+        <h4 class="subhead">Documents <span class="req-mark optional">optional</span></h4>
+        <div class="dropzone" id="enq-doc-drop" tabindex="0">
+          <div class="drop-region">
+            <span class="drop-icon">📁</span>
+            <p class="muted small drop-hint">Drag &amp; drop multiple files here.</p>
+          </div>
+          <div class="file-list" id="enq-doc-list"></div>
+        </div>
       </div>
     </div>
   `;
 
+  const part1 = panel.querySelector("#enq-main");
+  const part2 = panel.querySelector("#enq-product");
   const searchEl = panel.querySelector("#enq-company");
   const hiddenEl = panel.querySelector("#enq-company-id");
   const listEl   = panel.querySelector("#enq-company-list");
   const memberEl = panel.querySelector("#enq-member");
   const projectEl = panel.querySelector("#enq-project");
+  const productEl = panel.querySelector("#enq-product");
+  const itemEl = panel.querySelector("#enq-item");
   const saveBtn = panel.querySelector("#enq-save");
   const dummyBtn = panel.querySelector("#enq-dummy");
   const resetBtn = panel.querySelector("#enq-reset");
+
+  const part3Body = panel.querySelector("#enq-part3-body");
+  const part3 = part3Body;
+  const part4 = panel.querySelector("#enq-part4");
+
+  const updateUnlock = () => {
+    part4.classList.remove("locked");
+    renderPart3();
+  };
 
   let companies = [];
   try {
@@ -1839,6 +2246,9 @@ async function renderEnquiryEdit() {
     return;
   }
   searchEl.disabled = false;
+
+  if (devState.product) productEl.value = devState.product;
+  if (devState.item) itemEl.value = devState.item;
 
   // The record is already fully valid: seed company/member/project dropdowns
   // synchronously so Part 1 stays filled and Update unlocks without waiting on
@@ -1882,9 +2292,169 @@ async function renderEnquiryEdit() {
     }
   });
 
-  // -- helpers --
   const updateNextState = () => {
-    updateSaveState();   // company/member change affects Save gating
+    const part1Done = hiddenEl.value !== "" && memberEl.value !== "";
+    part2.disabled = !part1Done;
+    productEl.disabled = !part1Done;
+    updateUnlock();
+    updateSaveState();
+  };
+
+  itemEl.addEventListener("input", () => {
+    devState.item = itemEl.value.trim();
+    updateSaveState();
+  });
+
+  // ---- Part 3 dynamic body (depends on product type) ----
+  const renderPart3 = () => {
+    ensurePantoneData();
+    if (devState.product === "raised silicon label") {
+      renderRaisedSiliconLabel();
+    } else {
+      part3Body.innerHTML = `
+        <div class="dim-row">
+          <div class="field">
+            <label for="enq-height">Height (mm)</label>
+            <input id="enq-height" type="number" min="0" step="0.1" placeholder="0.0" autocomplete="off" />
+          </div>
+          <div class="field">
+            <label for="enq-width">Width (mm)</label>
+            <input id="enq-width" type="number" min="0" step="0.1" placeholder="0.0" autocomplete="off" />
+          </div>
+        </div>`;
+      bindDimInputs();
+    }
+  };
+
+  const bindDimInputs = () => {
+    const h = part3Body.querySelector("#enq-height");
+    const w = part3Body.querySelector("#enq-width");
+    if (h) { h.value = devState.height; h.addEventListener("input", () => { devState.height = h.value; updateSaveState(); }); }
+    if (w) { w.value = devState.width;  w.addEventListener("input",  () => { devState.width  = w.value; updateSaveState(); }); }
+  };
+
+  const renderRaisedSiliconLabel = () => {
+    part3Body.innerHTML = `
+      <div class="dim-row">
+        <div class="field">
+          <label for="enq-height">Height (mm)</label>
+          <input id="enq-height" type="number" min="0" step="0.1" placeholder="0.0" autocomplete="off" />
+        </div>
+        <div class="field">
+          <label for="enq-width">Width (mm)</label>
+          <input id="enq-width" type="number" min="0" step="0.1" placeholder="0.0" autocomplete="off" />
+        </div>
+      </div>
+      <div class="dim-row">
+        <div class="field">
+          <label for="enq-raised-height">Raised height (mm)</label>
+          <input id="enq-raised-height" type="number" min="0" step="0.1" placeholder="0.0" autocomplete="off" />
+        </div>
+        <div class="field">
+          <label for="enq-no-of-color">No. of color</label>
+          <input id="enq-no-of-color" type="number" min="1" step="1" placeholder="0" autocomplete="off" />
+        </div>
+      </div>
+      <div id="enq-pantone-wrap"></div>
+    `;
+
+    bindDimInputs();
+    const rh = part3Body.querySelector("#enq-raised-height");
+    const nc = part3Body.querySelector("#enq-no-of-color");
+    if (rh) { rh.value = devState.raisedHeight; rh.addEventListener("input", () => { devState.raisedHeight = rh.value; updateSaveState(); }); }
+    if (nc) {
+      nc.value = devState.noOfColor;
+      nc.addEventListener("input", () => {
+        devState.noOfColor = nc.value;
+        renderPantoneRows();
+        updateSaveState();
+      });
+    }
+    renderPantoneRows();
+  };
+
+  const renderPantoneRows = () => {
+    const wrap = part3Body.querySelector("#enq-pantone-wrap");
+    if (!wrap) return;
+    const n = parseInt(devState.noOfColor, 10);
+    if (!isNaN(n) && n > 0) {
+      while (devState.pantones.length < n) devState.pantones.push({ value: "", color: "#000000" });
+      if (devState.pantones.length > n) devState.pantones.length = n;
+    }
+    if ((parseInt(devState.noOfColor, 10) || 0) <= 0) {
+      wrap.innerHTML = "";
+      return;
+    }
+    wrap.innerHTML = devState.pantones.map((p, i) => `
+      <div class="pantone-row">
+        <div class="field pantone-code">
+          <label for="enq-pantone-${i}">Pantone #${i + 1}</label>
+          <input id="enq-pantone-${i}" type="text" class="pantone-input"
+                 data-idx="${i}" value="${escapeHtml(p.value)}"
+                 placeholder="code (11-0103) or name (egret)" autocomplete="off" />
+          <div class="pantone-match" id="enq-pantone-match-${i}"></div>
+        </div>
+      </div>`).join("");
+    const showPantoneMatch = (i, query) => {
+      const matchEl = wrap.querySelector("#enq-pantone-match-" + i);
+      if (!matchEl) return;
+      const matches = findPantoneMatches(query);
+      if (!matches.length) {
+        matchEl.innerHTML = `<span class="muted small">No match</span>`;
+        return;
+      }
+      const top = matches[0];
+      if (devState.pantones[i]) devState.pantones[i].color = "#" + top.hex;
+
+      matchEl.innerHTML =
+        `<div class="pantone-top">` +
+          `<span class="swatch" style="background:#${escapeHtml(top.hex)}"></span>` +
+          `<span class="muted small">${escapeHtml(top.code)} · ${escapeHtml(top.name)} · ` +
+          `<span class="pantone-type" title="${escapeHtml(pantoneTypeName(top.type))}">${escapeHtml(pantoneTypeName(top.type))}</span> · #${escapeHtml(top.hex)}</span>` +
+        `</div>` +
+        (matches.length > 1
+          ? `<div class="pantone-similar">similar: ` +
+            matches.slice(1).map((m) =>
+              `<span class="pantone-chip" data-code="${escapeHtml(m.code)}" ` +
+              `title="${escapeHtml(m.code)} · ${escapeHtml(m.name)} · ${escapeHtml(pantoneTypeName(m.type))}">` +
+                `<span class="swatch sm" style="background:#${escapeHtml(m.hex)}"></span>` +
+                `${escapeHtml(m.name)} ` +
+                `<span class="pantone-type" title="${escapeHtml(pantoneTypeName(m.type))}">${escapeHtml(pantoneTypeName(m.type))}</span></span>`
+            ).join("") +
+            `</div>`
+          : "");
+
+      matchEl.querySelectorAll(".pantone-chip").forEach((chip) => {
+        chip.addEventListener("click", () => {
+          const inp = wrap.querySelector("#enq-pantone-" + i);
+          if (inp) inp.value = chip.dataset.code;
+          if (devState.pantones[i]) devState.pantones[i].value = chip.dataset.code;
+          const chosen = findPantoneMatches(chip.dataset.code)[0];
+          matchEl.innerHTML = chosen
+            ? `<div class="pantone-top">` +
+              `<span class="swatch" style="background:#${escapeHtml(chosen.hex)}"></span>` +
+              `<span class="muted small">${escapeHtml(chosen.code)} · ${escapeHtml(chosen.name)} · ` +
+              `<span class="pantone-type" title="${escapeHtml(pantoneTypeName(chosen.type))}">${escapeHtml(pantoneTypeName(chosen.type))}</span> · #${escapeHtml(chosen.hex)}</span>` +
+              `</div>`
+            : "";
+          updateSaveState();
+        });
+      });
+    };
+
+    wrap.querySelectorAll(".pantone-input").forEach((inp) => {
+      inp.addEventListener("input", () => {
+        const i = Number(inp.dataset.idx);
+        if (!devState.pantones[i]) return;
+        devState.pantones[i].value = inp.value;
+        showPantoneMatch(i, inp.value);
+        updateSaveState();
+      });
+    });
+
+    devState.pantones.forEach((p, i) => {
+      if (p && p.value) showPantoneMatch(i, p.value);
+    });
   };
 
   const resetCompanySelection = () => {
@@ -2035,6 +2605,34 @@ async function renderEnquiryEdit() {
     }
     updateSaveState();
   });
+  productEl.addEventListener("change", () => {
+    devState.product = productEl.value;
+    updateNextState();
+  });
+
+  // Part 3 (Details) validation: every visible Details field must be filled
+  // before Update is allowed.
+  const part3Valid = () => {
+    const h = (devState.height || "").trim();
+    const w = (devState.width || "").trim();
+    if (h.length === 0 || w.length === 0) return false;   // height + width always required
+
+    if (devState.product === "raised silicon label") {
+      const rh = (devState.raisedHeight || "").trim();
+      if (rh.length === 0) return false;                   // raised height required
+
+      const n = parseInt(devState.noOfColor, 10);
+      if (!n || n < 1) return false;                       // no. of color required (>= 1)
+
+      if (n >= 1) {
+        for (const p of devState.pantones) {
+          const v = (p && (p.value || "") || "").trim().length;
+          if (v <= 1) return false;
+        }
+      }
+    }
+    return true;
+  };
 
   // Compare the current editable fields against the originally-loaded record.
   // Update only enables (and Reset only matters) once something actually changed.
@@ -2042,7 +2640,15 @@ async function renderEnquiryEdit() {
     company_id: devState.companyId ? Number(devState.companyId) : null,
     member_id: devState.memberId ? Number(devState.memberId) : null,
     project_id: devState.projectId ? Number(devState.projectId) : null,
+    item_name: (devState.item || "").trim(),
+    product_type: devState.product || "",
+    height: devState.height ? Number(devState.height) : null,
+    width: devState.width ? Number(devState.width) : null,
+    raised_height: devState.raisedHeight ? Number(devState.raisedHeight) : null,
+    no_of_color: devState.noOfColor ? Number(devState.noOfColor) : null,
+    pantones: devState.pantones.filter((p) => p && p.value).map((p) => ({ value: p.value.trim(), color: p.color })),
     image_names: devState.images.map((i) => i.name).sort(),
+    doc_names: devState.docs.map((d) => d.name).sort(),
   });
 
   const sigEq = (a, b) => JSON.stringify(a) === JSON.stringify(b);
@@ -2050,13 +2656,24 @@ async function renderEnquiryEdit() {
     company_id: enquiryOriginal.company_id != null ? Number(enquiryOriginal.company_id) : null,
     member_id: enquiryOriginal.member_id != null ? Number(enquiryOriginal.member_id) : null,
     project_id: enquiryOriginal.project_id != null ? Number(enquiryOriginal.project_id) : null,
+    item_name: (enquiryOriginal.item_name || "").trim(),
+    product_type: enquiryOriginal.product_type || "",
+    height: enquiryOriginal.height != null ? Number(enquiryOriginal.height) : null,
+    width: enquiryOriginal.width != null ? Number(enquiryOriginal.width) : null,
+    raised_height: enquiryOriginal.raised_height != null ? Number(enquiryOriginal.raised_height) : null,
+    no_of_color: enquiryOriginal.no_of_color != null ? Number(enquiryOriginal.no_of_color) : null,
+    pantones: (enquiryOriginal.pantones || []).map((p) => ({ value: (p.value || "").trim(), color: p.color })),
     image_names: (enquiryOriginal.image_names || []).slice().sort(),
+    doc_names: (enquiryOriginal.doc_names || []).slice().sort(),
   });
 
-  // Save gating: Part 1 complete AND at least one image attached AND a real change.
+  // Save gating for the Edit tab: all required fields filled AND a real change
+  // detected (an existing image alone does NOT enable Update).
   const updateSaveState = () => {
     const hasImage = devState.images.length >= 1;
-    const allFilled = hiddenEl.value !== "" && memberEl.value !== "" && hasImage;
+    const allFilled = hiddenEl.value !== "" && memberEl.value !== "" &&
+                      devState.item && devState.product &&
+                      part3Valid() && hasImage;
     const dirty = isDirty();
     const canSave = allFilled && dirty;
     saveBtn.disabled = !canSave;
@@ -2067,13 +2684,16 @@ async function renderEnquiryEdit() {
 
   updateNextState();
   updateSaveState();
-  devSaveStateFn = updateSaveState;   // let the shared image renderer re-gate Save
+  enqSaveStateFn = updateSaveState;   // let the shared image renderer re-gate Save
 
-  // ===== image dropzone (no documents) =====
+  // ===== 4th part: image dropzone (multiple) + documents =====
   const imageDrop = panel.querySelector("#enq-image-drop");
   const imageThumbs = panel.querySelector("#enq-image-thumbs");
+  const docDrop = panel.querySelector("#enq-doc-drop");
+  const docList = panel.querySelector("#enq-doc-list");
 
   const images = devState.images;
+  const docs = devState.docs;
 
   const isImageFile = (f) => f && f.type && f.type.startsWith("image/");
 
@@ -2118,6 +2738,8 @@ async function renderEnquiryEdit() {
 
   const addImageFile = (file) => {
     if (!isImageFile(file)) return;
+    // Enquiry allows MULTIPLE images — each dropped/pasted file is appended
+    // (Development REPLACES the single image here).
     const localUrl = URL.createObjectURL(file);
     const id = "enq-img-" + Date.now() + "-" + images.length;
     images.push({ id, name: file.name, url: localUrl, uploading: true });
@@ -2158,6 +2780,7 @@ async function renderEnquiryEdit() {
     })
   );
   imageDrop.addEventListener("drop", (e) => {
+    // Enquiry allows MULTIPLE images — add every dropped image file.
     const files = [...(e.dataTransfer?.files || [])].filter(isImageFile);
     files.forEach((f) => addImageFile(f));
   });
@@ -2172,47 +2795,93 @@ async function renderEnquiryEdit() {
     }
   });
 
+  // ---- documents ----
+  const renderDocList = () => {
+    if (!docs.length) {
+      docList.innerHTML = "";
+      docDrop.classList.remove("has-items");
+      return;
+    }
+    docDrop.classList.add("has-items");
+    docList.innerHTML = docs.map((d) => {
+      const downloadUrl = d.name ? docUrl(d.name) : (d.url || "");
+      const dlLink = downloadUrl
+        ? `<a class="doc-dl" href="${escapeHtml(downloadUrl)}" target="_blank" rel="noopener" download title="Download ${escapeHtml(displayName(d.name))}">⬇ Download attached doc</a>`
+        : "";
+      return `
+      <div class="doc-row" data-id="${d.id}">
+        <span class="doc-icon">📄</span>
+        <input class="doc-name" data-id="${d.id}" type="text" value="${escapeHtml(d.name)}" />
+        <span class="doc-size muted small">${d.file ? formatBytes(d.file.size) : "saved"}</span>
+        ${d.uploading ? '<span class="thumb-badge uploading">uploading…</span>' : ''}
+        ${dlLink}
+        <button class="icon-btn danger doc-rm" data-rm="${d.id}" title="Remove">✕</button>
+      </div>`;
+    }).join("");
+    docList.querySelectorAll(".doc-rm").forEach((b) => {
+      b.addEventListener("click", () => {
+        const id = b.dataset.rm;
+        const idx = docs.findIndex((x) => x.id === id);
+        if (idx >= 0) { docs.splice(idx, 1); renderDocList(); updateSaveState(); }
+      });
+    });
+    docList.querySelectorAll(".doc-name").forEach((inp) => {
+      inp.addEventListener("input", () => {
+        const d = docs.find((x) => x.id === inp.dataset.id);
+        if (d) { d.name = inp.value; updateSaveState(); }
+      });
+    });
+    updateSaveState();
+  };
+
+  const addDocFiles = async (fileList) => {
+    for (const f of fileList) {
+      const id = "enq-doc-" + Date.now() + "-" + docs.length;
+      const entry = { id, name: f.name, file: f, uploading: true };
+      docs.push(entry);
+      renderDocList();
+      try {
+        const r = await uploadFile(f);
+        entry.name = r.path;
+        entry.url = API + r.path;
+        entry.uploading = false;
+      } catch (err) {
+        entry.uploading = false;
+        openConfirmModal("Upload failed", "Could not upload document: " + err.message, () => {});
+      }
+      renderDocList();
+    }
+  };
+
+  ["dragenter", "dragover"].forEach((ev) =>
+    docDrop.addEventListener(ev, (e) => {
+      e.preventDefault();
+      docDrop.classList.add("dragover");
+    })
+  );
+  ["dragleave", "drop"].forEach((ev) =>
+    docDrop.addEventListener(ev, (e) => {
+      e.preventDefault();
+      if (ev === "dragleave" && docDrop.contains(e.relatedTarget)) return;
+      docDrop.classList.remove("dragover");
+    })
+  );
+  docDrop.addEventListener("drop", (e) => {
+    addDocFiles(e.dataTransfer?.files || []);
+  });
+
   renderImageThumbs();
+  renderDocList();
+
   updateNextState();
   updateSaveState();
 
   // ===== Action: Dummy =====
   if (dummyBtn) {
-    dummyBtn.addEventListener("click", async () => {
-      const pool = companies && companies.length ? companies : (devCompaniesCache || []);
-      if (!pool.length) {
-        openConfirmModal("No companies", "There are no companies in the customer database yet. Create one first.", () => {});
-        return;
-      }
-      try {
-        const comp = rnd(pool);
-        selectCompany(Number(comp.id), comp.name);
-        await loadMembers(Number(comp.id));
-        const memberOpts = [...memberEl.querySelectorAll("option")].filter((o) => o.value !== "");
-        if (memberOpts.length) {
-          const m = rnd(memberOpts);
-          memberEl.value = m.value;
-          devState.memberId = m.value;
-        }
-        const projOpts = [...projectEl.querySelectorAll("option")].filter((o) => o.value !== "");
-        if (projOpts.length) {
-          const p = rnd(projOpts);
-          projectEl.value = p.value;
-          devState.projectId = p.value;
-          devState.projectName = p.textContent;
-        }
-        const poolImgs = await ensureImagePool();
-        devState.images.length = 0;
-        if (poolImgs && poolImgs.length) {
-          const s = poolImgs[Math.floor(Math.random() * poolImgs.length)];
-          devState.images.push({ id: "enq-img-" + Date.now() + "-0", name: s.name, url: s.url });
-        }
-        updateNextState();
-        updateSaveState();
-      } catch (err) {
-        openConfirmModal("Dummy failed", String(err && err.message ? err.message : err), () => {});
-      }
-    });
+    dummyBtn.addEventListener("click", () => fillDummyEnquiry({
+      searchEl, hiddenEl, memberEl, projectEl, productEl, itemEl, listEl, companies,
+      selectCompany, loadMembers, updateNextState, updateSaveState, updateUnlock,
+    }));
   }
 
   // ===== Action: Back =====
@@ -2238,7 +2907,15 @@ async function renderEnquiryEdit() {
       s.memberName = enquiryOriginal.member_name || "";
       s.projectId = enquiryOriginal.project_id != null ? String(enquiryOriginal.project_id) : "";
       s.projectName = enquiryOriginal.project_name || "";
+      s.item = enquiryOriginal.item_name || "";
+      s.product = enquiryOriginal.product_type || "";
+      s.height = enquiryOriginal.height != null ? String(enquiryOriginal.height) : "";
+      s.width = enquiryOriginal.width != null ? String(enquiryOriginal.width) : "";
+      s.raisedHeight = enquiryOriginal.raised_height != null ? String(enquiryOriginal.raised_height) : "";
+      s.noOfColor = enquiryOriginal.no_of_color != null ? String(enquiryOriginal.no_of_color) : "";
+      s.pantones = Array.isArray(enquiryOriginal.pantones) ? enquiryOriginal.pantones.map((p) => ({ value: p.value || "", color: p.color || "#000000" })) : [];
       s.images = (enquiryOriginal.image_names || []).map((n) => ({ id: "eimg-" + n, name: n, url: assetUrl(n) }));
+      s.docs = (enquiryOriginal.doc_names || []).map((name, i) => ({ id: "edoc-" + enquiryEditId + "-" + i, name, file: null }));
       renderEnquiryEdit();   // re-render with restored data
     });
   }
@@ -2248,7 +2925,7 @@ async function renderEnquiryEdit() {
     if (saveBtn.disabled) return;
     const payload = buildEnquiryPayload();
     if (!payload) {
-      openConfirmModal("Cannot save", "Please select a company, member, and add at least one image.", () => {});
+      openConfirmModal("Cannot save", "Please fill company, member, item, and product type.", () => {});
       return;
     }
     saveBtn.disabled = true;
@@ -2298,7 +2975,12 @@ function openEnquiryPostSaveModal() {
     overlay.remove();
     const keep = { companyId: enquiryCreateState.companyId, companyName: enquiryCreateState.companyName,
                    memberId: enquiryCreateState.memberId, memberName: enquiryCreateState.memberName,
-                   projectId: enquiryCreateState.projectId, projectName: enquiryCreateState.projectName };
+                   projectId: enquiryCreateState.projectId, projectName: enquiryCreateState.projectName,
+                   item: enquiryCreateState.item, product: enquiryCreateState.product,
+                   height: enquiryCreateState.height, width: enquiryCreateState.width,
+                   raisedHeight: enquiryCreateState.raisedHeight, noOfColor: enquiryCreateState.noOfColor,
+                   pantones: enquiryCreateState.pantones.slice(),
+                   images: enquiryCreateState.images.slice(), docs: enquiryCreateState.docs.slice() };
     resetEnquiryState();
     Object.assign(enquiryCreateState, keep);
     renderEnquiryCreate();
@@ -4639,23 +5321,36 @@ async function renderEnquiryView() {
 }
 
 function paintEnquiryView() {
+  // Enquiry / View mirrors Development / View exactly: same columns, same
+  // rendering helpers (devDetailsSummary for Details, assetUrl/docUrl for media).
   const cols = [
     { key: "company_name", label: "Company" },
     { key: "member_name", label: "Member" },
-    { key: "project_name", label: "Project" },
-    { key: "image", label: "Images" },
+    { key: "item_name", label: "Item" },
+    { key: "product_type", label: "Product Type" },
+    { key: "image", label: "Image" },
+    { key: "documents", label: "Documents" },
     { key: "created_at", label: "Created" },
     { key: "updated_at", label: "Updated" },
+    { key: "details", label: "Details" },
   ];
-  const searchCols = cols.filter((c) => c.key !== "image");
+
+  // image / documents / details are rendered specially and not column-searched
+  const searchCols = cols.filter(
+    (c) => c.key !== "image" && c.key !== "documents" && c.key !== "details"
+  );
+
   const shown = enqViewData.filter((r) =>
     searchCols.every((c) => fuzzyMatch(r[c.key], enqViewFilters[c.key]))
   );
+
   const allKeys = shown.map((r) => "e:" + r.id);
   const allChecked = allKeys.length > 0 && allKeys.every((k) => enqViewSelected.has(k));
 
   const searchRow = cols.map((c) => {
-    if (c.key === "image") return `<th class="search-th"></th>`;
+    if (c.key === "image" || c.key === "documents" || c.key === "details") {
+      return `<th class="search-th"></th>`;
+    }
     return `<th class="search-th">
        <input class="col-search" data-key="${c.key}" type="text"
               placeholder="Search ${c.label}…" value="${escapeHtml(enqViewFilters[c.key] || "")}" />
@@ -4669,6 +5364,9 @@ function paintEnquiryView() {
       ? `<div class="dev-thumbs">` + imgs.map((n) =>
           `<img class="dev-thumb-sm" src="${assetUrl(n)}" alt="${escapeHtml(n)}" title="${escapeHtml(n)}" />`).join("") + `</div>`
       : `<span class="muted">—</span>`;
+    const docs = (r.doc_names || []).map((n) =>
+      `<a class="doc-tag" href="${docUrl(n)}" target="_blank" rel="noopener" download title="${escapeHtml(n)}">📄 ${escapeHtml(displayName(n))}</a>`).join("");
+    const docLinks = docs || `<span class="muted">—</span>`;
     return `
       <tr class="${checked ? "selected" : ""}">
         <td>
@@ -4678,16 +5376,19 @@ function paintEnquiryView() {
         </td>
         <td>${escapeHtml(r.company_name)}</td>
         <td>${escapeHtml(r.member_name || "—")}</td>
-        <td>${escapeHtml(r.project_name || "—")}</td>
+        <td>${escapeHtml(r.item_name)}</td>
+        <td>${escapeHtml(r.product_type)}</td>
         <td class="cell-imgs">${thumbs}</td>
+        <td class="cell-docs">${docLinks}</td>
         <td>${escapeHtml(r.created_at)}</td>
         <td>${escapeHtml(r.updated_at)}</td>
+        <td class="details-cell">${escapeHtml(devDetailsSummary(r))}</td>
         <td class="row-actions">
           <button class="icon-btn" data-edit="${r.id}" title="Edit">✎</button>
           <button class="icon-btn danger" data-del="${r.id}" title="Delete">🗑</button>
         </td>
       </tr>`;
-  }).join("") || `<tr><td colspan="8" class="muted">No matches.</td></tr>`;
+  }).join("") || `<tr><td colspan="11" class="muted">No matches.</td></tr>`;
 
   panel.innerHTML = `
     <div class="view-head">
@@ -4852,12 +5553,28 @@ async function editEnquiryInEdit(id) {
   s.memberName = rec.member_name || "";
   s.projectId = rec.project_id != null ? String(rec.project_id) : "";
   s.projectName = rec.project_name || "";
+  s.item = rec.item_name || "";
+  s.product = rec.product_type || "";
+  s.height = rec.height != null ? String(rec.height) : "";
+  s.width = rec.width != null ? String(rec.width) : "";
+  s.raisedHeight = rec.raised_height != null ? String(rec.raised_height) : "";
+  s.noOfColor = rec.no_of_color != null ? String(rec.no_of_color) : "";
+  s.pantones = Array.isArray(rec.pantones)
+    ? rec.pantones.map((p) => ({ value: p.value || "", color: p.color || "#000000" }))
+    : [];
 
   // images — resolve each saved name to its servable URL
   s.images = (rec.image_names || []).map((n) => ({
     id: "eimg-" + n,
     name: n,
     url: assetUrl(n),
+  }));
+
+  // documents — bare names resolve under /uploads/ on the server
+  s.docs = (rec.doc_names || []).map((name, i) => ({
+    id: "edoc-" + rec.id + "-" + i,
+    name,
+    file: null,
   }));
 
   enquiryEditMode = true;
