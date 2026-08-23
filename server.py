@@ -114,10 +114,29 @@ def init_db():
         )
         """
     )
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS enquiries (
+            id            INTEGER PRIMARY KEY AUTOINCREMENT,
+            company_id    INTEGER,
+            company_name  TEXT NOT NULL,
+            member_id     INTEGER,
+            member_name   TEXT,
+            project_id    INTEGER,
+            project_name  TEXT,
+            item_name     TEXT NOT NULL,
+            image_names   TEXT,
+            doc_names     TEXT,
+            created_at    TEXT NOT NULL,
+            updated_at    TEXT NOT NULL
+        )
+        """
+    )
     # Migrations: add any columns introduced after the initial schema so that
     # an existing database (already created without them) keeps working.
     _ensure_company_columns(conn)
     _ensure_dev_columns(conn)
+    _ensure_enquiry_columns(conn)
     conn.commit()
     conn.close()
 
@@ -154,6 +173,23 @@ def _ensure_dev_columns(conn):
     for col, ctype in _DEV_MISSING_COLUMNS.items():
         if col not in existing:
             cur.execute(f"ALTER TABLE developments ADD COLUMN {col} {ctype}")
+
+
+# Columns added to `enquiries` after the table was first created. Each entry
+# is { column_name: SQL type }. init_db() adds any that are missing.
+_ENQUIRY_MISSING_COLUMNS = {
+    "project_id": "INTEGER",
+    "project_name": "TEXT",
+    "doc_names": "TEXT",
+}
+
+
+def _ensure_enquiry_columns(conn):
+    cur = conn.cursor()
+    existing = {r[1] for r in cur.execute("PRAGMA table_info(enquiries)").fetchall()}
+    for col, ctype in _ENQUIRY_MISSING_COLUMNS.items():
+        if col not in existing:
+            cur.execute(f"ALTER TABLE enquiries ADD COLUMN {col} {ctype}")
 
 
 def now_iso():
@@ -561,6 +597,7 @@ def api_delete_company(handler, cid):
     conn.execute("DELETE FROM ship_to WHERE company_id = ?", (cid,))
     conn.execute("DELETE FROM projects WHERE company_id = ?", (cid,))
     conn.execute("DELETE FROM developments WHERE company_id = ?", (cid,))
+    conn.execute("DELETE FROM enquiries WHERE company_id = ?", (cid,))
     conn.execute("DELETE FROM companies WHERE id = ?", (cid,))
     conn.commit()
     conn.close()
@@ -878,6 +915,104 @@ def api_delete_development(handler, did):
     return json_response(handler, {"ok": True, "id": did}, 200)
 
 
+# --- Enquiry handlers ----------------------------------------------------
+
+def _enquiry_row_to_payload(row):
+    out = dict(row)
+    for k in ("image_names", "doc_names"):
+        if out.get(k):
+            try:
+                out[k] = json.loads(out[k])
+            except (json.JSONDecodeError, TypeError):
+                out[k] = []
+        else:
+            out[k] = []
+    return out
+
+
+def api_list_enquiries(handler):
+    conn = db()
+    rows = conn.execute("SELECT * FROM enquiries ORDER BY id DESC").fetchall()
+    conn.close()
+    return json_response(handler, [_enquiry_row_to_payload(r) for r in rows])
+
+
+def api_get_enquiry(handler, eid):
+    conn = db()
+    row = conn.execute("SELECT * FROM enquiries WHERE id = ?", (eid,)).fetchone()
+    conn.close()
+    if not row:
+        return json_response(handler, {"error": "not found"}, 404)
+    return json_response(handler, _enquiry_row_to_payload(row))
+
+
+def _enquiry_validate(data):
+    return (data.get("company_name") or "").strip() and \
+           (data.get("item_name") or "").strip()
+
+
+def _enquiry_insert_or_update(conn, eid, data):
+    company_name = (data.get("company_name") or "").strip()
+    item_name = (data.get("item_name") or "").strip()
+    image_names = data.get("image_names")
+    if isinstance(image_names, (list, dict)):
+        image_names = json.dumps(image_names, ensure_ascii=False)
+    doc_names = data.get("doc_names")
+    if isinstance(doc_names, (list, dict)):
+        doc_names = json.dumps(doc_names, ensure_ascii=False)
+    vals = (
+        data.get("company_id") if data.get("company_id") is not None else None,
+        company_name,
+        data.get("member_id") if data.get("member_id") is not None else None,
+        (data.get("member_name") or "").strip() or None,
+        data.get("project_id") if data.get("project_id") is not None else None,
+        (data.get("project_name") or "").strip() or None,
+        item_name,
+        image_names,
+        doc_names,
+    )
+    if eid is None:
+        cur = conn.cursor()
+        cur.execute(
+            "INSERT INTO enquiries "
+            "(company_id, company_name, member_id, member_name, project_id, project_name, "
+            "item_name, image_names, doc_names, created_at, updated_at) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+            vals + (now_iso(), now_iso()),
+        )
+        return cur.lastrowid
+    conn.execute(
+        "UPDATE enquiries SET "
+        "company_id=?, company_name=?, member_id=?, member_name=?, project_id=?, project_name=?, "
+        "item_name=?, image_names=?, doc_names=?, updated_at=? WHERE id=?",
+        vals + (now_iso(), eid),
+    )
+    return eid
+
+
+def api_create_enquiry(handler):
+    data = read_json_body(handler)
+    if not _enquiry_validate(data):
+        return json_response(handler, {"error": "company_name, item_name are required"}, 400)
+    conn = db()
+    eid = _enquiry_insert_or_update(conn, None, data)
+    conn.commit()
+    conn.close()
+    return json_response(handler, {"id": eid}, 201)
+
+
+def api_delete_enquiry(handler, eid):
+    conn = db()
+    row = conn.execute("SELECT * FROM enquiries WHERE id = ?", (eid,)).fetchone()
+    if not row:
+        conn.close()
+        return json_response(handler, {"error": "not found"}, 404)
+    conn.execute("DELETE FROM enquiries WHERE id = ?", (eid,))
+    conn.commit()
+    conn.close()
+    return json_response(handler, {"ok": True, "id": eid}, 200)
+
+
 # --- Router ---------------------------------------------------------------
 
 class Handler(SimpleHTTPRequestHandler):
@@ -986,6 +1121,19 @@ class Handler(SimpleHTTPRequestHandler):
                     api_update_development(self, did); return True
                 if method == "DELETE":
                     api_delete_development(self, did); return True
+
+        if path == "/api/enquiries" and method == "POST":
+            api_create_enquiry(self); return True
+        if path == "/api/enquiries" and method == "GET":
+            api_list_enquiries(self); return True
+        if path.startswith("/api/enquiries/"):
+            rest = path[len("/api/enquiries/"):]
+            if rest.isdigit():
+                eid = int(rest)
+                if method == "GET":
+                    api_get_enquiry(self, eid); return True
+                if method == "DELETE":
+                    api_delete_enquiry(self, eid); return True
 
         return False
 

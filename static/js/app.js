@@ -79,6 +79,9 @@ sidebar.querySelectorAll(".nav-item").forEach((item) => {
     if (item.dataset.target === "development-create") {
       resetDevState();   // clear only the Create draft, leave the edit alone
     }
+    if (item.dataset.target === "enquiry-create") {
+      resetEnquiryState();   // clear the Enquiry draft for a fresh create
+    }
     // Only the Customer edit session (its own tab) is cleared here.
     custEditMode = false;
     custEditId = null;
@@ -766,6 +769,34 @@ const devCreateState = blankDevState();
 const devEditState   = blankDevState();
 let devState = devCreateState;
 
+// Persistent state for the Enquiry forms. Mirrors the Development model but
+// only carries the fields Enquiry needs (Part 1 company/member/project + Part
+// 4 image/documents). Parts 2 & 3 are intentionally excluded from the data
+// model — the Create screen shows them as "TBA" placeholders. There is a single
+// working draft (enquiryCreateState); like Development, `enqState` is the
+// mutable alias the shared helpers bind to.
+function blankEnquiryState() {
+  return {
+    companyId: "",
+    companyName: "",
+    memberId: "",
+    memberName: "",
+    projectId: "",
+    projectName: "",
+    item: "",
+    product: "",          // Product type (Part 2)
+    height: "",           // Part 3 details
+    width: "",
+    raisedHeight: "",
+    noOfColor: "",
+    pantones: [],         // [{ value, color }]
+    images: [],   // [{ id, name, url }] — multiple images allowed
+  };
+}
+const enquiryCreateState = blankEnquiryState();
+let enqState = enquiryCreateState;
+let enqSaveStateFn = null;
+
 // Pool of sample images (from C:\Users\ng\Desktop\canvas_source) used by the
 // Dummy button and the Development / View image column. Fetched once.
 let devImagePool = null;   // [{ name, url }]
@@ -1170,6 +1201,796 @@ function findPantoneMatches(query, limit = 8) {
 
   return results.concat(fuzzy);
 }
+
+// Clear the Enquiry Create draft (blank new page on the right frame).
+function resetEnquiryState() {
+  const s = enquiryCreateState;
+  s.companyId = "";
+  s.companyName = "";
+  s.memberId = "";
+  s.memberName = "";
+  s.projectId = "";
+  s.projectName = "";
+  s.item = "";
+  s.product = "";          // Part 2
+  s.height = "";           // Part 3
+  s.width = "";
+  s.raisedHeight = "";
+  s.noOfColor = "";
+  s.pantones = [];
+  s.images = [];
+}
+
+// Build the enquiry payload from current enqState + DOM inputs.
+function buildEnquiryPayload() {
+  const itemEl = panel.querySelector("#enq-item");
+  const companyName = enqState.companyName;
+  const item = (itemEl ? itemEl.value.trim() : enqState.item) || enqState.item;
+  if (!companyName || !item) return null;
+  // Part 4 images are REQUIRED to save (enforced by updateSaveState). Documents
+  // are not used by Enquiry.
+  const memberEl = panel.querySelector("#enq-member");
+  const memberName = memberEl && memberEl.value
+    ? memberEl.options[memberEl.selectedIndex]?.textContent || ""
+    : "";
+  return {
+    company_id: enqState.companyId ? Number(enqState.companyId) : null,
+    company_name: companyName,
+    member_id: enqState.memberId ? Number(enqState.memberId) : null,
+    member_name: memberName || null,
+    project_id: enqState.projectId ? Number(enqState.projectId) : null,
+    project_name: enqState.projectName || null,
+    item_name: item,
+    image_names: enqState.images.map((i) => i.name),
+    doc_names: [],
+  };
+}
+
+async function renderEnquiryCreate() {
+  // Enquiry / Create is a faithful duplicate of Development / Create:
+  // identical Part 1 (Company & Member), Part 2 (Item & Product Type),
+  // Part 3 (Details) and Part 4 image drag-and-drop logic. Differences:
+  //   • Part 4 has NO documents (Enquiry = image only)
+  //   • Part 4 image dropzone accepts MULTIPLE images (append, not replace)
+  //   • No Dummy button; Save posts to /api/enquiries
+  // Point the shared alias at enquiryCreateState so shared helpers operate
+  // on the Enquiry draft.
+  devState = enquiryCreateState;
+
+  panel.innerHTML = `
+    <h2>Enquiry / Create</h2>
+
+    <div class="actions create-actions">
+      <button class="btn primary" id="enq-save" type="button" disabled>Save</button>
+    </div>
+
+    <div class="dev-2col">
+      <!-- Parts 1 + 2 + 3 stacked in one card -->
+      <div class="dev-part" id="enq-main">
+        <h3 class="subhead part-head">
+          1 · Company &amp; Member
+          <button class="icon-btn" id="enq-refresh" type="button" title="Refresh customer database">⟳</button>
+        </h3>
+
+        <div class="field-stack">
+          <div class="field" id="enq-company-field">
+            <label for="enq-company">Company</label>
+            <div class="combobox" id="enq-company-wrap">
+              <input id="enq-company" type="text" autocomplete="off"
+                     placeholder="Type ≥ 3 letters to search…" disabled />
+              <input type="hidden" id="enq-company-id" />
+              <ul class="combobox-list" id="enq-company-list" role="listbox" hidden></ul>
+            </div>
+          </div>
+
+          <div class="field" id="enq-member-field">
+            <label for="enq-member">Member</label>
+            <select id="enq-member" disabled>
+              <option value="">— select a company first —</option>
+            </select>
+          </div>
+
+          <div class="field" id="enq-project-field">
+            <label for="enq-project">Project <span class="hint">(optional)</span></label>
+            <select id="enq-project" disabled>
+              <option value="">No project</option>
+            </select>
+          </div>
+        </div>
+
+        <h3 class="subhead">2 · Item &amp; Product Type</h3>
+        <div class="dim-row">
+          <div class="field">
+            <label for="enq-item">Item name</label>
+            <input id="enq-item" type="text" placeholder="e.g. Spring Collection Patch" autocomplete="off" />
+          </div>
+          <div class="field">
+            <label for="enq-product">Product type</label>
+            <select id="enq-product" disabled>
+              <option value="">— select —</option>
+              ${PRODUCT_TYPES.map((p) => `<option value="${escapeHtml(p)}">${escapeHtml(p)}</option>`).join("")}
+            </select>
+          </div>
+        </div>
+
+        <h3 class="subhead">3 · Details</h3>
+        <div id="enq-part3-body"></div>
+      </div>
+
+      <!-- 4th part: image only (multiple images allowed; no documents) -->
+      <div class="dev-part" id="enq-part4">
+        <h3 class="subhead">4 · Images <span class="req-mark">required</span></h3>
+
+        <div class="dropzone" id="enq-image-drop" tabindex="0">
+          <div class="drop-region">
+            <span class="drop-icon">🖼️</span>
+            <p class="muted small drop-hint">Drop or paste images here — required to save.<br/>You can add more than one image.</p>
+          </div>
+          <div class="thumb-grid" id="enq-image-thumbs"></div>
+        </div>
+
+      </div>
+    </div>
+  `;
+
+  const part1 = panel.querySelector("#enq-main");
+  const part2 = panel.querySelector("#enq-product");
+  const searchEl = panel.querySelector("#enq-company");
+  const hiddenEl = panel.querySelector("#enq-company-id");
+  const listEl   = panel.querySelector("#enq-company-list");
+  const memberEl = panel.querySelector("#enq-member");
+  const projectEl = panel.querySelector("#enq-project");
+  const productEl = panel.querySelector("#enq-product");
+  const itemEl = panel.querySelector("#enq-item");
+  const saveBtn = panel.querySelector("#enq-save");
+
+  // --- Part 4 unlock when part 1 AND part 2 are complete ---
+  const part3Body = panel.querySelector("#enq-part3-body");
+  const part3 = part3Body;
+  const part4 = panel.querySelector("#enq-part4");
+
+  const updateUnlock = () => {
+    // Part 4 stays unlocked (always available) — only its image requirement
+    // gates Save/Update. Documents there are optional; the image is required.
+    part4.classList.remove("locked");
+    renderPart3();
+  };
+
+  // enable search once we have the company list
+  let companies = [];
+  try {
+    if (devCompaniesCache) {
+      companies = devCompaniesCache;
+    } else {
+      companies = await fetchJson(API + "/api/companies");
+      devCompaniesCache = companies;
+    }
+  } catch (err) {
+    searchEl.placeholder = "Failed to load companies: " + err.message;
+    searchEl.disabled = true;
+    return;
+  }
+  searchEl.disabled = false;
+
+  // restore product selection
+  if (devState.product) productEl.value = devState.product;
+  // restore item name
+  if (devState.item) itemEl.value = devState.item;
+
+  // When the Create draft still carries a company/member/project (e.g. after a
+  // "same customer" post-save), repopulate the dropdowns so Part 1 stays filled
+  // and the next record can inherit the same customer/member/project.
+  if (devState.companyId && devState.memberId) {
+    hiddenEl.value = devState.companyId;
+    searchEl.value = devState.companyName;
+    memberEl.innerHTML = `<option value="${devState.memberId}">${escapeHtml(devState.memberName || devState.memberId)}</option>`;
+    memberEl.value = devState.memberId;
+    memberEl.disabled = false;
+    if (devState.projectId) {
+      projectEl.innerHTML = `<option value="${devState.projectId}">${escapeHtml(devState.projectName || devState.projectId)}</option>`;
+      projectEl.value = devState.projectId;
+      projectEl.disabled = false;
+    }
+    loadMembers(Number(devState.companyId), devState.memberId, devState.projectId);
+  }
+
+  // refresh = re-fetch latest companies + members from the customer database
+  panel.querySelector("#enq-refresh").addEventListener("click", async (e) => {
+    const btn = e.currentTarget;
+    btn.disabled = true;
+    btn.classList.add("spinning");
+    const prevId = hiddenEl.value;
+    try {
+      companies = await fetchJson(API + "/api/companies");
+      devCompaniesCache = companies;
+      // if a company was chosen, reload its members so the list is current
+      if (prevId !== "") {
+        const stillThere = companies.some((c) => String(c.id) === String(prevId));
+        if (stillThere) {
+          // keep the currently-selected member if it still exists in the
+          // customer database (don't reset it on refresh)
+          await loadMembers(Number(prevId), devState.memberId || undefined, devState.projectId || undefined);
+        } else {
+          resetCompanySelection();
+        }
+      }
+      // silent refresh: update the data only, don't re-open/pop the search list
+      // or auto-highlight any company name.
+      updateNextState();
+    } catch (err) {
+      alert("Refresh failed: " + err.message);
+    } finally {
+      btn.disabled = false;
+      btn.classList.remove("spinning");
+    }
+  });
+
+  // -- helpers --
+  const updateNextState = () => {
+    const part1Done = hiddenEl.value !== "" && memberEl.value !== "";
+    // unlock part 2 once part 1 is complete
+    part2.disabled = !part1Done;
+    productEl.disabled = !part1Done;
+    updateUnlock();
+    updateSaveState();   // company/member change affects Save gating
+  };
+
+  // Track item name input into devState and re-evaluate Save gating.
+  itemEl.addEventListener("input", () => {
+    devState.item = itemEl.value.trim();
+    updateSaveState();
+  });
+
+  // ---- Part 3 dynamic body (depends on product type) ----
+  const renderPart3 = () => {
+    ensurePantoneData();   // load the TCX dataset (no-op if already cached)
+    if (devState.product === "raised silicon label") {
+      renderRaisedSiliconLabel();
+    } else {
+      // default: just height + width
+      part3Body.innerHTML = `
+        <div class="dim-row">
+          <div class="field">
+            <label for="enq-height">Height (mm)</label>
+            <input id="enq-height" type="number" min="0" step="0.1" placeholder="0.0" autocomplete="off" />
+          </div>
+          <div class="field">
+            <label for="enq-width">Width (mm)</label>
+            <input id="enq-width" type="number" min="0" step="0.1" placeholder="0.0" autocomplete="off" />
+          </div>
+        </div>`;
+      bindDimInputs();
+    }
+  };
+
+  const bindDimInputs = () => {
+    const h = part3Body.querySelector("#enq-height");
+    const w = part3Body.querySelector("#enq-width");
+    if (h) { h.value = devState.height; h.addEventListener("input", () => { devState.height = h.value; updateSaveState(); }); }
+    if (w) { w.value = devState.width;  w.addEventListener("input",  () => { devState.width  = w.value; updateSaveState(); }); }
+  };
+
+  const renderRaisedSiliconLabel = () => {
+    part3Body.innerHTML = `
+      <div class="dim-row">
+        <div class="field">
+          <label for="enq-height">Height (mm)</label>
+          <input id="enq-height" type="number" min="0" step="0.1" placeholder="0.0" autocomplete="off" />
+        </div>
+        <div class="field">
+          <label for="enq-width">Width (mm)</label>
+          <input id="enq-width" type="number" min="0" step="0.1" placeholder="0.0" autocomplete="off" />
+        </div>
+      </div>
+      <div class="dim-row">
+        <div class="field">
+          <label for="enq-raised-height">Raised height (mm)</label>
+          <input id="enq-raised-height" type="number" min="0" step="0.1" placeholder="0.0" autocomplete="off" />
+        </div>
+        <div class="field">
+          <label for="enq-no-of-color">No. of color</label>
+          <input id="enq-no-of-color" type="number" min="1" step="1" placeholder="0" autocomplete="off" />
+        </div>
+      </div>
+      <div id="enq-pantone-wrap"></div>
+    `;
+
+    bindDimInputs();
+    const rh = part3Body.querySelector("#enq-raised-height");
+    const nc = part3Body.querySelector("#enq-no-of-color");
+    if (rh) { rh.value = devState.raisedHeight; rh.addEventListener("input", () => { devState.raisedHeight = rh.value; updateSaveState(); }); }
+    if (nc) {
+      nc.value = devState.noOfColor;
+      // update only the pantone rows (not the whole body) to keep focus
+      nc.addEventListener("input", () => {
+        devState.noOfColor = nc.value;
+        renderPantoneRows();
+        updateSaveState();
+      });
+    }
+    renderPantoneRows();
+  };
+
+  // re-render only the pantone input rows (keeps focus on the No. of color field)
+  const renderPantoneRows = () => {
+    const wrap = part3Body.querySelector("#enq-pantone-wrap");
+    if (!wrap) return;
+    const n = parseInt(devState.noOfColor, 10);
+    if (!isNaN(n) && n > 0) {
+      while (devState.pantones.length < n) devState.pantones.push({ value: "", color: "#000000" });
+      if (devState.pantones.length > n) devState.pantones.length = n;
+    }
+    if ((parseInt(devState.noOfColor, 10) || 0) <= 0) {
+      wrap.innerHTML = "";
+      return;
+    }
+    wrap.innerHTML = devState.pantones.map((p, i) => `
+      <div class="pantone-row">
+        <div class="field pantone-code">
+          <label for="enq-pantone-${i}">Pantone #${i + 1}</label>
+          <input id="enq-pantone-${i}" type="text" class="pantone-input"
+                 data-idx="${i}" value="${escapeHtml(p.value)}"
+                 placeholder="code (11-0103) or name (egret)" autocomplete="off" />
+          <div class="pantone-match" id="enq-pantone-match-${i}"></div>
+        </div>
+      </div>`).join("");
+    // Build + fill the match display for row i from a query string.
+    // Used both on live typing and when restoring state after a tab switch.
+    const showPantoneMatch = (i, query) => {
+      const matchEl = wrap.querySelector("#enq-pantone-match-" + i);
+      if (!matchEl) return;
+      const matches = findPantoneMatches(query);
+      if (!matches.length) {
+        matchEl.innerHTML = `<span class="muted small">No match</span>`;
+        return;
+      }
+      const top = matches[0];
+      if (devState.pantones[i]) devState.pantones[i].color = "#" + top.hex;
+
+      matchEl.innerHTML =
+        `<div class="pantone-top">` +
+          `<span class="swatch" style="background:#${escapeHtml(top.hex)}"></span>` +
+          `<span class="muted small">${escapeHtml(top.code)} · ${escapeHtml(top.name)} · ` +
+          `<span class="pantone-type" title="${escapeHtml(pantoneTypeName(top.type))}">${escapeHtml(pantoneTypeName(top.type))}</span> · #${escapeHtml(top.hex)}</span>` +
+        `</div>` +
+        (matches.length > 1
+          ? `<div class="pantone-similar">similar: ` +
+            matches.slice(1).map((m) =>
+              `<span class="pantone-chip" data-code="${escapeHtml(m.code)}" ` +
+              `title="${escapeHtml(m.code)} · ${escapeHtml(m.name)} · ${escapeHtml(pantoneTypeName(m.type))}">` +
+                `<span class="swatch sm" style="background:#${escapeHtml(m.hex)}"></span>` +
+                `${escapeHtml(m.name)} ` +
+                `<span class="pantone-type" title="${escapeHtml(pantoneTypeName(m.type))}">${escapeHtml(pantoneTypeName(m.type))}</span></span>`
+            ).join("") +
+            `</div>`
+          : "");
+
+      // clicking a similar chip fills the input with that code and shows the
+      // chosen color as plain text + square swatch below
+      matchEl.querySelectorAll(".pantone-chip").forEach((chip) => {
+        chip.addEventListener("click", () => {
+          const inp = wrap.querySelector("#enq-pantone-" + i);
+          if (inp) inp.value = chip.dataset.code;
+          if (devState.pantones[i]) devState.pantones[i].value = chip.dataset.code;
+          const chosen = findPantoneMatches(chip.dataset.code)[0];
+          matchEl.innerHTML = chosen
+            ? `<div class="pantone-top">` +
+              `<span class="swatch" style="background:#${escapeHtml(chosen.hex)}"></span>` +
+              `<span class="muted small">${escapeHtml(chosen.code)} · ${escapeHtml(chosen.name)} · ` +
+              `<span class="pantone-type" title="${escapeHtml(pantoneTypeName(chosen.type))}">${escapeHtml(pantoneTypeName(chosen.type))}</span> · #${escapeHtml(chosen.hex)}</span>` +
+              `</div>`
+            : "";
+          // picking a suggestion sets the value programmatically, which does NOT
+          // fire the input event — re-gate Save/Update so the button can light up.
+          updateSaveState();
+        });
+      });
+    };
+
+    wrap.querySelectorAll(".pantone-input").forEach((inp) => {
+      inp.addEventListener("input", () => {
+        const i = Number(inp.dataset.idx);
+        if (!devState.pantones[i]) return;
+        devState.pantones[i].value = inp.value;
+        showPantoneMatch(i, inp.value);
+        updateSaveState();
+      });
+    });
+
+    // restore any previously-typed matches (so they survive a tab switch)
+    devState.pantones.forEach((p, i) => {
+      if (p && p.value) showPantoneMatch(i, p.value);
+    });
+  };
+
+  const resetCompanySelection = () => {
+    hiddenEl.value = "";
+    memberEl.value = "";
+    memberEl.disabled = true;
+    memberEl.innerHTML = `<option value="">— select a company first —</option>`;
+    devState.companyId = "";
+    devState.companyName = "";
+    devState.memberId = "";
+    devState.projectId = "";
+    devState.projectName = "";
+    updateNextState();
+  };
+
+  async function loadMembers(companyId, restoreMemberId, restoreProjectId) {
+    try {
+      const comp = await fetchAnchoredCompany(companyId);
+      const members = comp.members || [];
+      memberEl.innerHTML = members.length
+        ? `<option value="">— select a member —</option>` +
+          members.map((m) =>
+            `<option value="${m.id}">${escapeHtml(m.name)}</option>`).join("")
+        : `<option value="">— no members —</option>`;
+      memberEl.disabled = !members.length;
+      // restore previously selected member if it still exists
+      if (restoreMemberId != null && members.some((m) => String(m.id) === String(restoreMemberId))) {
+        memberEl.value = String(restoreMemberId);
+      }
+      // populate the project dropdown from this company's saved projects
+      const projects = comp.projects || [];
+      projectEl.innerHTML = `<option value="">No project</option>` +
+        (projects.length
+          ? projects.map((p) =>
+              `<option value="${p.id}">${escapeHtml(p.name)}</option>`).join("")
+          : "");
+      projectEl.disabled = false;
+      // restore previously selected project if it still exists in the customer DB
+      const wantProject = restoreProjectId != null ? String(restoreProjectId) : (devState.projectId || "");
+      if (wantProject && projects.some((p) => String(p.id) === wantProject)) {
+        projectEl.value = wantProject;
+        const hit = projects.find((p) => String(p.id) === wantProject);
+        devState.projectId = wantProject;
+        devState.projectName = hit.name;
+      } else {
+        devState.projectId = "";
+        devState.projectName = "";
+      }
+    } catch (err) {
+      memberEl.innerHTML = `<option value="">— load failed —</option>`;
+      memberEl.disabled = true;
+      projectEl.innerHTML = `<option value="">No project</option>`;
+      projectEl.disabled = false;
+    }
+    updateNextState();
+  };
+
+  // -- typeahead --
+  const renderOptions = (matches) => {
+    if (!matches.length) {
+      listEl.innerHTML = `<li class="combobox-empty">No matches</li>`;
+    } else {
+      listEl.innerHTML = matches.map((c, i) =>
+        `<li class="combobox-item" role="option" data-id="${c.id}" data-name="${escapeHtml(c.name)}" data-idx="${i}">` +
+        `${escapeHtml(c.name)}</li>`).join("");
+      listEl.querySelectorAll(".combobox-item").forEach((li) => {
+        li.addEventListener("click", () => selectCompany(Number(li.dataset.id), li.dataset.name));
+      });
+      // auto-highlight the first match so Enter/Tab can accept it immediately
+      listEl.querySelectorAll(".combobox-item").forEach((it, i) => {
+        it.classList.toggle("active", i === 0);
+      });
+    }
+    listEl.hidden = false;
+  };
+
+  const selectCompany = (id, name) => {
+    hiddenEl.value = id;
+    searchEl.value = name;
+    listEl.hidden = true;
+    memberEl.value = "";
+    devState.companyId = String(id);
+    devState.companyName = name;
+    devState.memberId = "";
+    devState.projectId = "";
+    devState.projectName = "";
+    loadMembers(id, null, null);
+    updateNextState();
+  };
+
+  searchEl.addEventListener("input", () => {
+    const q = searchEl.value.trim().toLowerCase();
+    hiddenEl.value = "";
+    memberEl.value = "";
+    memberEl.disabled = true;
+    memberEl.innerHTML = `<option value="">— select a company first —</option>`;
+    devState.companyId = "";
+    devState.companyName = "";
+    devState.memberId = "";
+    devState.projectId = "";
+    devState.projectName = "";
+    if (q.length < 3) {
+      listEl.hidden = true;
+      updateNextState();
+      return;
+    }
+    const matches = companies.filter((c) => fuzzyMatch(c.name, q)).slice(0, 12);
+    renderOptions(matches);
+    updateNextState();
+  });
+
+  searchEl.addEventListener("blur", () => {
+    // delay so click on option registers
+    setTimeout(() => { listEl.hidden = true; }, 120);
+  });
+
+  searchEl.addEventListener("keydown", (e) => {
+    if (listEl.hidden) return;
+    const items = [...listEl.querySelectorAll(".combobox-item")];
+    if (!items.length) return;
+    const active = listEl.querySelector(".combobox-item.active");
+    let idx = items.indexOf(active);
+    if (idx < 0) idx = 0;
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      idx = Math.min(items.length - 1, idx + 1);
+      items.forEach((it) => it.classList.remove("active"));
+      if (items[idx]) { items[idx].classList.add("active"); items[idx].scrollIntoView({ block: "nearest" }); }
+    } else if (e.key === "ArrowUp") {
+      e.preventDefault();
+      idx = Math.max(0, idx - 1);
+      items.forEach((it) => it.classList.remove("active"));
+      if (items[idx]) { items[idx].classList.add("active"); items[idx].scrollIntoView({ block: "nearest" }); }
+    } else if (e.key === "Enter" || e.key === "Tab") {
+      // accept the highlighted (or first) match without moving focus away
+      e.preventDefault();
+      const pick = items[idx] || items[0];
+      if (pick) selectCompany(Number(pick.dataset.id), pick.dataset.name);
+    } else if (e.key === "Escape") {
+      listEl.hidden = true;
+    }
+  });
+
+  memberEl.addEventListener("change", () => {
+    devState.memberId = memberEl.value;
+    updateNextState();
+  });
+  projectEl.addEventListener("change", () => {
+    // Project is optional; store the selected id + name (or clear both).
+    if (projectEl.value) {
+      devState.projectId = projectEl.value;
+      devState.projectName = projectEl.options[projectEl.selectedIndex]?.textContent || "";
+    } else {
+      devState.projectId = "";
+      devState.projectName = "";
+    }
+    updateSaveState();
+  });
+  productEl.addEventListener("change", () => {
+    devState.product = productEl.value;
+    updateNextState();
+  });
+
+  // Part 3 (Details) validation: every visible Details field must be filled
+  // before Save/Update is allowed.
+  //   • Height + Width are always required.
+  //   • For "raised silicon label": Raised height + No. of color are required.
+  //   • When No. of color > 1, every Pantone code must be filled and be
+  //     meaningful — its length must be greater than 1 (reject single-char stubs).
+  const part3Valid = () => {
+    const h = (devState.height || "").trim();
+    const w = (devState.width || "").trim();
+    if (h.length === 0 || w.length === 0) return false;   // height + width always required
+
+    if (devState.product === "raised silicon label") {
+      const rh = (devState.raisedHeight || "").trim();
+      if (rh.length === 0) return false;                   // raised height required
+
+      const n = parseInt(devState.noOfColor, 10);
+      if (!n || n < 1) return false;                       // no. of color required (>= 1)
+
+      if (n >= 1) {
+        // every shown Pantone row needs a non-trivial code (length must be > 1).
+        // Pantone #1 is shown as soon as no. of color >= 1, so it must be filled.
+        for (const p of devState.pantones) {
+          const v = (p && (p.value || "") || "").trim().length;
+          if (v <= 1) return false;
+        }
+      }
+    }
+    return true;
+  };
+
+  // Save gating: Parts 1–3 valid AND at least one image attached. The image
+  // (Part 4) is REQUIRED to save or update on both Create and Edit; documents
+  // stay optional. In edit mode the button is "Update" and must reflect a real
+  // change — so an existing image alone does NOT enable Update unless something
+  // else also changed (i.e. isDirty() is true).
+  const updateSaveState = () => {
+    // Image is a required field: at least one attachment must be present to
+    // save or update. Documents are optional and never gate Save/Update.
+    const hasImage = devState.images.length >= 1;
+    const allFilled = hiddenEl.value !== "" && memberEl.value !== "" &&
+                      devState.item && devState.product &&
+                      part3Valid() && hasImage;
+    const canSave = allFilled;
+    saveBtn.disabled = !canSave;
+    saveBtn.classList.toggle("active", canSave);
+  };
+
+  // initial unlock check (covers restored state on tab switch)
+  updateNextState();
+  updateSaveState();
+  devSaveStateFn = updateSaveState;   // let the shared image renderer re-gate Save
+
+  // ===== 4th part: image dropzone (no documents) =====
+  const imageDrop = panel.querySelector("#enq-image-drop");
+  const imageThumbs = panel.querySelector("#enq-image-thumbs");
+
+  // use the persisted store so pasted images survive tab switches
+  const images = devState.images;
+
+  const isImageFile = (f) => f && f.type && f.type.startsWith("image/");
+
+  const renderImageThumbs = () => {
+    if (!images.length) {
+      imageThumbs.innerHTML = "";
+      imageDrop.classList.remove("has-items");
+      return;
+    }
+    imageDrop.classList.add("has-items");
+    imageThumbs.innerHTML = images.map((img) => `
+      <div class="thumb" data-id="${img.id}">
+        <img src="${img.url}" alt="${escapeHtml(img.name)}" />
+        <div class="thumb-name">${escapeHtml(img.name)}</div>
+        ${img.uploading ? '<span class="thumb-badge uploading">uploading…</span>' : ''}
+        <button class="icon-btn danger thumb-rm" data-rm="${img.id}" title="Remove">✕</button>
+      </div>`).join("");
+    imageThumbs.querySelectorAll("[data-rm]").forEach((b) => {
+      b.addEventListener("click", () => {
+        const id = b.dataset.rm;
+        const idx = images.findIndex((x) => x.id === id);
+        if (idx >= 0) {
+          openConfirmModal(
+            "Remove image?",
+            "Remove this image from the development?",
+            () => {
+              // Only remove after the user confirms "Yes".
+              const j = images.findIndex((x) => x.id === id);
+              if (j >= 0) {
+                if (images[j].url && images[j].url.startsWith("blob:")) {
+                  URL.revokeObjectURL(images[j].url);
+                }
+                images.splice(j, 1);
+                renderImageThumbs();
+                updateSaveState();   // re-gate Save now that an image is gone
+              }
+            }
+          );
+        }
+      });
+    });
+  };
+
+  const addImageFile = (file) => {
+    if (!isImageFile(file)) return;
+    // Enquiry allows multiple images — each dropped/pasted file is appended.
+    const localUrl = URL.createObjectURL(file);
+    // Enquiry supports MULTIPLE images — append instead of replacing.
+    const id = "enq-img-" + Date.now() + "-" + images.length;
+    images.push({ id, name: file.name, url: localUrl, uploading: true });
+    renderImageThumbs();
+    updateSaveState();
+    uploadImageFile(file, id);
+  };
+
+  // Upload a dropped/pasted image to /api/uploads and link it to the dev sequence.
+  const uploadImageFile = async (file, id) => {
+    const entry = images.find((x) => x.id === id);
+    if (!entry) return;
+    try {
+      const fd = new FormData();
+      fd.append("file", file);
+      const data = await fetchJson(API + "/api/uploads", { method: "POST", body: fd });
+      // Store the server path so the saved development references the upload.
+      entry.name = data.path;          // e.g. "uploads/<uuid>__<file>"
+      entry.url = data.url;            // e.g. "/uploads/<uuid>__<file>"
+      entry.uploading = false;
+      renderImageThumbs();
+      updateSaveState();
+    } catch (err) {
+      if (entry) entry.uploading = false;
+      openConfirmModal("Upload failed", "Could not upload image: " + err.message, () => {});
+    }
+  };
+
+  // drag & drop for images
+  ["dragenter", "dragover"].forEach((ev) =>
+    imageDrop.addEventListener(ev, (e) => {
+      e.preventDefault();
+      imageDrop.classList.add("dragover");
+    })
+  );
+  ["dragleave", "drop"].forEach((ev) =>
+    imageDrop.addEventListener(ev, (e) => {
+      e.preventDefault();
+      if (ev === "dragleave" && imageDrop.contains(e.relatedTarget)) return;
+      imageDrop.classList.remove("dragover");
+    })
+  );
+  imageDrop.addEventListener("drop", (e) => {
+    // Enquiry allows MULTIPLE images — add every dropped image file.
+    const files = [...(e.dataTransfer?.files || [])].filter(isImageFile);
+    files.forEach((f) => addImageFile(f));
+  });
+
+  // Ctrl+V paste images — add every pasted image (Enquiry allows multiple).
+  imageDrop.addEventListener("paste", (e) => {
+    const items = e.clipboardData?.items || [];
+    for (const it of items) {
+      if (it.kind === "file" && it.type.startsWith("image/")) {
+        const f = it.getAsFile();
+        if (f) { addImageFile(f); e.preventDefault(); }
+      }
+    }
+  });
+
+  renderImageThumbs();
+
+  updateNextState();
+  updateSaveState();
+
+  // ===== Action: Save =====
+  saveBtn.addEventListener("click", async () => {
+    if (saveBtn.disabled) return;
+    const payload = buildEnquiryPayload();
+    if (!payload) {
+      openConfirmModal("Cannot save", "Please fill company, member, item, and product type.", () => {});
+      return;
+    }
+    saveBtn.disabled = true;
+    saveBtn.textContent = "Saving…";
+    try {
+      await fetchJson(API + "/api/enquiries", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      saveBtn.textContent = "Saved ✓";
+      openEnquiryPostSaveModal();
+    } catch (err) {
+      saveBtn.textContent = "Save";
+      saveBtn.disabled = false;
+      openConfirmModal("Save failed", "Could not save development: " + err.message, () => {});
+    }
+  });
+
+}
+
+// ---------------------------------------------------------------------------
+// Development / Edit  — a SEPARATE screen from Create (own function + state).
+//   Loads an existing record (pre-filled), shows a red "edit" mini-tab, and
+//   PUTs changes back via Update. Shares NO code with renderEnquiryCreate.
+// ---------------------------------------------------------------------------
+
+function openEnquiryPostSaveModal() {
+  const overlay = document.createElement("div");
+  overlay.className = "modal-overlay";
+  overlay.innerHTML = `
+    <div class="modal" role="dialog" aria-modal="true" style="max-width:440px">
+      <h3>Enquiry saved</h3>
+      <p class="muted">Continue with the same customer?</p>
+      <div class="actions modal-actions">
+        <button class="btn ghost" id="enq-view" type="button">No — go to Enquiry / View</button>
+        <button class="btn primary" id="enq-continue" type="button">Yes, same customer</button>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+  overlay.querySelector("#enq-view").addEventListener("click", () => { overlay.remove(); openTab("enquiry-view"); });
+  overlay.querySelector("#enq-continue").addEventListener("click", () => {
+    overlay.remove();
+    const keep = { companyId: enquiryCreateState.companyId, companyName: enquiryCreateState.companyName,
+                   memberId: enquiryCreateState.memberId, memberName: enquiryCreateState.memberName,
+                   projectId: enquiryCreateState.projectId, projectName: enquiryCreateState.projectName };
+    resetEnquiryState();
+    Object.assign(enquiryCreateState, keep);
+    renderEnquiryCreate();
+  });
+}
+
 
 async function renderDevelopmentCreate() {
   // The Create tab reads/writes ONLY its own state object (devCreateState).
@@ -3473,6 +4294,225 @@ function formatBytes(bytes) {
 // Fetch a single company with its members (reuses /api/companies/<id>).
 async function fetchAnchoredCompany(id) {
   return fetchJson(API + `/api/companies/${id}`);
+}
+
+// ---------------------------------------------------------------------------
+// Enquiry / View
+// ---------------------------------------------------------------------------
+
+let enqViewData = [];
+let enqViewFilters = {};
+let enqViewSelected = new Set();
+
+async function renderEnquiryView() {
+  panel.innerHTML = '<h2>Enquiry / View</h2><p class="empty">Loading…</p>';
+  enqViewSelected.clear();
+  try {
+    const [enqs, companies] = await Promise.all([
+      await fetchJson(API + "/api/enquiries"),
+      (async () => { try { return await fetchJson(API + "/api/companies"); } catch { return null; } })(),
+    ]);
+    enqViewData = enqs;
+    if (companies) devCompaniesCache = companies;
+    if (!enqViewData.length) {
+      panel.innerHTML = '<h2>Enquiry / View</h2><p class="empty">No enquiries saved yet.</p>';
+      return;
+    }
+    paintEnquiryView();
+  } catch (err) {
+    panel.innerHTML = `<h2>Enquiry / View</h2><p class="empty">Failed to load: ${escapeHtml(err.message)}</p>`;
+  }
+}
+
+function paintEnquiryView() {
+  const cols = [
+    { key: "company_name", label: "Company" },
+    { key: "member_name", label: "Member" },
+    { key: "item_name", label: "Item" },
+    { key: "image", label: "Images" },
+    { key: "created_at", label: "Created" },
+    { key: "updated_at", label: "Updated" },
+  ];
+  const searchCols = cols.filter((c) => c.key !== "image");
+  const shown = enqViewData.filter((r) =>
+    searchCols.every((c) => fuzzyMatch(r[c.key], enqViewFilters[c.key]))
+  );
+  const allKeys = shown.map((r) => "e:" + r.id);
+  const allChecked = allKeys.length > 0 && allKeys.every((k) => enqViewSelected.has(k));
+
+  const searchRow = cols.map((c) => {
+    if (c.key === "image") return `<th class="search-th"></th>`;
+    return `<th class="search-th">
+       <input class="col-search" data-key="${c.key}" type="text"
+              placeholder="Search ${c.label}…" value="${escapeHtml(enqViewFilters[c.key] || "")}" />
+     </th>`;
+  }).join("") + `<th class="search-th actions-th"></th>`;
+
+  const body = shown.map((r) => {
+    const checked = enqViewSelected.has("e:" + r.id);
+    const imgs = (r.image_names || []).slice(0, 3);
+    const thumbs = imgs.length
+      ? `<div class="dev-thumbs">` + imgs.map((n) =>
+          `<img class="dev-thumb-sm" src="${assetUrl(n)}" alt="${escapeHtml(n)}" title="${escapeHtml(n)}" />`).join("") + `</div>`
+      : `<span class="muted">—</span>`;
+    return `
+      <tr class="${checked ? "selected" : ""}">
+        <td>
+          <label class="cb-cell">
+            <input type="checkbox" class="row-select" data-key="e:${r.id}" ${checked ? "checked" : ""} />
+          </label>
+        </td>
+        <td>${escapeHtml(r.company_name)}</td>
+        <td>${escapeHtml(r.member_name || "—")}</td>
+        <td>${escapeHtml(r.item_name)}</td>
+        <td class="cell-imgs">${thumbs}</td>
+        <td>${escapeHtml(r.created_at)}</td>
+        <td>${escapeHtml(r.updated_at)}</td>
+        <td class="row-actions">
+          <button class="icon-btn danger" data-del="${r.id}" title="Delete">🗑</button>
+        </td>
+      </tr>`;
+  }).join("") || `<tr><td colspan="8" class="muted">No matches.</td></tr>`;
+
+  panel.innerHTML = `
+    <div class="view-head">
+      <h2>Enquiry / View</h2>
+      <div class="view-actions">
+        <button class="btn ghost" id="enq-refresh" type="button" title="Refresh customer database">⟳ Refresh</button>
+      </div>
+    </div>
+
+    <div class="batch-bar" id="batch-bar">
+      <label class="cb-cell">
+        <input type="checkbox" id="select-all" ${allChecked ? "checked" : ""} />
+        <span>Select all (${allKeys.length})</span>
+      </label>
+      <span class="muted batch-count" id="batch-count">${enqViewSelected.size} selected</span>
+      <button class="btn danger" id="batch-delete" type="button" disabled>Delete selected</button>
+    </div>
+
+    <table class="grid dev-grid" id="enquiry-grid">
+      <thead>
+        <tr class="head-row">
+          <th></th>
+          ${cols.map((c) => `<th>${c.label}</th>`).join("")}
+          <th class="actions-th">Actions</th>
+        </tr>
+        <tr class="search-row"><th></th>${searchRow}</tr>
+      </thead>
+      <tbody>${body}</tbody>
+    </table>
+  `;
+
+  panel.querySelectorAll(".col-search").forEach((inp) => {
+    inp.addEventListener("input", () => {
+      enqViewFilters[inp.dataset.key] = inp.value;
+      const cursor = inp.selectionStart;
+      paintEnquiryView();
+      const same = panel.querySelector(`.col-search[data-key="${inp.dataset.key}"]`);
+      if (same) { same.focus(); same.setSelectionRange(cursor, cursor); }
+    });
+  });
+
+  const refreshBtn = panel.querySelector("#enq-refresh");
+  if (refreshBtn) {
+    refreshBtn.addEventListener("click", async () => {
+      refreshBtn.disabled = true;
+      refreshBtn.classList.add("spinning");
+      try {
+        devCompaniesCache = await fetchJson(API + "/api/companies");
+        enqViewData = await fetchJson(API + "/api/enquiries");
+        paintEnquiryView();
+      } catch (err) {
+        openConfirmModal("Refresh failed", err.message, () => {});
+      } finally {
+        refreshBtn.disabled = false;
+        refreshBtn.classList.remove("spinning");
+      }
+    });
+  }
+
+  const selectAll = panel.querySelector("#select-all");
+  const batchDelete = panel.querySelector("#batch-delete");
+  const batchCount = panel.querySelector("#batch-count");
+
+  const syncBatchUI = () => {
+    batchCount.textContent = enqViewSelected.size + " selected";
+    batchDelete.disabled = enqViewSelected.size === 0;
+    selectAll.checked = allKeys.length > 0 && allKeys.every((k) => enqViewSelected.has(k));
+  };
+
+  panel.querySelectorAll(".row-select").forEach((cb) => {
+    cb.addEventListener("change", () => {
+      const key = cb.dataset.key;
+      if (cb.checked) enqViewSelected.add(key);
+      else enqViewSelected.delete(key);
+      panel.querySelectorAll(`.row-select[data-key="${key}"]`).forEach((sib) => {
+        sib.checked = cb.checked;
+        const tr = sib.closest("tr");
+        if (tr) tr.classList.toggle("selected", cb.checked);
+      });
+      syncBatchUI();
+    });
+  });
+
+  selectAll.addEventListener("change", () => {
+    if (selectAll.checked) allKeys.forEach((k) => enqViewSelected.add(k));
+    else allKeys.forEach((k) => enqViewSelected.delete(k));
+    panel.querySelectorAll(".row-select").forEach((cb) => {
+      cb.checked = selectAll.checked;
+      const tr = cb.closest("tr");
+      if (tr) tr.classList.toggle("selected", selectAll.checked);
+    });
+    syncBatchUI();
+  });
+
+  batchDelete.addEventListener("click", batchDeleteEnquiries);
+
+  panel.querySelectorAll("[data-del]").forEach((b) => {
+    b.addEventListener("click", () => deleteEnquiry(Number(b.dataset.del)));
+  });
+}
+
+async function batchDeleteEnquiries() {
+  const keys = [...enqViewSelected];
+  if (!keys.length) return;
+  const ids = keys.filter((k) => k.startsWith("e:")).map((k) => Number(k.slice(2)));
+  if (!ids.length) return;
+  openConfirmModal(
+    "Delete enquiries?",
+    `Delete ${ids.length} enquir${ids.length === 1 ? "y" : "ies"} permanently?`,
+    async () => {
+      const btn = panel.querySelector("#batch-delete");
+      if (btn) { btn.disabled = true; btn.textContent = "Deleting…"; }
+      let failed = 0;
+      for (const id of ids) {
+        try { await fetchJson(API + `/api/enquiries/${id}`, { method: "DELETE" }); }
+        catch (err) { failed++; }
+      }
+      if (failed) openConfirmModal("Partial failure", `${failed} deletion(s) failed.`, () => {});
+      enqViewSelected.clear();
+      await renderEnquiryView();
+    }
+  );
+}
+
+async function deleteEnquiry(id) {
+  const rec = enqViewData.find((r) => r.id === id);
+  const label = rec ? `${rec.company_name} / ${rec.item_name}` : `#${id}`;
+  openConfirmModal(
+    "Delete enquiry?",
+    `Delete "${label}" permanently?`,
+    async () => {
+      try {
+        await fetchJson(API + `/api/enquiries/${id}`, { method: "DELETE" });
+        enqViewSelected.delete("e:" + id);
+        await renderEnquiryView();
+      } catch (err) {
+        openConfirmModal("Delete failed", err.message, () => {});
+      }
+    }
+  );
 }
 
 // ---------------------------------------------------------------------------
