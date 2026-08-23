@@ -34,6 +34,9 @@ const labels = {
   "development-create": "Development / Create",
   "development-view":   "Development / View",
   "development-edit":   "Development / Edit",
+  "enquiry-create": "Enquiry / Create",
+  "enquiry-view":   "Enquiry / View",
+  "enquiry-edit":   "Enquiry / Edit",
 };
 
 // Selectable product types for the Development form.
@@ -176,6 +179,14 @@ async function renderPanel() {
   }
   if (activeTarget === "development-view") {
     await renderDevelopmentView();
+    return;
+  }
+  if (activeTarget === "enquiry-create") {
+    renderEnquiryCreate();
+    return;
+  }
+  if (activeTarget === "enquiry-view") {
+    await renderEnquiryView();
     return;
   }
 
@@ -4582,4 +4593,37 @@ async function uploadFile(file) {
   const data = await res.json();
   return data; // { path, name, url }
 }
+
+// ---------------------------------------------------------------------------
+// Auto-refresh for the View tabs (no forced landing tab on page load)
+// ---------------------------------------------------------------------------
+
+// How often (ms) the active View tab re-fetches latest data so updates made
+// elsewhere show up without clicking Refresh. The user lands on a View by
+// clicking it; once open, it keeps itself current (latest on top). Filters +
+// row selections are preserved because the View renderers read from
+// module-level filter/selection state (viewFilters/viewSelected,
+// devViewFilters/devViewSelected).
+const AUTO_REFRESH_MS = 15000;
+
+let autoRefreshTimer = null;
+
+function startAutoRefresh() {
+  if (autoRefreshTimer) return;
+  autoRefreshTimer = setInterval(() => {
+    // Don't clobber a column-search box the user is actively typing in.
+    const ae = document.activeElement;
+    if (ae && ae.classList && ae.classList.contains("col-search")) return;
+    // Only the currently-visible View tab is repainted. The other open View
+    // tab keeps its data in memory and refreshes when you switch to it.
+    if (activeTarget === "customer-view" || activeTarget === "development-view") {
+      renderPanel();
+    }
+  }, AUTO_REFRESH_MS);
+}
+
+// Start the (idle until a View is active) auto-refresh loop on load. We do NOT
+// auto-open a View tab — the user lands on whichever View they click, and that
+// View always reloads fresh with the latest record on top.
+startAutoRefresh();
 
