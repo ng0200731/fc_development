@@ -1120,9 +1120,10 @@ async function fillDummyDevelopment(ctx) {
   }
 }
 
-// Fill every field with random data + 2–4 random images. Mirrors
-// fillDummyDevelopment() but seeds MULTIPLE images (Enquiry supports >1 image),
-// while still filling item/product/Part-3 details just like Development.
+// Fill every field with random data + 2–4 random images. On the Create screen
+// (no Part 2/3) it only fills company/member/project; on the Edit screen it also
+// fills item/product/Part-3 details just like Development. Always seeds MULTIPLE
+// images (Enquiry supports >1 image).
 async function fillDummyEnquiry(ctx) {
   const { searchEl, hiddenEl, memberEl, projectEl, productEl, itemEl, companies,
           selectCompany, loadMembers, updateNextState, updateSaveState, updateUnlock,
@@ -1150,29 +1151,33 @@ async function fillDummyEnquiry(ctx) {
       devState.projectName = p.textContent;
     }
 
-    const ITEMS = ["Spring Patch", "Logo Badge", "Care Label", "Brand Tab", "Woven Emblem",
-                   "Silicone Grip", "Heat Transfer", "Glitter Transfer", "Reflective Tape"];
-    itemEl.value = rnd(ITEMS) + " " + (Math.floor(Math.random() * 900) + 100);
-    devState.item = itemEl.value;
-    const pt = rnd(PRODUCT_TYPES);
-    productEl.value = pt;
-    devState.product = pt;
+    // Only fill item/product/Part-3 when the Create screen has them (Edit does;
+    // Create does not — Part 2/3 were removed there).
+    if (itemEl && productEl) {
+      const ITEMS = ["Spring Patch", "Logo Badge", "Care Label", "Brand Tab", "Woven Emblem",
+                     "Silicone Grip", "Heat Transfer", "Glitter Transfer", "Reflective Tape"];
+      itemEl.value = rnd(ITEMS) + " " + (Math.floor(Math.random() * 900) + 100);
+      devState.item = itemEl.value;
+      const pt = rnd(PRODUCT_TYPES);
+      productEl.value = pt;
+      devState.product = pt;
 
-    if (pt === "raised silicon label") {
-      devState.height = (Math.random() * 40 + 10).toFixed(1);
-      devState.width = (Math.random() * 40 + 10).toFixed(1);
-      devState.raisedHeight = (Math.random() * 3 + 0.5).toFixed(1);
-      devState.noOfColor = String(Math.floor(Math.random() * 4) + 1);
-      devState.pantones = [];
-      for (let i = 0; i < Number(devState.noOfColor); i++) {
-        devState.pantones.push({ value: "19-" + (Math.floor(Math.random() * 400) + 100) + " TCX", color: "#888888" });
+      if (pt === "raised silicon label") {
+        devState.height = (Math.random() * 40 + 10).toFixed(1);
+        devState.width = (Math.random() * 40 + 10).toFixed(1);
+        devState.raisedHeight = (Math.random() * 3 + 0.5).toFixed(1);
+        devState.noOfColor = String(Math.floor(Math.random() * 4) + 1);
+        devState.pantones = [];
+        for (let i = 0; i < Number(devState.noOfColor); i++) {
+          devState.pantones.push({ value: "19-" + (Math.floor(Math.random() * 400) + 100) + " TCX", color: "#888888" });
+        }
+      } else {
+        devState.height = (Math.random() * 40 + 10).toFixed(1);
+        devState.width = (Math.random() * 40 + 10).toFixed(1);
+        devState.raisedHeight = "";
+        devState.noOfColor = "";
+        devState.pantones.length = 0;
       }
-    } else {
-      devState.height = (Math.random() * 40 + 10).toFixed(1);
-      devState.width = (Math.random() * 40 + 10).toFixed(1);
-      devState.raisedHeight = "";
-      devState.noOfColor = "";
-      devState.pantones.length = 0;
     }
 
     // MULTIPLE images (2–4) so Enquiry's multi-image dropzone is exercised.
@@ -1309,18 +1314,22 @@ function resetEnquiryState() {
 }
 
 // Build the enquiry payload from current devState (the active Enquiry draft —
-// either enquiryCreateState on Create or enquiryEditState on Edit). Enquiry now
-// carries the same fields as Development (item/product/details), so the payload
-// shape mirrors buildDevelopmentPayload. The only conceptual difference is that
-// Enquiry allows multiple images, but that's already expressed by the images[].
+// either enquiryCreateState on Create or enquiryEditState on Edit). Create no
+// longer has Part 2/3 (item/product/details), so those fields are only required
+// when the corresponding inputs are present on the page (i.e. on Edit). The
+// payload still always includes the columns (empty/null) so the schema stays
+// consistent; only company is unconditionally required.
 function buildEnquiryPayload() {
   const itemEl = panel.querySelector("#enq-item");
   const productEl = panel.querySelector("#enq-product");
   const memberEl = panel.querySelector("#enq-member");
   const companyName = devState.companyName;
-  const item = (itemEl ? itemEl.value.trim() : devState.item) || devState.item;
-  const product = (productEl ? productEl.value : devState.product) || devState.product;
-  if (!companyName || !item || !product) return null;
+  const item = (itemEl ? itemEl.value.trim() : devState.item) || devState.item || "";
+  const product = (productEl ? productEl.value : devState.product) || devState.product || "";
+  // company is always required; item/product only when the screen has them
+  if (!companyName) return null;
+  if (itemEl && !item) return null;
+  if (productEl && !product) return null;
   const memberName = memberEl && memberEl.value
     ? memberEl.options[memberEl.selectedIndex]?.textContent || ""
     : "";
@@ -1331,8 +1340,8 @@ function buildEnquiryPayload() {
     member_name: memberName || null,
     project_id: devState.projectId ? Number(devState.projectId) : null,
     project_name: devState.projectName || null,
-    item_name: item,
-    product_type: product,
+    item_name: item || null,
+    product_type: product || null,
     height: devState.height || null,
     width: devState.width || null,
     raised_height: devState.raisedHeight || null,
@@ -1344,13 +1353,10 @@ function buildEnquiryPayload() {
 }
 
 async function renderEnquiryCreate() {
-  // Enquiry / Create is structurally IDENTICAL to Development / Create (Parts 1–4).
-  // The ONLY difference is Part 4's image dropzone: Enquiry allows MULTIPLE
-  // images (each new drop/paste appends), whereas Development replaces the single
-  // image. We reuse the Development markup word-for-word, just namespaced with the
-  // `enq-` prefix so it can coexist on the page, and the shared alias points at
-  // enquiryCreateState so the image/doc renderer helpers operate on the Enquiry
-  // draft. Save posts to /api/enquiries.
+  // Enquiry / Create keeps ONLY Part 1 (Company & Member) + Part 4 (Images +
+  // Documents). Part 2 (Item & Product Type) and Part 3 (Details) are removed
+  // from Create per request — the ONLY remaining field beyond the customer is the
+  // multi-image dropzone. Save posts to /api/enquiries.
   devState = enquiryCreateState;
 
   panel.innerHTML = `
@@ -1362,7 +1368,6 @@ async function renderEnquiryCreate() {
     </div>
 
     <div class="dev-2col">
-      <!-- Parts 1 + 2 + 3 stacked in one card -->
       <div class="dev-part" id="enq-main">
         <h3 class="subhead part-head">
           1 · Company &amp; Member
@@ -1394,24 +1399,6 @@ async function renderEnquiryCreate() {
             </select>
           </div>
         </div>
-
-        <h3 class="subhead">2 · Item &amp; Product Type</h3>
-        <div class="dim-row">
-          <div class="field">
-            <label for="enq-item">Item name</label>
-            <input id="enq-item" type="text" placeholder="e.g. Spring Collection Patch" autocomplete="off" />
-          </div>
-          <div class="field">
-            <label for="enq-product">Product type</label>
-            <select id="enq-product" disabled>
-              <option value="">— select —</option>
-              ${PRODUCT_TYPES.map((p) => `<option value="${escapeHtml(p)}">${escapeHtml(p)}</option>`).join("")}
-            </select>
-          </div>
-        </div>
-
-        <h3 class="subhead">3 · Details</h3>
-        <div id="enq-part3-body"></div>
       </div>
 
       <!-- 4th part: images (multiple) + documents. -->
@@ -1439,25 +1426,18 @@ async function renderEnquiryCreate() {
   `;
 
   const part1 = panel.querySelector("#enq-main");
-  const part2 = panel.querySelector("#enq-product");
   const searchEl = panel.querySelector("#enq-company");
   const hiddenEl = panel.querySelector("#enq-company-id");
   const listEl   = panel.querySelector("#enq-company-list");
   const memberEl = panel.querySelector("#enq-member");
   const projectEl = panel.querySelector("#enq-project");
-  const productEl = panel.querySelector("#enq-product");
-  const itemEl = panel.querySelector("#enq-item");
   const saveBtn = panel.querySelector("#enq-save");
   const dummyBtn = panel.querySelector("#enq-dummy");
 
-  // --- Part 4 unlock when part 1 AND part 2 are complete ---
-  const part3Body = panel.querySelector("#enq-part3-body");
-  const part3 = part3Body;
   const part4 = panel.querySelector("#enq-part4");
 
   const updateUnlock = () => {
     part4.classList.remove("locked");
-    renderPart3();
   };
 
   // enable search once we have the company list
@@ -1475,11 +1455,6 @@ async function renderEnquiryCreate() {
     return;
   }
   searchEl.disabled = false;
-
-  // restore product selection
-  if (devState.product) productEl.value = devState.product;
-  // restore item name
-  if (devState.item) itemEl.value = devState.item;
 
   // When the Create draft still carries a company/member/project (e.g. after a
   // "same customer" post-save), repopulate the dropdowns so Part 1 stays filled
@@ -1527,171 +1502,8 @@ async function renderEnquiryCreate() {
   // -- helpers --
   const updateNextState = () => {
     const part1Done = hiddenEl.value !== "" && memberEl.value !== "";
-    part2.disabled = !part1Done;
-    productEl.disabled = !part1Done;
     updateUnlock();
     updateSaveState();   // company/member change affects Save gating
-  };
-
-  // Track item name input into devState and re-evaluate Save gating.
-  itemEl.addEventListener("input", () => {
-    devState.item = itemEl.value.trim();
-    updateSaveState();
-  });
-
-  // ---- Part 3 dynamic body (depends on product type) ----
-  const renderPart3 = () => {
-    ensurePantoneData();   // load the TCX dataset (no-op if already cached)
-    if (devState.product === "raised silicon label") {
-      renderRaisedSiliconLabel();
-    } else {
-      // default: just height + width
-      part3Body.innerHTML = `
-        <div class="dim-row">
-          <div class="field">
-            <label for="enq-height">Height (mm)</label>
-            <input id="enq-height" type="number" min="0" step="0.1" placeholder="0.0" autocomplete="off" />
-          </div>
-          <div class="field">
-            <label for="enq-width">Width (mm)</label>
-            <input id="enq-width" type="number" min="0" step="0.1" placeholder="0.0" autocomplete="off" />
-          </div>
-        </div>`;
-      bindDimInputs();
-    }
-  };
-
-  const bindDimInputs = () => {
-    const h = part3Body.querySelector("#enq-height");
-    const w = part3Body.querySelector("#enq-width");
-    if (h) { h.value = devState.height; h.addEventListener("input", () => { devState.height = h.value; updateSaveState(); }); }
-    if (w) { w.value = devState.width;  w.addEventListener("input",  () => { devState.width  = w.value; updateSaveState(); }); }
-  };
-
-  const renderRaisedSiliconLabel = () => {
-    part3Body.innerHTML = `
-      <div class="dim-row">
-        <div class="field">
-          <label for="enq-height">Height (mm)</label>
-          <input id="enq-height" type="number" min="0" step="0.1" placeholder="0.0" autocomplete="off" />
-        </div>
-        <div class="field">
-          <label for="enq-width">Width (mm)</label>
-          <input id="enq-width" type="number" min="0" step="0.1" placeholder="0.0" autocomplete="off" />
-        </div>
-      </div>
-      <div class="dim-row">
-        <div class="field">
-          <label for="enq-raised-height">Raised height (mm)</label>
-          <input id="enq-raised-height" type="number" min="0" step="0.1" placeholder="0.0" autocomplete="off" />
-        </div>
-        <div class="field">
-          <label for="enq-no-of-color">No. of color</label>
-          <input id="enq-no-of-color" type="number" min="1" step="1" placeholder="0" autocomplete="off" />
-        </div>
-      </div>
-      <div id="enq-pantone-wrap"></div>
-    `;
-
-    bindDimInputs();
-    const rh = part3Body.querySelector("#enq-raised-height");
-    const nc = part3Body.querySelector("#enq-no-of-color");
-    if (rh) { rh.value = devState.raisedHeight; rh.addEventListener("input", () => { devState.raisedHeight = rh.value; updateSaveState(); }); }
-    if (nc) {
-      nc.value = devState.noOfColor;
-      nc.addEventListener("input", () => {
-        devState.noOfColor = nc.value;
-        renderPantoneRows();
-        updateSaveState();
-      });
-    }
-    renderPantoneRows();
-  };
-
-  // re-render only the pantone input rows (keeps focus on the No. of color field)
-  const renderPantoneRows = () => {
-    const wrap = part3Body.querySelector("#enq-pantone-wrap");
-    if (!wrap) return;
-    const n = parseInt(devState.noOfColor, 10);
-    if (!isNaN(n) && n > 0) {
-      while (devState.pantones.length < n) devState.pantones.push({ value: "", color: "#000000" });
-      if (devState.pantones.length > n) devState.pantones.length = n;
-    }
-    if ((parseInt(devState.noOfColor, 10) || 0) <= 0) {
-      wrap.innerHTML = "";
-      return;
-    }
-    wrap.innerHTML = devState.pantones.map((p, i) => `
-      <div class="pantone-row">
-        <div class="field pantone-code">
-          <label for="enq-pantone-${i}">Pantone #${i + 1}</label>
-          <input id="enq-pantone-${i}" type="text" class="pantone-input"
-                 data-idx="${i}" value="${escapeHtml(p.value)}"
-                 placeholder="code (11-0103) or name (egret)" autocomplete="off" />
-          <div class="pantone-match" id="enq-pantone-match-${i}"></div>
-        </div>
-      </div>`).join("");
-    // Build + fill the match display for row i from a query string.
-    const showPantoneMatch = (i, query) => {
-      const matchEl = wrap.querySelector("#enq-pantone-match-" + i);
-      if (!matchEl) return;
-      const matches = findPantoneMatches(query);
-      if (!matches.length) {
-        matchEl.innerHTML = `<span class="muted small">No match</span>`;
-        return;
-      }
-      const top = matches[0];
-      if (devState.pantones[i]) devState.pantones[i].color = "#" + top.hex;
-
-      matchEl.innerHTML =
-        `<div class="pantone-top">` +
-          `<span class="swatch" style="background:#${escapeHtml(top.hex)}"></span>` +
-          `<span class="muted small">${escapeHtml(top.code)} · ${escapeHtml(top.name)} · ` +
-          `<span class="pantone-type" title="${escapeHtml(pantoneTypeName(top.type))}">${escapeHtml(pantoneTypeName(top.type))}</span> · #${escapeHtml(top.hex)}</span>` +
-        `</div>` +
-        (matches.length > 1
-          ? `<div class="pantone-similar">similar: ` +
-            matches.slice(1).map((m) =>
-              `<span class="pantone-chip" data-code="${escapeHtml(m.code)}" ` +
-              `title="${escapeHtml(m.code)} · ${escapeHtml(m.name)} · ${escapeHtml(pantoneTypeName(m.type))}">` +
-                `<span class="swatch sm" style="background:#${escapeHtml(m.hex)}"></span>` +
-                `${escapeHtml(m.name)} ` +
-                `<span class="pantone-type" title="${escapeHtml(pantoneTypeName(m.type))}">${escapeHtml(pantoneTypeName(m.type))}</span></span>`
-            ).join("") +
-            `</div>`
-          : "");
-
-      matchEl.querySelectorAll(".pantone-chip").forEach((chip) => {
-        chip.addEventListener("click", () => {
-          const inp = wrap.querySelector("#enq-pantone-" + i);
-          if (inp) inp.value = chip.dataset.code;
-          if (devState.pantones[i]) devState.pantones[i].value = chip.dataset.code;
-          const chosen = findPantoneMatches(chip.dataset.code)[0];
-          matchEl.innerHTML = chosen
-            ? `<div class="pantone-top">` +
-              `<span class="swatch" style="background:#${escapeHtml(chosen.hex)}"></span>` +
-              `<span class="muted small">${escapeHtml(chosen.code)} · ${escapeHtml(chosen.name)} · ` +
-              `<span class="pantone-type" title="${escapeHtml(pantoneTypeName(chosen.type))}">${escapeHtml(pantoneTypeName(chosen.type))}</span> · #${escapeHtml(chosen.hex)}</span>` +
-              `</div>`
-            : "";
-          updateSaveState();
-        });
-      });
-    };
-
-    wrap.querySelectorAll(".pantone-input").forEach((inp) => {
-      inp.addEventListener("input", () => {
-        const i = Number(inp.dataset.idx);
-        if (!devState.pantones[i]) return;
-        devState.pantones[i].value = inp.value;
-        showPantoneMatch(i, inp.value);
-        updateSaveState();
-      });
-    });
-
-    devState.pantones.forEach((p, i) => {
-      if (p && p.value) showPantoneMatch(i, p.value);
-    });
   };
 
   const resetCompanySelection = () => {
@@ -1842,42 +1654,13 @@ async function renderEnquiryCreate() {
     }
     updateSaveState();
   });
-  productEl.addEventListener("change", () => {
-    devState.product = productEl.value;
-    updateNextState();
-  });
 
-  // Part 3 (Details) validation: every visible Details field must be filled
-  // before Save/Update is allowed.
-  const part3Valid = () => {
-    const h = (devState.height || "").trim();
-    const w = (devState.width || "").trim();
-    if (h.length === 0 || w.length === 0) return false;   // height + width always required
-
-    if (devState.product === "raised silicon label") {
-      const rh = (devState.raisedHeight || "").trim();
-      if (rh.length === 0) return false;                   // raised height required
-
-      const n = parseInt(devState.noOfColor, 10);
-      if (!n || n < 1) return false;                       // no. of color required (>= 1)
-
-      if (n >= 1) {
-        for (const p of devState.pantones) {
-          const v = (p && (p.value || "") || "").trim().length;
-          if (v <= 1) return false;
-        }
-      }
-    }
-    return true;
-  };
-
-  // Save gating: Parts 1–3 valid AND at least one image attached. Documents stay
-  // optional and never gate Save. Images are required (>=1) to save an Enquiry.
+  // Save gating: Part 1 complete AND at least one image attached. Part 2/3 are
+  // removed from Create, so only company + member + image are required. Documents
+  // stay optional and never gate Save. Images are required (>=1) to save.
   const updateSaveState = () => {
     const hasImage = devState.images.length >= 1;
-    const allFilled = hiddenEl.value !== "" && memberEl.value !== "" &&
-                      devState.item && devState.product &&
-                      part3Valid() && hasImage;
+    const allFilled = hiddenEl.value !== "" && memberEl.value !== "" && hasImage;
     const canSave = allFilled;
     saveBtn.disabled = !canSave;
     saveBtn.classList.toggle("active", canSave);
@@ -2081,7 +1864,7 @@ async function renderEnquiryCreate() {
 
   // ===== Action buttons: Dummy / Save =====
   dummyBtn.addEventListener("click", () => fillDummyEnquiry({
-    searchEl, hiddenEl, memberEl, projectEl, productEl, itemEl, listEl, companies,
+    searchEl, hiddenEl, memberEl, projectEl, listEl, companies,
     selectCompany, loadMembers, updateNextState, updateSaveState, updateUnlock,
     renderImageThumbs,
   }));
@@ -2090,7 +1873,7 @@ async function renderEnquiryCreate() {
     if (saveBtn.disabled) return;
     const payload = buildEnquiryPayload();
     if (!payload) {
-      openConfirmModal("Cannot save", "Please fill company, member, item, and product type.", () => {});
+      openConfirmModal("Cannot save", "Please fill company, member, and add at least one image.", () => {});
       return;
     }
     saveBtn.disabled = true;
@@ -2667,13 +2450,15 @@ async function renderEnquiryEdit() {
     doc_names: (enquiryOriginal.doc_names || []).slice().sort(),
   });
 
-  // Save gating for the Edit tab: all required fields filled AND a real change
-  // detected (an existing image alone does NOT enable Update).
+  // Save gating for the Edit tab: company + member + at least one image present,
+  // AND a real change detected (so removing an image activates Update, but
+  // removing ALL images disables it again). Part 2/3 (item/product/details) are
+  // not required here because Enquiry / Create no longer collects them, so a
+  // record opened from Create must still be editable (and its image changes
+  // must still drive Update).
   const updateSaveState = () => {
     const hasImage = devState.images.length >= 1;
-    const allFilled = hiddenEl.value !== "" && memberEl.value !== "" &&
-                      devState.item && devState.product &&
-                      part3Valid() && hasImage;
+    const allFilled = hiddenEl.value !== "" && memberEl.value !== "" && hasImage;
     const dirty = isDirty();
     const canSave = allFilled && dirty;
     saveBtn.disabled = !canSave;
