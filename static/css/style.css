@@ -659,6 +659,24 @@ select:focus-visible,
   transition: border-color var(--ease), box-shadow var(--ease);
 }
 .doc-row .doc-name:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--ring); }
+.doc-row .doc-dl {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--accent, #2a6df4);
+  text-decoration: none;
+  white-space: nowrap;
+  padding: 4px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+}
+.doc-row .doc-dl:hover {
+  border-color: var(--accent, #2a6df4);
+  background: var(--accent-soft, rgba(42,109,244,.08));
+}
 @media (max-width: 820px) {
   .dev-2col { grid-template-columns: 1fr; }
   .sidebar { min-width: 140px; }

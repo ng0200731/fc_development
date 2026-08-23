@@ -847,6 +847,17 @@ function imageUrl(name) {
   return API + "/sample-images/" + encodeURI(name);
 }
 
+// Documents are always stored under /uploads/. A new upload is stored as
+// "uploads/<uuid>__<file>"; legacy records stored only the bare original
+// (e.g. "NXB30922CY074.pdf"). Either way it resolves under /uploads/, so we
+// strip any "uploads/" prefix and always point at /uploads/. The server's
+// best-effort resolver handles the legacy name → on-disk file mapping.
+function docUrl(name) {
+  if (!name) return "";
+  const bare = name.startsWith("uploads/") ? name.slice("uploads/".length) : name;
+  return API + "/uploads/" + encodeURI(bare);
+}
+
 // Clear the Create tab's working draft. The Edit tab uses its own separate
 // state (devEditState) so a fresh Create never inherits edit data.
 function resetDevState() {
@@ -951,14 +962,20 @@ function openPostSaveModal() {
   });
   overlay.querySelector("#ps-continue").addEventListener("click", () => {
     overlay.remove();
-    // keep Part 1 (company/member) on the Create tab, clear the rest
+    // keep Part 1 (company/member/project) on the Create tab, clear the rest
     const keepCompanyId = devCreateState.companyId;
     const keepCompanyName = devCreateState.companyName;
     const keepMemberId = devCreateState.memberId;
+    const keepMemberName = devCreateState.memberName;
+    const keepProjectId = devCreateState.projectId;
+    const keepProjectName = devCreateState.projectName;
     resetDevState();
     devCreateState.companyId = keepCompanyId;
     devCreateState.companyName = keepCompanyName;
     devCreateState.memberId = keepMemberId;
+    devCreateState.memberName = keepMemberName;
+    devCreateState.projectId = keepProjectId;
+    devCreateState.projectName = keepProjectName;
     renderDevelopmentCreate();
   });
 }
@@ -1281,6 +1298,23 @@ async function renderDevelopmentCreate() {
   if (devState.product) productEl.value = devState.product;
   // restore item name
   if (devState.item) itemEl.value = devState.item;
+
+  // When the Create draft still carries a company/member/project (e.g. after a
+  // "same customer" post-save), repopulate the dropdowns so Part 1 stays filled
+  // and the next record can inherit the same customer/member/project.
+  if (devState.companyId && devState.memberId) {
+    hiddenEl.value = devState.companyId;
+    searchEl.value = devState.companyName;
+    memberEl.innerHTML = `<option value="${devState.memberId}">${escapeHtml(devState.memberName || devState.memberId)}</option>`;
+    memberEl.value = devState.memberId;
+    memberEl.disabled = false;
+    if (devState.projectId) {
+      projectEl.innerHTML = `<option value="${devState.projectId}">${escapeHtml(devState.projectName || devState.projectId)}</option>`;
+      projectEl.value = devState.projectId;
+      projectEl.disabled = false;
+    }
+    loadMembers(Number(devState.companyId), devState.memberId, devState.projectId);
+  }
 
   // refresh = re-fetch latest companies + members from the customer database
   panel.querySelector("#dev-refresh").addEventListener("click", async (e) => {
@@ -1864,14 +1898,23 @@ async function renderDevelopmentCreate() {
       return;
     }
     docDrop.classList.add("has-items");
-    docList.innerHTML = docs.map((d) => `
+    docList.innerHTML = docs.map((d) => {
+      // Documents always resolve under /uploads/ (server handles legacy
+      // bare-name → on-disk mapping), so render a download link for any saved doc.
+      const downloadUrl = d.name ? docUrl(d.name) : (d.url || "");
+      const dlLink = downloadUrl
+        ? `<a class="doc-dl" href="${escapeHtml(downloadUrl)}" target="_blank" rel="noopener" download title="Download ${escapeHtml(displayName(d.name))}">⬇ Download attached doc</a>`
+        : "";
+      return `
       <div class="doc-row" data-id="${d.id}">
         <span class="doc-icon">📄</span>
         <input class="doc-name" data-id="${d.id}" type="text" value="${escapeHtml(d.name)}" />
         <span class="doc-size muted small">${d.file ? formatBytes(d.file.size) : "saved"}</span>
         ${d.uploading ? '<span class="thumb-badge uploading">uploading…</span>' : ''}
+        ${dlLink}
         <button class="icon-btn danger doc-rm" data-rm="${d.id}" title="Remove">✕</button>
-      </div>`).join("");
+      </div>`;
+    }).join("");
     docList.querySelectorAll(".doc-rm").forEach((b) => {
       b.addEventListener("click", () => {
         const id = b.dataset.rm;
@@ -2656,14 +2699,23 @@ async function renderDevelopmentEdit() {
       return;
     }
     docDrop.classList.add("has-items");
-    docList.innerHTML = docs.map((d) => `
+    docList.innerHTML = docs.map((d) => {
+      // Documents always resolve under /uploads/ (server handles legacy
+      // bare-name → on-disk mapping), so render a download link for any saved doc.
+      const downloadUrl = d.name ? docUrl(d.name) : (d.url || "");
+      const dlLink = downloadUrl
+        ? `<a class="doc-dl" href="${escapeHtml(downloadUrl)}" target="_blank" rel="noopener" download title="Download ${escapeHtml(displayName(d.name))}">⬇ Download attached doc</a>`
+        : "";
+      return `
       <div class="doc-row" data-id="${d.id}">
         <span class="doc-icon">📄</span>
         <input class="doc-name" data-id="${d.id}" type="text" value="${escapeHtml(d.name)}" />
         <span class="doc-size muted small">${d.file ? formatBytes(d.file.size) : "saved"}</span>
         ${d.uploading ? '<span class="thumb-badge uploading">uploading…</span>' : ''}
+        ${dlLink}
         <button class="icon-btn danger doc-rm" data-rm="${d.id}" title="Remove">✕</button>
-      </div>`).join("");
+      </div>`;
+    }).join("");
     docList.querySelectorAll(".doc-rm").forEach((b) => {
       b.addEventListener("click", () => {
         const id = b.dataset.rm;
@@ -2884,7 +2936,7 @@ function paintDevelopmentView() {
           `<img class="dev-thumb-sm" src="${assetUrl(n)}" alt="${escapeHtml(n)}" title="${escapeHtml(n)}" />`).join("") + `</div>`
       : `<span class="muted">—</span>`;
     const docs = (r.doc_names || []).map((n) =>
-      `<a class="doc-tag" href="${assetUrl(n)}" target="_blank" rel="noopener" download title="${escapeHtml(n)}">📄 ${escapeHtml(displayName(n))}</a>`).join("");
+      `<a class="doc-tag" href="${docUrl(n)}" target="_blank" rel="noopener" download title="${escapeHtml(n)}">📄 ${escapeHtml(displayName(n))}</a>`).join("");
     const docLinks = docs || `<span class="muted">—</span>`;
     return `
       <tr class="${checked ? "selected" : ""}">
@@ -3190,6 +3242,15 @@ async function openDevEditModal(id) {
         <div class="thumb-grid" id="ed-image-thumbs"></div>
       </div>
 
+      <h4 class="subhead">Documents <span class="req-mark optional">optional</span></h4>
+      <div class="dropzone" id="ed-doc-drop" tabindex="0">
+        <div class="drop-region">
+          <span class="drop-icon">📁</span>
+          <p class="muted small drop-hint">Drag &amp; drop multiple files here.</p>
+        </div>
+        <div class="file-list" id="ed-doc-list"></div>
+      </div>
+
       <div class="actions modal-actions">
         <button class="btn ghost" id="ed-cancel" type="button">Cancel</button>
         <button class="btn primary" id="ed-save" type="button">Save</button>
@@ -3228,6 +3289,50 @@ async function openDevEditModal(id) {
   };
   renderEditThumbs();
 
+  // ---- Documents list with download links (reuses the same model/helpers) ----
+  const docDrop = overlay.querySelector("#ed-doc-drop");
+  const docList = overlay.querySelector("#ed-doc-list");
+  // Seed from saved doc_names; bytes are gone after a reload, but the persisted
+  // /uploads/ path still resolves to a downloadable file.
+  const editDocs = (rec.doc_names || []).map((name, i) => ({
+    id: "edoc-" + id + "-" + i,
+    name,
+    file: null,
+  }));
+
+  const renderEditDocList = () => {
+    if (!editDocs.length) {
+      docList.innerHTML = "";
+      docDrop.classList.remove("has-items");
+      return;
+    }
+    docDrop.classList.add("has-items");
+    docList.innerHTML = editDocs.map((d) => {
+      const downloadUrl = d.name && d.name.startsWith("uploads/")
+        ? assetUrl(d.name)
+        : (d.url || "");
+      const dlLink = downloadUrl
+        ? `<a class="doc-dl" href="${escapeHtml(downloadUrl)}" target="_blank" rel="noopener" download title="Download ${escapeHtml(displayName(d.name))}">⬇ Download attached doc</a>`
+        : "";
+      return `
+      <div class="doc-row" data-id="${d.id}">
+        <span class="doc-icon">📄</span>
+        <span class="doc-name-text">${escapeHtml(displayName(d.name))}</span>
+        ${d.uploading ? '<span class="thumb-badge uploading">uploading…</span>' : ''}
+        ${dlLink}
+        <button class="icon-btn danger doc-rm" data-rm="${d.id}" title="Remove">✕</button>
+      </div>`;
+    }).join("");
+    docList.querySelectorAll(".doc-rm").forEach((b) => {
+      b.addEventListener("click", () => {
+        const idx = editDocs.findIndex((x) => x.id === b.dataset.rm);
+        if (idx >= 0) editDocs.splice(idx, 1);
+        renderEditDocList();
+      });
+    });
+  };
+  renderEditDocList();
+
   // drag & drop + paste inside the modal
   const dropEl = overlay.querySelector("#ed-image-drop");
   const isImg = (f) => f && f.type && f.type.startsWith("image/");
@@ -3254,6 +3359,31 @@ async function openDevEditModal(id) {
     }
   });
 
+  // Documents can also be added by dropping files into the doc zone.
+  const docDropEl = overlay.querySelector("#ed-doc-drop");
+  const addDocFile = async (file) => {
+    const entry = { id: "edoc-" + id + "-" + editDocs.length, name: file.name, file, uploading: true };
+    editDocs.push(entry);
+    renderEditDocList();
+    try {
+      const r = await uploadFile(file);
+      entry.name = r.path;
+      entry.url = API + r.path;
+      entry.uploading = false;
+    } catch (err) {
+      entry.uploading = false;
+      openConfirmModal("Upload failed", "Could not upload document: " + err.message, () => {});
+    }
+    renderEditDocList();
+  };
+  ["dragenter", "dragover"].forEach((ev) => docDropEl.addEventListener(ev, (e) => { e.preventDefault(); docDropEl.classList.add("dragover"); }));
+  ["dragleave", "drop"].forEach((ev) => docDropEl.addEventListener(ev, (e) => {
+    e.preventDefault();
+    if (ev === "dragleave" && docDropEl.contains(e.relatedTarget)) return;
+    docDropEl.classList.remove("dragover");
+  }));
+  docDropEl.addEventListener("drop", (e) => { [...(e.dataTransfer?.files || [])].forEach((f) => { if (f.type && !f.type.startsWith("image/")) addDocFile(f); }); });
+
   overlay.querySelector("#ed-cancel").addEventListener("click", () => overlay.remove());
   overlay.addEventListener("click", (e) => { if (e.target === overlay) overlay.remove(); });
 
@@ -3278,6 +3408,7 @@ async function openDevEditModal(id) {
       no_of_color: overlay.querySelector("#ed-nocolor").value || null,
       pantones: rec.pantones || [],
       image_names: editImages.map((i) => i.name),
+      doc_names: editDocs.map((d) => d.name),
     };
     const saveBtn = overlay.querySelector("#ed-save");
     saveBtn.disabled = true;
@@ -4427,8 +4558,10 @@ function csvCell(v) {
 //   anything else  -> /sample-images/...          (legacy sample / Dummy image)
 function assetUrl(name) {
   if (!name) return "";
-  if (name.startsWith("uploads/")) return API + "/" + name;
-  return API + "/sample-images/" + name;
+  // Percent-encode spaces, "&", parentheses, etc. so the browser sends a
+  // valid request that the server can decode back to the real on-disk file.
+  if (name.startsWith("uploads/")) return API + "/" + encodeURI(name);
+  return API + "/sample-images/" + encodeURI(name);
 }
 
 // Strip the embedded "<uuid>__" prefix (and any path) so uploaded files show

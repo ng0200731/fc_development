@@ -5,6 +5,17 @@ REM  Serves d:\project\fc on port 8088 (frontend + SQLite API).
 REM  This PC  : http://localhost:8088
 REM  LAN users: http://%COMPUTERNAME%:8088  (or your LAN IP)
 REM ============================================================
+REM
+REM  Modified: killed both stale processes and started ONE fresh server.
+REM  Verified against the live port:
+REM    real-img: 200 image/png
+REM    nxb-doc:  200 application/pdf
+REM    index:    200
+REM
+REM  NOTE: never run two server.py instances on :8088 — a second listener
+REM  splits /uploads/ traffic between the old (crashing) and new server,
+REM  leaving half the images broken. Only one python.exe should hold :8088.
+REM ============================================================
 set PORT=8088
 set PYTHON="C:\Users\ng\AppData\Local\Programs\Python\Python311\python.exe"
 

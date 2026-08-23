@@ -23,7 +23,7 @@ import uuid
 import sqlite3
 import datetime
 from http.server import HTTPServer, SimpleHTTPRequestHandler
-from urllib.parse import urlparse
+from urllib.parse import urlparse, unquote, quote
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.path.join(BASE_DIR, "data", "fc.db")
@@ -221,6 +221,11 @@ def safe_sample_path(rel):
 
 
 def serve_sample_image(handler, rel):
+    rel = unquote(rel)
+    if "/../" in rel or rel.startswith("../") or rel.endswith("/.."):
+        handler.send_response(404)
+        handler.end_headers()
+        return
     path = safe_sample_path(rel)
     if not path:
         handler.send_response(404)
@@ -268,8 +273,71 @@ def safe_upload_path(rel):
     return target
 
 
+def resolve_upload_name(rel):
+    """Map a stored doc name to an on-disk upload filename.
+
+    New uploads are stored as 'uploads/<uuid>__<orig>' so an exact lookup works.
+    Legacy records stored only the bare original (e.g. 'NXB30922CY074.pdf')
+    which doesn't match the on-disk '<uuid>__<orig - extra>.pdf'. Best-effort
+    match by exact basename or by leading-stem so those links still resolve.
+    Returns the bare on-disk filename (relative to UPLOADS_DIR) or None.
+    """
+    if safe_upload_path(rel):
+        return os.path.basename(rel)
+    base = os.path.basename(rel)
+    if not base:
+        return None
+    bstem = base.split("__", 1)[-1]  # drop uuid prefix if present
+    try:
+        entries = os.listdir(UPLOADS_DIR)
+    except OSError:
+        return None
+    norm = lambda s: s.lower().replace(" ", "")
+    # Drop a trailing extension from the query so "NXB30922CY074.pdf" matches an
+    # on-disk original like "NXB30922CY074 - AW27_BAKER....pdf".
+    q_stem = os.path.splitext(bstem)[0]
+    q = norm(q_stem)
+    if not q:
+        return None
+    # The meaningful leading token of the query, split on separators.
+    q_token = re.split(r"[\s\-_.]", q_stem)[0]
+    candidates = []
+    for fn in entries:
+        full = os.path.join(UPLOADS_DIR, fn)
+        if not os.path.isfile(full):
+            continue
+        orig = os.path.splitext(fn.split("__", 1)[-1])[0]
+        o = norm(orig)
+        if o == q:
+            candidates.append((0, fn))
+        elif o.startswith(q):
+            candidates.append((1, fn))
+        elif q.startswith(o):
+            candidates.append((2, fn))
+        # Leading-token match: "NXB30922CY074" ⊂ "NXB30922CY074 - AW27…".
+        elif q_token and o.startswith(q_token):
+            candidates.append((3, fn))
+    if not candidates:
+        return None
+    candidates.sort()
+    return candidates[0][1]
+
+
 def serve_upload(handler, rel):
+    # The stored filename may contain spaces, "&", parentheses, etc. The HTTP
+    # client percent-encodes these; decode back to the real on-disk name.
+    rel = unquote(rel)
+    # Reject any attempt to leave the uploads directory.
+    if "/../" in rel or rel.startswith("../") or rel.endswith("/.."):
+        handler.send_response(404)
+        handler.end_headers()
+        return
     path = safe_upload_path(rel)
+    # Legacy bare doc names don't carry the <uuid>__ prefix; best-effort match.
+    if not path:
+        resolved = resolve_upload_name(rel)
+        if resolved:
+            path = os.path.join(UPLOADS_DIR, resolved)
     if not path:
         handler.send_response(404)
         handler.end_headers()
@@ -282,6 +350,19 @@ def serve_upload(handler, rel):
     handler.send_header("Content-Type", ctype)
     handler.send_header("Content-Length", str(len(data)))
     handler.send_header("Cache-Control", "public, max-age=3600")
+    # Force a download for documents (PDFs, etc.) so the browser saves them
+    # instead of opening inline. Images stay inline so they render in <img>.
+    if ctype.startswith("image/"):
+        handler.send_header("Content-Disposition", "inline")
+    else:
+        # Show the original filename (drop the <uuid>__ prefix) on download.
+        base = os.path.basename(path).split("__", 1)[-1]
+        ascii_name = base.encode("ascii", "ignore").decode("ascii") or "download"
+        handler.send_header(
+            "Content-Disposition",
+            "attachment; filename=\"%s\"; filename*=UTF-8''%s"
+            % (ascii_name, quote(base)),
+        )
     handler.end_headers()
     handler.wfile.write(data)
 
