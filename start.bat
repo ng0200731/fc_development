@@ -12,7 +12,7 @@ REM    real-img: 200 image/png
 REM    nxb-doc:  200 application/pdf
 REM    index:    200
 REM
-REM  NOTE: never run two server.py instances on :8088 — a second listener
+REM  NOTE: never run two server.py instances on :8088 - a second listener
 REM  splits /uploads/ traffic between the old (crashing) and new server,
 REM  leaving half the images broken. Only one python.exe should hold :8088.
 REM ============================================================

@@ -124,7 +124,7 @@ def init_db():
             member_name   TEXT,
             project_id    INTEGER,
             project_name  TEXT,
-            item_name     TEXT NOT NULL,
+            item_name     TEXT,
             image_names   TEXT,
             doc_names     TEXT,
             created_at    TEXT NOT NULL,
@@ -947,8 +947,7 @@ def api_get_enquiry(handler, eid):
 
 
 def _enquiry_validate(data):
-    return (data.get("company_name") or "").strip() and \
-           (data.get("item_name") or "").strip()
+    return bool((data.get("company_name") or "").strip())
 
 
 def _enquiry_insert_or_update(conn, eid, data):
@@ -993,12 +992,28 @@ def _enquiry_insert_or_update(conn, eid, data):
 def api_create_enquiry(handler):
     data = read_json_body(handler)
     if not _enquiry_validate(data):
-        return json_response(handler, {"error": "company_name, item_name are required"}, 400)
+        return json_response(handler, {"error": "company_name is required"}, 400)
     conn = db()
     eid = _enquiry_insert_or_update(conn, None, data)
     conn.commit()
     conn.close()
     return json_response(handler, {"id": eid}, 201)
+
+
+def api_update_enquiry(handler, eid):
+    conn = db()
+    row = conn.execute("SELECT * FROM enquiries WHERE id = ?", (eid,)).fetchone()
+    if not row:
+        conn.close()
+        return json_response(handler, {"error": "not found"}, 404)
+    data = read_json_body(handler)
+    if not _enquiry_validate(data):
+        conn.close()
+        return json_response(handler, {"error": "company_name is required"}, 400)
+    _enquiry_insert_or_update(conn, eid, data)
+    conn.commit()
+    conn.close()
+    return json_response(handler, {"id": eid}, 200)
 
 
 def api_delete_enquiry(handler, eid):
@@ -1132,6 +1147,8 @@ class Handler(SimpleHTTPRequestHandler):
                 eid = int(rest)
                 if method == "GET":
                     api_get_enquiry(self, eid); return True
+                if method == "PUT":
+                    api_update_enquiry(self, eid); return True
                 if method == "DELETE":
                     api_delete_enquiry(self, eid); return True
 
