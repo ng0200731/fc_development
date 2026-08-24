@@ -92,6 +92,9 @@ def init_db():
             pantones      TEXT,
             image_names   TEXT,
             doc_names     TEXT,
+            material      TEXT,
+            special       TEXT,
+            remake        TEXT,
             created_at    TEXT NOT NULL,
             updated_at    TEXT NOT NULL
         )
@@ -138,6 +141,9 @@ def init_db():
             pantones      TEXT,
             image_names   TEXT,
             doc_names     TEXT,
+            material      TEXT,
+            special       TEXT,
+            remake        TEXT,
             created_at    TEXT NOT NULL,
             updated_at    TEXT NOT NULL
         )
@@ -175,6 +181,9 @@ _DEV_MISSING_COLUMNS = {
     "doc_names": "TEXT",
     "project_id": "INTEGER",
     "project_name": "TEXT",
+    "material": "TEXT",
+    "special": "TEXT",
+    "remake": "TEXT",
 }
 
 
@@ -333,11 +342,16 @@ def _apply_borders(ws, nrows, ncols):
 
 
 def _build_workbook(records, sheet_title):
-    """Build an openpyxl Workbook.
+    """Build an openpyxl Workbook from `records`.
 
-    `records` is a list of (headers, cells, image_names) tuples. `headers` and
-    `cells` must have the same length; `image_names` is a list of stored image
-    names to embed into the column named "Image" (if present).
+    Each record is (headers, cells, image_names):
+      - headers:    list of column titles (same for every record)
+      - cells:      list of text values, one PER COLUMN (should match headers)
+      - image_names: stored image names; the FIRST is embedded as a thumbnail
+                     into whichever column is titled exactly "Image"
+
+    Written so each header column gets exactly one cell (short records are
+    padded with ""), so values can never drift into the wrong column.
     """
     wb = Workbook()
     ws = wb.active
@@ -345,47 +359,37 @@ def _build_workbook(records, sheet_title):
     if not records:
         ws.cell(row=1, column=1, value="(no data)")
         return wb
-    headers = records[0][0]
-    has_image_col = "Image" in headers
-    img_col_idx = headers.index("Image") + 1 if has_image_col else None
 
+    headers = list(records[0][0])
+    ncols = len(headers)
+
+    # Header row: dark fill, bold white text, thin border.
     for ci, h in enumerate(headers, start=1):
-        ws.cell(row=1, column=ci, value=h)
+        c = ws.cell(row=1, column=ci, value=h)
+        c.fill = PatternFill("solid", fgColor="1F2937")
+        c.font = Font(bold=True, color="FFFFFF")
+        c.alignment = Alignment(vertical="center", horizontal="left")
+        c.border = THIN_BORDER
 
-    r = 2
-    note_col = len(headers) + 1
-    for _headers, cells, image_names in records:
-        for ci, val in enumerate(cells, start=1):
-            ws.cell(row=r, column=ci, value=val)
-        if has_image_col and image_names:
-            letter = get_column_letter(img_col_idx)
-            # Fit the thumbnail inside the cell: lock the column width to the
-            # thumbnail box and the row height to match, then scale the image
-            # down so it never spills past the cell edges.
-            ws.row_dimensions[r].height = IMG_THUMB_H + 4
-            _embed_thumbnail(ws, f"{letter}{r}", image_names[0])
-            if len(image_names) > 1:
-                if r == 2:
-                    ws.cell(row=1, column=note_col,
-                            value=f"Image filenames ({len(image_names)} total)")
-                    _style_header(ws, note_col)
-                ws.cell(row=r, column=note_col,
-                        value="; ".join(display_name(n) for n in image_names))
-        r += 1
+    # Find the "Image" column (1-based).
+    img_col = headers.index("Image") + 1 if "Image" in headers else None
 
-    _style_header(ws, len(headers))
-    if has_image_col:
-        # Lock the image column width to the thumbnail so the picture fits.
-        col = ws.column_dimensions[get_column_letter(img_col_idx)]
-        col.width = (IMG_THUMB_W + 4) / 7.0  # ~7px per Excel column unit
-    # Border every cell + vertical-center / wrap for data so text lines up with
-    # the embedded thumbnails and long fields (Documents, Details) stay readable.
-    last_col = note_col if has_image_col else len(headers)
-    data_align = Alignment(vertical="center", horizontal="left", wrap_text=True)
-    for row in range(2, r):
-        for c in range(1, last_col + 1):
-            ws.cell(row=row, column=c).alignment = data_align
-    _apply_borders(ws, r - 1, last_col)
+    # One data row per record.
+    for ri, (_headers, cells, image_names) in enumerate(records, start=2):
+        for ci in range(1, ncols + 1):
+            # One value per column — pad with "" if the record is short.
+            val = cells[ci - 1] if ci - 1 < len(cells) else ""
+            c = ws.cell(row=ri, column=ci, value=val)
+            c.alignment = Alignment(vertical="center", horizontal="left", wrap_text=True)
+            c.border = THIN_BORDER
+        if img_col is not None and image_names:
+            ws.row_dimensions[ri].height = IMG_THUMB_H + 6
+            _embed_thumbnail(ws, f"{get_column_letter(img_col)}{ri}", image_names[0])
+
+    # Lock the Image column width to the thumbnail so the picture fits the cell.
+    if img_col is not None:
+        ws.column_dimensions[get_column_letter(img_col)].width = (IMG_THUMB_W + 6) / 7.0
+
     return wb
 
 
@@ -415,6 +419,7 @@ def _dev_record_to_xlsx(d):
 
     Column order mirrors the Development / View grid exactly:
     Company, Member, Item, Product Type, Image, Documents, Created, Updated, Details.
+    `cells` has exactly one entry per header, in order.
     """
     images = d.get("image_names") or []
     docs = d.get("doc_names") or []
@@ -425,8 +430,11 @@ def _dev_record_to_xlsx(d):
         d.get("member_name") or "",
         d.get("item_name") or "",
         d.get("product_type") or "",
-        dev_details_summary(d),
+        "",                              # Image column: holds the embedded thumbnail
         _docs_summary(docs),
+        d.get("created_at") or "",
+        d.get("updated_at") or "",
+        dev_details_summary(d),          # Details: size / colors summary
     ]
     return headers, cells, images
 
@@ -1103,6 +1111,14 @@ def _dev_row_to_payload(row):
                 out[k] = []
         else:
             out[k] = []
+    for k in ("material", "special", "remake"):
+        if out.get(k):
+            try:
+                out[k] = json.loads(out[k])
+            except (json.JSONDecodeError, TypeError):
+                out[k] = out[k]
+        else:
+            out[k] = None
     return out
 
 
@@ -1141,6 +1157,15 @@ def _dev_insert_or_update(conn, did, data):
     doc_names = data.get("doc_names")
     if isinstance(doc_names, (list, dict)):
         doc_names = json.dumps(doc_names, ensure_ascii=False)
+    material = data.get("material")
+    special = data.get("special")
+    remake = data.get("remake")
+    if isinstance(material, (list, dict)):
+        material = json.dumps(material, ensure_ascii=False)
+    if isinstance(special, (list, dict)):
+        special = json.dumps(special, ensure_ascii=False)
+    if isinstance(remake, (list, dict)):
+        remake = json.dumps(remake, ensure_ascii=False)
     vals = (
         data.get("company_id") if did is None else (data.get("company_id") if data.get("company_id") is not None else None),
         company_name,
@@ -1157,6 +1182,9 @@ def _dev_insert_or_update(conn, did, data):
         pantones,
         image_names,
         doc_names,
+        material,
+        special,
+        remake,
     )
     if did is None:
         cur = conn.cursor()
@@ -1164,8 +1192,8 @@ def _dev_insert_or_update(conn, did, data):
             "INSERT INTO developments "
             "(company_id, company_name, member_id, member_name, project_id, project_name, "
             "item_name, product_type, height, width, raised_height, no_of_color, pantones, "
-            "image_names, doc_names, created_at, updated_at) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "image_names, doc_names, material, special, remake, created_at, updated_at) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             vals + (now_iso(), now_iso()),
         )
         return cur.lastrowid
@@ -1173,7 +1201,7 @@ def _dev_insert_or_update(conn, did, data):
         "UPDATE developments SET "
         "company_id=?, company_name=?, member_id=?, member_name=?, project_id=?, project_name=?, "
         "item_name=?, product_type=?, height=?, width=?, raised_height=?, no_of_color=?, "
-        "pantones=?, image_names=?, doc_names=?, updated_at=? WHERE id=?",
+        "pantones=?, image_names=?, doc_names=?, material=?, special=?, remake=?, updated_at=? WHERE id=?",
         vals + (now_iso(), did),
     )
     return did
@@ -1248,6 +1276,14 @@ def _enquiry_row_to_payload(row):
                 out[k] = []
         else:
             out[k] = []
+    for k in ("material", "special", "remake"):
+        if out.get(k):
+            try:
+                out[k] = json.loads(out[k])
+            except (json.JSONDecodeError, TypeError):
+                out[k] = out[k]
+        else:
+            out[k] = None
     return out
 
 

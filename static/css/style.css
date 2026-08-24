@@ -416,6 +416,89 @@ select:focus-visible,
 }
 .dev-part .field:last-of-type { margin-bottom: 0; }
 
+/* ---- Part 4/5/6: material popup button, special popup button, remake list ---- */
+.dev-part-extra .subhead.part-head { margin-top: 22px; }
+.dev-part-extra .subhead.part-head:first-child { margin-top: 0; }
+.dev-part-extra .field { margin-bottom: 18px; }
+.dev-part-extra .field .muted.small { margin: 6px 0 0; }
+
+/* Pill-style button used for Material / Special "click to view" triggers */
+.pill-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 14px;
+  border-radius: 999px;
+  border: 1px solid var(--border-strong);
+  background: #f8fafc;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background var(--ease), border-color var(--ease), box-shadow var(--ease);
+}
+.pill-btn:hover {
+  background: #eef2f7;
+  border-color: var(--accent, #2563eb);
+  box-shadow: 0 1px 4px rgba(0,0,0,.08);
+}
+.pill-badge {
+  display: inline-block;
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: var(--accent-weak, #e0ecff);
+  color: var(--accent, #2563eb);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+}
+
+/* Remake editor */
+.remake-input-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.remake-input-row input {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.remake-list {
+  list-style: none;
+  margin: 10px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.remake-list.compact {
+  flex-direction: column;
+  gap: 2px;
+  margin: 0;
+}
+.remake-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: #f8fafc;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 6px 10px;
+}
+.remake-item .remake-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 13px;
+  word-break: break-word;
+}
+.remake-empty { margin: 10px 0 0; }
+.remake-list.compact li {
+  font-size: 12px;
+  color: var(--muted);
+  line-height: 1.5;
+}
+
 /* ---- Development / Create: full-width single parts below the grid ---- */
 .dev-part.dev-single { margin-top: 24px; }
 

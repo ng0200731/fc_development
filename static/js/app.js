@@ -781,6 +781,11 @@ function blankDevState() {
     raisedHeight: "",
     noOfColor: "",
     pantones: [],   // [{ value, color }]  one entry per color
+    // Part 4 material / Part 5 special (TBA — popup details, stored as JSON)
+    material: null, // [{ ... }]  (placeholder structure, TBA)
+    special: null,  // [{ ... }]  (placeholder structure, TBA)
+    // Part 6 remake — array of free-text strings
+    remake: [],     // ["note 1", "note 2"]
     images: [],   // [{ id, name, url }]
     docs: [],     // [{ id, name, file }]
   };
@@ -945,6 +950,9 @@ function resetDevState() {
   s.raisedHeight = "";
   s.noOfColor = "";
   s.pantones = [];
+  s.material = null;   // Part 4 (TBA)
+  s.special = null;    // Part 5 (TBA)
+  s.remake = [];       // Part 6 (array of strings)
   s.images = [];
   s.docs = [];
 }
@@ -979,6 +987,9 @@ function buildDevelopmentPayload() {
     pantones: devState.pantones.filter((p) => p && p.value).map((p) => ({ value: p.value, color: p.color })),
     image_names: devState.images.map((i) => i.name),
     doc_names: devState.docs.map((d) => d.name),
+    material: devState.material,
+    special: devState.special,
+    remake: devState.remake,
   };
 }
 
@@ -1209,7 +1220,81 @@ async function fillDummyEnquiry(ctx) {
   }
 }
 
-// Shared thumbnail renderer for the Development / Create image dropzone.
+// Wire the Part 4 (Material) / Part 5 (Special) popup buttons and the Part 6
+// (Remake) list editor. `state` is the active devState (Create or Edit);
+// `updateSaveState` re-evaluates Save/Update gating after a remake change.
+function wireExtraParts(root, state, updateSaveState) {
+  // --- Material & Special: TBA placeholder popups (details to be confirmed) ---
+  const openTbaPopup = (title) => {
+    const overlay = document.createElement("div");
+    overlay.className = "modal-overlay";
+    overlay.innerHTML = `
+      <div class="modal" role="dialog" aria-modal="true" style="max-width:480px">
+        <h3>${escapeHtml(title)}</h3>
+        <p class="muted">Details to be confirmed (TBA).</p>
+        <div class="actions modal-actions">
+          <button class="btn primary" id="tba-close" type="button">Close</button>
+        </div>
+      </div>`;
+    document.body.appendChild(overlay);
+    overlay.querySelector("#tba-close").addEventListener("click", () => overlay.remove());
+    overlay.addEventListener("click", (e) => { if (e.target === overlay) overlay.remove(); });
+  };
+
+  const matBtn = root.querySelector("#dev-material-btn");
+  const specBtn = root.querySelector("#dev-special-btn");
+  if (matBtn) matBtn.addEventListener("click", () => openTbaPopup("Material"));
+  if (specBtn) specBtn.addEventListener("click", () => openTbaPopup("Special"));
+
+  // --- Remake: array of free-text strings, add one per entry ---
+  const listEl = root.querySelector("#dev-remake-list");
+  const inputEl = root.querySelector("#dev-remake-input");
+  const addBtn = root.querySelector("#dev-remake-add");
+
+  const renderRemake = () => {
+    if (!listEl) return;
+    if (!state.remake || !state.remake.length) {
+      listEl.innerHTML = `<li class="remake-empty muted small">No remake notes yet.</li>`;
+      return;
+    }
+    listEl.innerHTML = state.remake.map((note, i) => `
+      <li class="remake-item">
+        <span class="remake-text">${escapeHtml(note)}</span>
+        <button type="button" class="icon-btn danger remake-rm" data-idx="${i}" title="Remove">✕</button>
+      </li>`).join("");
+    listEl.querySelectorAll(".remake-rm").forEach((b) => {
+      b.addEventListener("click", () => {
+        const i = Number(b.dataset.idx);
+        if (i >= 0 && i < state.remake.length) {
+          state.remake.splice(i, 1);
+          renderRemake();
+          if (typeof updateSaveState === "function") updateSaveState();
+        }
+      });
+    });
+  };
+
+  const addRemake = () => {
+    if (!inputEl) return;
+    const v = inputEl.value.trim();
+    if (!v) return;
+    if (!Array.isArray(state.remake)) state.remake = [];
+    state.remake.push(v);
+    inputEl.value = "";
+    renderRemake();
+    if (typeof updateSaveState === "function") updateSaveState();
+    inputEl.focus();
+  };
+
+  if (addBtn) addBtn.addEventListener("click", addRemake);
+  if (inputEl) {
+    inputEl.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") { e.preventDefault(); addRemake(); }
+    });
+  }
+
+  renderRemake();
+}
 // After removing an image it re-evaluates Save gating (via devSaveStateFn).
 function renderDevImageThumbs() {
   const imageThumbs = panel.querySelector("#dev-image-thumbs");
@@ -1246,7 +1331,15 @@ function renderDevImageThumbs() {
   });
 }
 
-// Strip "PANTONE", suffixes (C/U/TCX/TPG/TPN), spaces, slashes — keep code chars.
+// Safely parse a JSON string into an array; returns [] on any failure.
+function safeJsonParse(v) {
+  try {
+    const p = JSON.parse(v);
+    return Array.isArray(p) ? p : [];
+  } catch {
+    return [];
+  }
+}
 function normalizePantone(s) {
   return (s || "").toLowerCase()
     .replace(/pantone/g, "")
@@ -1380,6 +1473,9 @@ function buildEnquiryPayload() {
     pantones: devState.pantones.filter((p) => p && p.value).map((p) => ({ value: p.value, color: p.color })),
     image_names: devState.images.map((i) => i.name),
     doc_names: devState.docs.map((d) => d.name),
+    material: devState.material,
+    special: devState.special,
+    remake: devState.remake,
   };
 }
 
@@ -2878,7 +2974,7 @@ async function renderDevelopmentCreate() {
 
       <!-- 4th part: image + documents. -->
       <div class="dev-part" id="dev-part4">
-        <h3 class="subhead">4 · Image <span class="req-mark">required</span></h3>
+        <h3 class="subhead">7 · Image <span class="req-mark">required</span></h3>
 
         <div class="dropzone" id="dev-image-drop" tabindex="0">
           <div class="drop-region">
@@ -2895,6 +2991,34 @@ async function renderDevelopmentCreate() {
             <p class="muted small drop-hint">Drag &amp; drop multiple files here.</p>
           </div>
           <div class="file-list" id="dev-doc-list"></div>
+        </div>
+      </div>
+
+      <!-- 4 (material) · 5 (special) · 6 (remake) stacked below Part 3 details -->
+      <div class="dev-part dev-part-extra" id="dev-part-extra">
+        <h3 class="subhead part-head">4 · Material</h3>
+        <div class="field">
+          <button type="button" class="pill-btn" id="dev-material-btn">
+            Material details <span class="pill-badge" id="dev-material-badge">TBA</span>
+          </button>
+          <p class="muted small">Click to view material specs (details TBA).</p>
+        </div>
+
+        <h3 class="subhead part-head">5 · Special</h3>
+        <div class="field">
+          <button type="button" class="pill-btn" id="dev-special-btn">
+            Special details <span class="pill-badge" id="dev-special-badge">TBA</span>
+          </button>
+          <p class="muted small">Click to view special requirements (details TBA).</p>
+        </div>
+
+        <h3 class="subhead part-head">6 · Remake</h3>
+        <div class="field">
+          <div class="remake-input-row">
+            <input id="dev-remake-input" type="text" autocomplete="off" placeholder="Type a remake note, then press Add…" />
+            <button type="button" class="btn ghost" id="dev-remake-add">Add</button>
+          </div>
+          <ul class="remake-list" id="dev-remake-list"></ul>
         </div>
       </div>
     </div>
@@ -3393,6 +3517,9 @@ async function renderDevelopmentCreate() {
     pantones: (devOriginal.pantones || []).map((p) => ({ value: (p.value || "").trim(), color: p.color })),
     image_names: (devOriginal.image_names || []).slice().sort(),
     doc_names: (devOriginal.doc_names || []).slice().sort(),
+    material: devOriginal.material,
+    special: devOriginal.special,
+    remake: (devOriginal.remake || []).slice().sort(),
   });
 
   // Save gating: Parts 1–3 valid AND at least one image attached. The image
@@ -3416,6 +3543,9 @@ async function renderDevelopmentCreate() {
   updateNextState();
   updateSaveState();
   devSaveStateFn = updateSaveState;   // let the shared image renderer re-gate Save
+
+  // ===== Part 4/5/6: material popup + special popup + remake list =====
+  wireExtraParts(panel, devState, updateSaveState);
 
   // ===== 4th part: image dropzone + documents =====
   const imageDrop = panel.querySelector("#dev-image-drop");
@@ -3733,7 +3863,7 @@ async function renderDevelopmentEdit() {
       </div>
 
       <div class="dev-part" id="dev-part4">
-        <h3 class="subhead">4 · Image <span class="req-mark">required</span></h3>
+        <h3 class="subhead">7 · Image <span class="req-mark">required</span></h3>
 
         <div class="dropzone" id="dev-image-drop" tabindex="0">
           <div class="drop-region">
@@ -3750,6 +3880,34 @@ async function renderDevelopmentEdit() {
             <p class="muted small drop-hint">Drag &amp; drop multiple files here.</p>
           </div>
           <div class="file-list" id="dev-doc-list"></div>
+        </div>
+      </div>
+
+      <!-- 4 (material) · 5 (special) · 6 (remake) stacked below Part 3 details -->
+      <div class="dev-part dev-part-extra" id="dev-part-extra">
+        <h3 class="subhead part-head">4 · Material</h3>
+        <div class="field">
+          <button type="button" class="pill-btn" id="dev-material-btn">
+            Material details <span class="pill-badge" id="dev-material-badge">TBA</span>
+          </button>
+          <p class="muted small">Click to view material specs (details TBA).</p>
+        </div>
+
+        <h3 class="subhead part-head">5 · Special</h3>
+        <div class="field">
+          <button type="button" class="pill-btn" id="dev-special-btn">
+            Special details <span class="pill-badge" id="dev-special-badge">TBA</span>
+          </button>
+          <p class="muted small">Click to view special requirements (details TBA).</p>
+        </div>
+
+        <h3 class="subhead part-head">6 · Remake</h3>
+        <div class="field">
+          <div class="remake-input-row">
+            <input id="dev-remake-input" type="text" autocomplete="off" placeholder="Type a remake note, then press Add…" />
+            <button type="button" class="btn ghost" id="dev-remake-add">Add</button>
+          </div>
+          <ul class="remake-list" id="dev-remake-list"></ul>
         </div>
       </div>
     </div>
@@ -4194,6 +4352,9 @@ async function renderDevelopmentEdit() {
     pantones: devState.pantones.filter((p) => p && p.value).map((p) => ({ value: p.value.trim(), color: p.color })),
     image_names: devState.images.map((i) => i.name).sort(),
     doc_names: devState.docs.map((d) => d.name).sort(),
+    material: devState.material,
+    special: devState.special,
+    remake: devState.remake.slice().sort(),
   });
 
   const sigEq = (a, b) => JSON.stringify(a) === JSON.stringify(b);
@@ -4210,6 +4371,9 @@ async function renderDevelopmentEdit() {
     pantones: (devOriginal.pantones || []).map((p) => ({ value: (p.value || "").trim(), color: p.color })),
     image_names: (devOriginal.image_names || []).slice().sort(),
     doc_names: (devOriginal.doc_names || []).slice().sort(),
+    material: devOriginal.material,
+    special: devOriginal.special,
+    remake: (devOriginal.remake || []).slice().sort(),
   });
 
   // Save gating for the Edit tab: all required fields filled AND a real change
@@ -4231,7 +4395,8 @@ async function renderDevelopmentEdit() {
   updateSaveState();
   devSaveStateFn = updateSaveState;
 
-  // ===== 4th part: image dropzone + documents =====
+  // ===== Part 4/5/6: material popup + special popup + remake list =====
+  wireExtraParts(panel, devState, updateSaveState);
   const imageDrop = panel.querySelector("#dev-image-drop");
   const imageThumbs = panel.querySelector("#dev-image-thumbs");
   const docDrop = panel.querySelector("#dev-doc-drop");
@@ -4460,6 +4625,9 @@ async function renderDevelopmentEdit() {
       s.pantones = Array.isArray(devOriginal.pantones) ? devOriginal.pantones.map((p) => ({ value: p.value || "", color: p.color || "#000000" })) : [];
       s.images = (devOriginal.image_names || []).map((n) => ({ id: "eimg-" + n, name: n, url: assetUrl(n) }));
       s.docs = (devOriginal.doc_names || []).map((name, i) => ({ id: "edoc-" + devEditId + "-" + i, name, file: null }));
+      s.material = devOriginal.material != null ? devOriginal.material : null;
+      s.special = devOriginal.special != null ? devOriginal.special : null;
+      s.remake = Array.isArray(devOriginal.remake) ? devOriginal.remake.slice() : [];
       renderDevelopmentEdit();   // re-render with restored data
     });
   }
@@ -4548,15 +4716,18 @@ function paintDevelopmentView() {
     { key: "product_type", label: "Product Type" },
     { key: "image", label: "Image" },
     { key: "documents", label: "Documents" },
+    { key: "material", label: "Material" },
+    { key: "special", label: "Special" },
+    { key: "remake", label: "Remake" },
     { key: "created_at", label: "Created" },
     { key: "updated_at", label: "Updated" },
     { key: "details", label: "Details" },
   ];
 
-  // image / documents / details are rendered specially and not column-searched
-  const searchCols = cols.filter(
-    (c) => c.key !== "image" && c.key !== "documents" && c.key !== "details"
-  );
+  // image / documents / details / material / special / remake are rendered
+  // specially and not column-searched
+  const specialKeys = new Set(["image", "documents", "details", "material", "special", "remake"]);
+  const searchCols = cols.filter((c) => !specialKeys.has(c.key));
 
   const shown = devViewData.filter((r) =>
     searchCols.every((c) => fuzzyMatch(r[c.key], devViewFilters[c.key]))
@@ -4566,7 +4737,7 @@ function paintDevelopmentView() {
   const allChecked = allKeys.length > 0 && allKeys.every((k) => devViewSelected.has(k));
 
   const searchRow = cols.map((c) => {
-    if (c.key === "image" || c.key === "documents" || c.key === "details") {
+    if (specialKeys.has(c.key)) {
       return `<th class="search-th"></th>`;
     }
     return `<th class="search-th">
@@ -4585,6 +4756,18 @@ function paintDevelopmentView() {
     const docs = (r.doc_names || []).map((n) =>
       `<a class="doc-tag" href="${docUrl(n)}" target="_blank" rel="noopener" download title="${escapeHtml(n)}">📄 ${escapeHtml(displayName(n))}</a>`).join("");
     const docLinks = docs || `<span class="muted">—</span>`;
+    const materialCell = r.material != null
+      ? `<span class="pill-badge">TBA</span>`
+      : `<span class="muted">—</span>`;
+    const specialCell = r.special != null
+      ? `<span class="pill-badge">TBA</span>`
+      : `<span class="muted">—</span>`;
+    const remakeArr = Array.isArray(r.remake) ? r.remake
+      : (typeof r.remake === "string" && r.remake ? safeJsonParse(r.remake) : []) || [];
+    const remakeCell = (remakeArr && remakeArr.length)
+      ? `<ul class="remake-list compact">` + remakeArr.map((n) =>
+          `<li>${escapeHtml(n)}</li>`).join("") + `</ul>`
+      : `<span class="muted">—</span>`;
     return `
       <tr class="${checked ? "selected" : ""}">
         <td>
@@ -4598,6 +4781,9 @@ function paintDevelopmentView() {
         <td>${escapeHtml(r.product_type)}</td>
         <td class="cell-imgs">${thumbs}</td>
         <td class="cell-docs">${docLinks}</td>
+        <td>${materialCell}</td>
+        <td>${specialCell}</td>
+        <td>${remakeCell}</td>
         <td>${escapeHtml(r.created_at)}</td>
         <td>${escapeHtml(r.updated_at)}</td>
         <td class="details-cell">${escapeHtml(devDetailsSummary(r))}</td>
@@ -4606,7 +4792,7 @@ function paintDevelopmentView() {
           <button class="icon-btn danger" data-del="${r.id}" title="Delete">🗑</button>
         </td>
       </tr>`;
-  }).join("") || `<tr><td colspan="11" class="muted">No matches.</td></tr>`;
+  }).join("") || `<tr><td colspan="14" class="muted">No matches.</td></tr>`;
 
   panel.innerHTML = `
     <div class="view-head">
@@ -4802,6 +4988,11 @@ async function editDevelopmentInCreate(id) {
   s.raisedHeight = rec.raised_height != null ? String(rec.raised_height) : "";
   s.noOfColor = rec.no_of_color != null ? String(rec.no_of_color) : "";
   s.pantones = Array.isArray(rec.pantones) ? rec.pantones.map((p) => ({ value: p.value || "", color: p.color || "#000000" })) : [];
+
+  // Part 4/5/6 — material & special (TBA structures) + remake (array of strings).
+  s.material = rec.material != null ? rec.material : null;
+  s.special = rec.special != null ? rec.special : null;
+  s.remake = Array.isArray(rec.remake) ? rec.remake.slice() : [];
 
   // images — resolve each saved name to its servable URL (sample or upload).
   s.images = (rec.image_names || []).map((n) => ({
