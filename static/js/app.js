@@ -63,6 +63,13 @@ function materialSummary(mat) {
   return parts.join(" · ");
 }
 
+// Build a short summary of the Special spec for badges / view cells.
+function specialSummary(spec) {
+  if (!spec) return "";
+  if (spec.variable) return spec.variable === "variable" ? "variable" : "non variable";
+  return "";
+}
+
 // Product types that show the "No. of color" + Pantone-row layout.
 // "heat transfer label" behaves like "raised silicon label" for color, but has
 // no "Raised height" field — see needsRaisedHeight() below.
@@ -1310,20 +1317,57 @@ function wireExtraParts(root, state, updateSaveState) {
     });
   };
 
-  const openTbaPopup = (title) => {
+  const updateSpecialBadge = () => {
+    const badge = root.querySelector("#dev-special-badge");
+    if (!badge) return;
+    const summary = specialSummary(devState.special);
+    if (summary) {
+      badge.textContent = summary;
+      badge.classList.add("filled");
+    } else {
+      badge.textContent = "TBA";
+      badge.classList.remove("filled");
+    }
+  };
+
+  const openSpecialPopup = () => {
+    const cur = devState.special && typeof devState.special === "object" ? devState.special : {};
     const overlay = document.createElement("div");
     overlay.className = "modal-overlay";
     overlay.innerHTML = `
       <div class="modal" role="dialog" aria-modal="true" style="max-width:480px">
-        <h3>${escapeHtml(title)}</h3>
-        <p class="muted">Details to be confirmed (TBA).</p>
+        <h3>Special</h3>
+
+        <div class="field">
+          <label class="radio-label">Variable</label>
+          <div class="radio-row" id="spec-variable-row">
+            <label class="radio-opt"><input type="radio" name="spec-variable" value="variable" ${cur.variable === "variable" ? "checked" : ""}/> variable</label>
+            <label class="radio-opt"><input type="radio" name="spec-variable" value="non-variable" ${cur.variable === "non-variable" ? "checked" : ""}/> non variable</label>
+          </div>
+        </div>
+
         <div class="actions modal-actions">
-          <button class="btn primary" id="tba-close" type="button">Close</button>
+          <button class="btn ghost" id="spec-clear" type="button">Clear</button>
+          <button class="btn primary" id="spec-save" type="button">Save</button>
         </div>
       </div>`;
     document.body.appendChild(overlay);
-    overlay.querySelector("#tba-close").addEventListener("click", () => overlay.remove());
     overlay.addEventListener("click", (e) => { if (e.target === overlay) overlay.remove(); });
+
+    const close = () => overlay.remove();
+    overlay.querySelector("#spec-save").addEventListener("click", () => {
+      const variable = overlay.querySelector('input[name="spec-variable"]:checked')?.value || null;
+      devState.special = variable ? { variable } : null;
+      updateSpecialBadge();
+      if (typeof updateSaveState === "function") updateSaveState();
+      close();
+    });
+    overlay.querySelector("#spec-clear").addEventListener("click", () => {
+      devState.special = null;
+      updateSpecialBadge();
+      if (typeof updateSaveState === "function") updateSaveState();
+      close();
+    });
   };
 
   const matBtn = root.querySelector("#dev-material-btn");
@@ -1332,7 +1376,10 @@ function wireExtraParts(root, state, updateSaveState) {
     matBtn.addEventListener("click", openMaterialPopup);
     updateMaterialBadge();
   }
-  if (specBtn) specBtn.addEventListener("click", () => openTbaPopup("Special"));
+  if (specBtn) {
+    specBtn.addEventListener("click", openSpecialPopup);
+    updateSpecialBadge();
+  }
 
   // --- Remake: array of free-text strings, add one per entry ---
   const listEl = root.querySelector("#dev-remake-list");
@@ -3097,7 +3144,7 @@ async function renderDevelopmentCreate() {
           <button type="button" class="pill-btn" id="dev-special-btn">
             Special details <span class="pill-badge" id="dev-special-badge">TBA</span>
           </button>
-          <p class="muted small">Click to view special requirements (details TBA).</p>
+          <p class="muted small">Click to set special requirements (variable / non variable).</p>
         </div>
 
         <h3 class="subhead part-head">6 · Remake</h3>
@@ -3986,7 +4033,7 @@ async function renderDevelopmentEdit() {
           <button type="button" class="pill-btn" id="dev-special-btn">
             Special details <span class="pill-badge" id="dev-special-badge">TBA</span>
           </button>
-          <p class="muted small">Click to view special requirements (details TBA).</p>
+          <p class="muted small">Click to set special requirements (variable / non variable).</p>
         </div>
 
         <h3 class="subhead part-head">6 · Remake</h3>
@@ -4848,8 +4895,9 @@ function paintDevelopmentView() {
     const materialCell = materialSummaryText
       ? `<span class="pill-badge filled">${escapeHtml(materialSummaryText)}</span>`
       : `<span class="muted">—</span>`;
-    const specialCell = r.special != null
-      ? `<span class="pill-badge">TBA</span>`
+    const specialSummaryText = r.special ? specialSummary(r.special) : "";
+    const specialCell = specialSummaryText
+      ? `<span class="pill-badge filled">${escapeHtml(specialSummaryText)}</span>`
       : `<span class="muted">—</span>`;
     const remakeArr = Array.isArray(r.remake) ? r.remake
       : (typeof r.remake === "string" && r.remake ? safeJsonParse(r.remake) : []) || [];
@@ -5211,6 +5259,15 @@ async function openDevEditModal(id) {
         </div>
       </div>
 
+      <h4 class="subhead">Special</h4>
+      <div class="field">
+        <label class="radio-label">Variable</label>
+        <div class="radio-row" id="ed-spec-variable-row">
+          <label class="radio-opt"><input type="radio" name="ed-spec-variable" value="variable" ${rec.special && rec.special.variable === "variable" ? "checked" : ""}/> variable</label>
+          <label class="radio-opt"><input type="radio" name="ed-spec-variable" value="non-variable" ${rec.special && rec.special.variable === "non-variable" ? "checked" : ""}/> non variable</label>
+        </div>
+      </div>
+
       <h4 class="subhead">Documents <span class="req-mark optional">optional</span></h4>
       <div class="dropzone" id="ed-doc-drop" tabindex="0">
         <div class="drop-region">
@@ -5382,6 +5439,9 @@ async function openDevEditModal(id) {
         recycle: overlay.querySelector('input[name="ed-mat-recycle"]:checked')?.value || null,
         fabric: overlay.querySelector("#ed-mat-fabric").value || null,
         edge: overlay.querySelector('input[name="ed-mat-edge"]:checked')?.value || null,
+      },
+      special: {
+        variable: overlay.querySelector('input[name="ed-spec-variable"]:checked')?.value || null,
       },
     };
     const saveBtn = overlay.querySelector("#ed-save");
