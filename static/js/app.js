@@ -70,6 +70,9 @@ function specialSummary(spec) {
   return "";
 }
 
+// Only "screen print label" uses the full Material popup (recycle / fabric / edge).
+// Other product types keep the generic "TBA" material stub.
+const isScreenPrintProduct = (p) => p === "screen print label";
 // Product types that show the "No. of color" + Pantone-row layout.
 // "heat transfer label" behaves like "raised silicon label" for color, but has
 // no "Raised height" field — see needsRaisedHeight() below.
@@ -1330,6 +1333,22 @@ function wireExtraParts(root, state, updateSaveState) {
     }
   };
 
+  const openTbaPopup = (title) => {
+    const overlay = document.createElement("div");
+    overlay.className = "modal-overlay";
+    overlay.innerHTML = `
+      <div class="modal" role="dialog" aria-modal="true" style="max-width:480px">
+        <h3>${escapeHtml(title)}</h3>
+        <p class="muted">Details to be confirmed (TBA).</p>
+        <div class="actions modal-actions">
+          <button class="btn primary" id="tba-close" type="button">Close</button>
+        </div>
+      </div>`;
+    document.body.appendChild(overlay);
+    overlay.querySelector("#tba-close").addEventListener("click", () => overlay.remove());
+    overlay.addEventListener("click", (e) => { if (e.target === overlay) overlay.remove(); });
+  };
+
   const openSpecialPopup = () => {
     const cur = devState.special && typeof devState.special === "object" ? devState.special : {};
     const overlay = document.createElement("div");
@@ -1373,7 +1392,13 @@ function wireExtraParts(root, state, updateSaveState) {
   const matBtn = root.querySelector("#dev-material-btn");
   const specBtn = root.querySelector("#dev-special-btn");
   if (matBtn) {
-    matBtn.addEventListener("click", openMaterialPopup);
+    // Bind once; decide at CLICK time because devState.product is empty when the
+    // panel first mounts (Create tab). Screen print label opens the full Material
+    // popup; every other product type opens the generic "TBA" popup.
+    matBtn.addEventListener("click", () => {
+      if (isScreenPrintProduct(devState.product)) openMaterialPopup();
+      else openTbaPopup("Material");
+    });
     updateMaterialBadge();
   }
   if (specBtn) {
@@ -5237,6 +5262,7 @@ async function openDevEditModal(id) {
       </div>
 
       <h4 class="subhead">Material</h4>
+      ${isScreenPrintProduct(rec.product_type) ? `
       <div class="field">
         <label class="radio-label">Recycle</label>
         <div class="radio-row" id="ed-mat-recycle-row">
@@ -5258,6 +5284,11 @@ async function openDevEditModal(id) {
           <label class="radio-opt"><input type="radio" name="ed-mat-edge" value="woven" ${rec.material && rec.material.edge === "woven" ? "checked" : ""}/> woven edge</label>
         </div>
       </div>
+      ` : `
+      <div class="field">
+        <p class="muted small">Material details to be confirmed (TBA).</p>
+      </div>
+      `}
 
       <h4 class="subhead">Special</h4>
       <div class="field">
@@ -5482,11 +5513,11 @@ async function openDevEditModal(id) {
       pantones: rec.pantones || [],
       image_names: editImages.map((i) => i.name),
       doc_names: editDocs.map((d) => d.name),
-      material: {
+      material: isScreenPrintProduct(product_type) ? {
         recycle: overlay.querySelector('input[name="ed-mat-recycle"]:checked')?.value || null,
         fabric: overlay.querySelector("#ed-mat-fabric").value || null,
         edge: overlay.querySelector('input[name="ed-mat-edge"]:checked')?.value || null,
-      },
+      } : (rec.material != null ? rec.material : null),
       special: {
         variable: overlay.querySelector('input[name="ed-spec-variable"]:checked')?.value || null,
       },
