@@ -453,6 +453,40 @@ select:focus-visible,
   letter-spacing: .04em;
   text-transform: uppercase;
 }
+/* Filled variant: shows a real, non-TBA value. */
+.pill-badge.filled {
+  background: #dcfce7;
+  color: #15803d;
+}
+
+/* Radio groups inside the Material popup / inline edit modal */
+.radio-label {
+  display: block;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted, #64748b);
+  margin-bottom: 6px;
+}
+.radio-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  margin-bottom: 4px;
+}
+.radio-opt {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--text, #1f2937);
+  cursor: pointer;
+}
+.radio-opt input[type="radio"] {
+  width: auto;
+  margin: 0;
+  accent-color: var(--accent, #2563eb);
+}
 
 /* Remake editor */
 .remake-input-row {

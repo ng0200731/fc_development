@@ -43,11 +43,25 @@ const labels = {
 const PRODUCT_TYPES = [
   "woven label",
   "printed label",
+  "screen print label",
   "hang tag",
   "raised silicon label",
   "heat transfer label",
   "leather patch",
 ];
+
+// Fabric options for the Material dropdown.
+const FABRIC_OPTIONS = ["polyester", "nylon", "cotton"];
+
+// Build a short summary of a screen-print material spec for badges / view cells.
+function materialSummary(mat) {
+  if (!mat) return "";
+  const parts = [];
+  if (mat.recycle) parts.push(mat.recycle === "recycle" ? "recycle" : "non-recycle");
+  if (mat.fabric) parts.push(mat.fabric);
+  if (mat.edge) parts.push(mat.edge === "slit" ? "slit edge" : "woven edge");
+  return parts.join(" · ");
+}
 
 // Product types that show the "No. of color" + Pantone-row layout.
 // "heat transfer label" behaves like "raised silicon label" for color, but has
@@ -1224,7 +1238,78 @@ async function fillDummyEnquiry(ctx) {
 // (Remake) list editor. `state` is the active devState (Create or Edit);
 // `updateSaveState` re-evaluates Save/Update gating after a remake change.
 function wireExtraParts(root, state, updateSaveState) {
-  // --- Material & Special: TBA placeholder popups (details to be confirmed) ---
+  // --- Material & Special popups ---
+  const updateMaterialBadge = () => {
+    const badge = root.querySelector("#dev-material-badge");
+    if (!badge) return;
+    const summary = materialSummary(devState.material);
+    if (summary) {
+      badge.textContent = summary;
+      badge.classList.add("filled");
+    } else {
+      badge.textContent = "TBA";
+      badge.classList.remove("filled");
+    }
+  };
+
+  const openMaterialPopup = () => {
+    const cur = devState.material && typeof devState.material === "object" ? devState.material : {};
+    const overlay = document.createElement("div");
+    overlay.className = "modal-overlay";
+    overlay.innerHTML = `
+      <div class="modal" role="dialog" aria-modal="true" style="max-width:480px">
+        <h3>Material</h3>
+
+        <div class="field">
+          <label class="radio-label">Recycle</label>
+          <div class="radio-row" id="mat-recycle-row">
+            <label class="radio-opt"><input type="radio" name="mat-recycle" value="recycle" ${cur.recycle === "recycle" ? "checked" : ""}/> recycle</label>
+            <label class="radio-opt"><input type="radio" name="mat-recycle" value="non-recycle" ${cur.recycle === "non-recycle" ? "checked" : ""}/> non recycle</label>
+          </div>
+        </div>
+
+        <div class="field">
+          <label for="mat-fabric">Fabric</label>
+          <select id="mat-fabric">
+            <option value="">— select —</option>
+            ${FABRIC_OPTIONS.map((f) => `<option value="${escapeHtml(f)}" ${cur.fabric === f ? "selected" : ""}>${escapeHtml(f)}</option>`).join("")}
+          </select>
+        </div>
+
+        <div class="field">
+          <label class="radio-label">Edge</label>
+          <div class="radio-row" id="mat-edge-row">
+            <label class="radio-opt"><input type="radio" name="mat-edge" value="slit" ${cur.edge === "slit" ? "checked" : ""}/> slit edge</label>
+            <label class="radio-opt"><input type="radio" name="mat-edge" value="woven" ${cur.edge === "woven" ? "checked" : ""}/> woven edge</label>
+          </div>
+        </div>
+
+        <div class="actions modal-actions">
+          <button class="btn ghost" id="mat-clear" type="button">Clear</button>
+          <button class="btn primary" id="mat-save" type="button">Save</button>
+        </div>
+      </div>`;
+    document.body.appendChild(overlay);
+    overlay.addEventListener("click", (e) => { if (e.target === overlay) overlay.remove(); });
+
+    const close = () => overlay.remove();
+    overlay.querySelector("#mat-save").addEventListener("click", () => {
+      const recycle = overlay.querySelector('input[name="mat-recycle"]:checked')?.value || null;
+      const fabric = overlay.querySelector("#mat-fabric").value || null;
+      const edge = overlay.querySelector('input[name="mat-edge"]:checked')?.value || null;
+      devState.material = { recycle, fabric, edge };
+      updateMaterialBadge();
+      if (typeof updateSaveState === "function") updateSaveState();
+      close();
+    });
+    overlay.querySelector("#mat-clear").addEventListener("click", () => {
+      devState.material = null;
+      updateMaterialBadge();
+      if (typeof updateSaveState === "function") updateSaveState();
+      close();
+    });
+  };
+
   const openTbaPopup = (title) => {
     const overlay = document.createElement("div");
     overlay.className = "modal-overlay";
@@ -1243,7 +1328,10 @@ function wireExtraParts(root, state, updateSaveState) {
 
   const matBtn = root.querySelector("#dev-material-btn");
   const specBtn = root.querySelector("#dev-special-btn");
-  if (matBtn) matBtn.addEventListener("click", () => openTbaPopup("Material"));
+  if (matBtn) {
+    matBtn.addEventListener("click", openMaterialPopup);
+    updateMaterialBadge();
+  }
   if (specBtn) specBtn.addEventListener("click", () => openTbaPopup("Special"));
 
   // --- Remake: array of free-text strings, add one per entry ---
@@ -4756,8 +4844,9 @@ function paintDevelopmentView() {
     const docs = (r.doc_names || []).map((n) =>
       `<a class="doc-tag" href="${docUrl(n)}" target="_blank" rel="noopener" download title="${escapeHtml(n)}">📄 ${escapeHtml(displayName(n))}</a>`).join("");
     const docLinks = docs || `<span class="muted">—</span>`;
-    const materialCell = r.material != null
-      ? `<span class="pill-badge">TBA</span>`
+    const materialSummaryText = r.material ? materialSummary(r.material) : "";
+    const materialCell = materialSummaryText
+      ? `<span class="pill-badge filled">${escapeHtml(materialSummaryText)}</span>`
       : `<span class="muted">—</span>`;
     const specialCell = r.special != null
       ? `<span class="pill-badge">TBA</span>`
@@ -5099,6 +5188,29 @@ async function openDevEditModal(id) {
         <div class="thumb-grid" id="ed-image-thumbs"></div>
       </div>
 
+      <h4 class="subhead">Material</h4>
+      <div class="field">
+        <label class="radio-label">Recycle</label>
+        <div class="radio-row" id="ed-mat-recycle-row">
+          <label class="radio-opt"><input type="radio" name="ed-mat-recycle" value="recycle" ${rec.material && rec.material.recycle === "recycle" ? "checked" : ""}/> recycle</label>
+          <label class="radio-opt"><input type="radio" name="ed-mat-recycle" value="non-recycle" ${rec.material && rec.material.recycle === "non-recycle" ? "checked" : ""}/> non recycle</label>
+        </div>
+      </div>
+      <div class="field">
+        <label for="ed-mat-fabric">Fabric</label>
+        <select id="ed-mat-fabric">
+          <option value="">— select —</option>
+          ${FABRIC_OPTIONS.map((f) => `<option value="${escapeHtml(f)}" ${rec.material && rec.material.fabric === f ? "selected" : ""}>${escapeHtml(f)}</option>`).join("")}
+        </select>
+      </div>
+      <div class="field">
+        <label class="radio-label">Edge</label>
+        <div class="radio-row" id="ed-mat-edge-row">
+          <label class="radio-opt"><input type="radio" name="ed-mat-edge" value="slit" ${rec.material && rec.material.edge === "slit" ? "checked" : ""}/> slit edge</label>
+          <label class="radio-opt"><input type="radio" name="ed-mat-edge" value="woven" ${rec.material && rec.material.edge === "woven" ? "checked" : ""}/> woven edge</label>
+        </div>
+      </div>
+
       <h4 class="subhead">Documents <span class="req-mark optional">optional</span></h4>
       <div class="dropzone" id="ed-doc-drop" tabindex="0">
         <div class="drop-region">
@@ -5266,6 +5378,11 @@ async function openDevEditModal(id) {
       pantones: rec.pantones || [],
       image_names: editImages.map((i) => i.name),
       doc_names: editDocs.map((d) => d.name),
+      material: {
+        recycle: overlay.querySelector('input[name="ed-mat-recycle"]:checked')?.value || null,
+        fabric: overlay.querySelector("#ed-mat-fabric").value || null,
+        edge: overlay.querySelector('input[name="ed-mat-edge"]:checked')?.value || null,
+      },
     };
     const saveBtn = overlay.querySelector("#ed-save");
     saveBtn.disabled = true;
