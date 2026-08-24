@@ -49,6 +49,11 @@ const PRODUCT_TYPES = [
   "leather patch",
 ];
 
+// Product types that use the "color label" layout: Raised height + No. of color
+// + Pantone rows. "heat transfer label" behaves exactly like "raised silicon label".
+const isColorLabelProduct = (p) =>
+  p === "raised silicon label" || p === "heat transfer label";
+
 // Dropdown option sets for the Company step of Customer / Create.
 const CURRENCIES = ["USD", "RMB", "HKD"];
 const PAYMENT_TERMS = ["COD", "credit 30 days", "credit 45 days"];
@@ -1081,7 +1086,7 @@ async function fillDummyDevelopment(ctx) {
     devState.product = pt;
 
     // 3) Part 3 details — set BEFORE rendering so inputs show the values
-    if (pt === "raised silicon label") {
+    if (isColorLabelProduct(pt)) {
       devState.height = (Math.random() * 40 + 10).toFixed(1);
       devState.width = (Math.random() * 40 + 10).toFixed(1);
       devState.raisedHeight = (Math.random() * 3 + 0.5).toFixed(1);
@@ -1162,7 +1167,7 @@ async function fillDummyEnquiry(ctx) {
       productEl.value = pt;
       devState.product = pt;
 
-      if (pt === "raised silicon label") {
+      if (isColorLabelProduct(pt)) {
         devState.height = (Math.random() * 40 + 10).toFixed(1);
         devState.width = (Math.random() * 40 + 10).toFixed(1);
         devState.raisedHeight = (Math.random() * 3 + 0.5).toFixed(1);
@@ -2113,7 +2118,7 @@ async function renderEnquiryEdit() {
   // ---- Part 3 dynamic body (depends on product type) ----
   const renderPart3 = () => {
     ensurePantoneData();
-    if (devState.product === "raised silicon label") {
+    if (isColorLabelProduct(devState.product)) {
       renderRaisedSiliconLabel();
     } else {
       part3Body.innerHTML = `
@@ -2418,7 +2423,7 @@ async function renderEnquiryEdit() {
     const w = (devState.width || "").trim();
     if (h.length === 0 || w.length === 0) return false;   // height + width always required
 
-    if (devState.product === "raised silicon label") {
+    if (isColorLabelProduct(devState.product)) {
       const rh = (devState.raisedHeight || "").trim();
       if (rh.length === 0) return false;                   // raised height required
 
@@ -2816,7 +2821,7 @@ async function renderDevelopmentCreate() {
           <button class="icon-btn" id="dev-refresh" type="button" title="Refresh customer database">⟳</button>
         </h3>
 
-        <div class="field-stack">
+        <div class="part1-grid">
           <div class="field" id="dev-company-field">
             <label for="dev-company">Company</label>
             <div class="combobox" id="dev-company-wrap">
@@ -2833,13 +2838,13 @@ async function renderDevelopmentCreate() {
               <option value="">— select a company first —</option>
             </select>
           </div>
+        </div>
 
-          <div class="field" id="dev-project-field">
-            <label for="dev-project">Project <span class="hint">(optional)</span></label>
-            <select id="dev-project" disabled>
-              <option value="">No project</option>
-            </select>
-          </div>
+        <div class="field" id="dev-project-field">
+          <label for="dev-project">Project <span class="hint">(optional)</span></label>
+          <select id="dev-project" disabled>
+            <option value="">No project</option>
+          </select>
         </div>
 
         <h3 class="subhead">2 · Item &amp; Product Type</h3>
@@ -2997,7 +3002,7 @@ async function renderDevelopmentCreate() {
   // ---- Part 3 dynamic body (depends on product type) ----
   const renderPart3 = () => {
     ensurePantoneData();   // load the TCX dataset (no-op if already cached)
-    if (devState.product === "raised silicon label") {
+    if (isColorLabelProduct(devState.product)) {
       renderRaisedSiliconLabel();
     } else {
       // default: just height + width
@@ -3312,7 +3317,8 @@ async function renderDevelopmentCreate() {
   // Part 3 (Details) validation: every visible Details field must be filled
   // before Save/Update is allowed.
   //   • Height + Width are always required.
-  //   • For "raised silicon label": Raised height + No. of color are required.
+  //   • For "raised silicon label" / "heat transfer label": Raised height +
+  //     No. of color are required.
   //   • When No. of color > 1, every Pantone code must be filled and be
   //     meaningful — its length must be greater than 1 (reject single-char stubs).
   const part3Valid = () => {
@@ -3320,7 +3326,7 @@ async function renderDevelopmentCreate() {
     const w = (devState.width || "").trim();
     if (h.length === 0 || w.length === 0) return false;   // height + width always required
 
-    if (devState.product === "raised silicon label") {
+    if (isColorLabelProduct(devState.product)) {
       const rh = (devState.raisedHeight || "").trim();
       if (rh.length === 0) return false;                   // raised height required
 
@@ -3665,7 +3671,7 @@ async function renderDevelopmentEdit() {
           <button class="icon-btn" id="dev-refresh" type="button" title="Refresh customer database">⟳</button>
         </h3>
 
-        <div class="field-stack">
+        <div class="part1-grid">
           <div class="field" id="dev-company-field">
             <label for="dev-company">Company</label>
             <div class="combobox" id="dev-company-wrap">
@@ -3682,13 +3688,13 @@ async function renderDevelopmentEdit() {
               <option value="">— select a company first —</option>
             </select>
           </div>
+        </div>
 
-          <div class="field" id="dev-project-field">
-            <label for="dev-project">Project <span class="hint">(optional)</span></label>
-            <select id="dev-project" disabled>
-              <option value="">No project</option>
-            </select>
-          </div>
+        <div class="field" id="dev-project-field">
+          <label for="dev-project">Project <span class="hint">(optional)</span></label>
+          <select id="dev-project" disabled>
+            <option value="">No project</option>
+          </select>
         </div>
 
         <h3 class="subhead">2 · Item &amp; Product Type</h3>
@@ -3831,7 +3837,7 @@ async function renderDevelopmentEdit() {
   // ---- Part 3 dynamic body (depends on product type) ----
   const renderPart3 = () => {
     ensurePantoneData();
-    if (devState.product === "raised silicon label") {
+    if (isColorLabelProduct(devState.product)) {
       renderRaisedSiliconLabel();
     } else {
       part3Body.innerHTML = `
@@ -4134,7 +4140,7 @@ async function renderDevelopmentEdit() {
     const w = (devState.width || "").trim();
     if (h.length === 0 || w.length === 0) return false;
 
-    if (devState.product === "raised silicon label") {
+    if (isColorLabelProduct(devState.product)) {
       const rh = (devState.raisedHeight || "").trim();
       if (rh.length === 0) return false;
 

@@ -426,6 +426,17 @@ select:focus-visible,
   gap: 14px;
 }
 
+/* Part 1: Company + Member side by side (2 columns) */
+.part1-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+}
+#dev-project-field,
+#enq-project-field {
+  margin-top: 14px;
+}
+
 /* Part 1 stacked fields (company / member / project) */
 .field-stack {
   display: flex;
@@ -680,6 +691,7 @@ select:focus-visible,
 }
 @media (max-width: 820px) {
   .dev-2col { grid-template-columns: 1fr; }
+  .part1-grid { grid-template-columns: 1fr; }
   .sidebar { min-width: 140px; }
 }
 

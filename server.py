@@ -26,7 +26,7 @@ import datetime
 from http.server import HTTPServer, SimpleHTTPRequestHandler
 from urllib.parse import urlparse, unquote, quote, parse_qs
 from openpyxl import Workbook
-from openpyxl.styles import Font, Alignment, PatternFill
+from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
 from openpyxl.drawing.image import Image as XLImage
 from openpyxl.utils import get_column_letter
 
@@ -316,6 +316,22 @@ def _style_header(ws, ncols):
         cell.alignment = Alignment(vertical="center", horizontal="left")
 
 
+# Thin all-side border applied to every cell of an exported sheet.
+THIN_BORDER = Border(
+    left=Side(style="thin", color="D1D5DB"),
+    right=Side(style="thin", color="D1D5DB"),
+    top=Side(style="thin", color="D1D5DB"),
+    bottom=Side(style="thin", color="D1D5DB"),
+)
+
+
+def _apply_borders(ws, nrows, ncols):
+    """Draw a thin border around every cell in the used range."""
+    for row in range(1, nrows + 1):
+        for col in range(1, ncols + 1):
+            ws.cell(row=row, column=col).border = THIN_BORDER
+
+
 def _build_workbook(records, sheet_title):
     """Build an openpyxl Workbook.
 
@@ -343,6 +359,9 @@ def _build_workbook(records, sheet_title):
             ws.cell(row=r, column=ci, value=val)
         if has_image_col and image_names:
             letter = get_column_letter(img_col_idx)
+            # Fit the thumbnail inside the cell: lock the column width to the
+            # thumbnail box and the row height to match, then scale the image
+            # down so it never spills past the cell edges.
             ws.row_dimensions[r].height = IMG_THUMB_H + 4
             _embed_thumbnail(ws, f"{letter}{r}", image_names[0])
             if len(image_names) > 1:
@@ -356,7 +375,17 @@ def _build_workbook(records, sheet_title):
 
     _style_header(ws, len(headers))
     if has_image_col:
-        ws.column_dimensions[get_column_letter(img_col_idx)].width = 16
+        # Lock the image column width to the thumbnail so the picture fits.
+        col = ws.column_dimensions[get_column_letter(img_col_idx)]
+        col.width = (IMG_THUMB_W + 4) / 7.0  # ~7px per Excel column unit
+    # Border every cell + vertical-center / wrap for data so text lines up with
+    # the embedded thumbnails and long fields (Documents, Details) stay readable.
+    last_col = note_col if has_image_col else len(headers)
+    data_align = Alignment(vertical="center", horizontal="left", wrap_text=True)
+    for row in range(2, r):
+        for c in range(1, last_col + 1):
+            ws.cell(row=row, column=c).alignment = data_align
+    _apply_borders(ws, r - 1, last_col)
     return wb
 
 
@@ -382,20 +411,32 @@ def _send_xlsx(handler, wb, filename):
 
 
 def _dev_record_to_xlsx(d):
-    """Flat (headers, cells, image_names) for one development/enquiry row."""
+    """Flat (headers, cells, image_names) for one development/enquiry row.
+
+    Column order mirrors the Development / View grid exactly:
+    Company, Member, Item, Product Type, Image, Documents, Created, Updated, Details.
+    """
     images = d.get("image_names") or []
-    headers = ["Company", "Member", "Item", "Product Type", "Created",
-               "Updated", "Details", "Image"]
+    docs = d.get("doc_names") or []
+    headers = ["Company", "Member", "Item", "Product Type", "Image",
+               "Documents", "Created", "Updated", "Details"]
     cells = [
         d.get("company_name") or "",
         d.get("member_name") or "",
         d.get("item_name") or "",
         d.get("product_type") or "",
-        d.get("created_at") or "",
-        d.get("updated_at") or "",
         dev_details_summary(d),
+        _docs_summary(docs),
     ]
     return headers, cells, images
+
+
+def _docs_summary(doc_names):
+    """Render the Documents column like the View grid: a '📄 name' line each."""
+    docs = doc_names or []
+    if not docs:
+        return "—"
+    return "\n".join("📄 " + display_name(n) for n in docs)
 
 
 def _customer_record_to_xlsx(c):
