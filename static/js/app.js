@@ -49,10 +49,14 @@ const PRODUCT_TYPES = [
   "leather patch",
 ];
 
-// Product types that use the "color label" layout: Raised height + No. of color
-// + Pantone rows. "heat transfer label" behaves exactly like "raised silicon label".
+// Product types that show the "No. of color" + Pantone-row layout.
+// "heat transfer label" behaves like "raised silicon label" for color, but has
+// no "Raised height" field — see needsRaisedHeight() below.
 const isColorLabelProduct = (p) =>
   p === "raised silicon label" || p === "heat transfer label";
+
+// Only "raised silicon label" additionally needs a "Raised height" field.
+const needsRaisedHeight = (p) => p === "raised silicon label";
 
 // Dropdown option sets for the Company step of Customer / Create.
 const CURRENCIES = ["USD", "RMB", "HKD"];
@@ -1089,7 +1093,7 @@ async function fillDummyDevelopment(ctx) {
     if (isColorLabelProduct(pt)) {
       devState.height = (Math.random() * 40 + 10).toFixed(1);
       devState.width = (Math.random() * 40 + 10).toFixed(1);
-      devState.raisedHeight = (Math.random() * 3 + 0.5).toFixed(1);
+      devState.raisedHeight = needsRaisedHeight(pt) ? (Math.random() * 3 + 0.5).toFixed(1) : "";
       devState.noOfColor = String(Math.floor(Math.random() * 4) + 1);
       devState.pantones = [];
       for (let i = 0; i < Number(devState.noOfColor); i++) {
@@ -1170,7 +1174,7 @@ async function fillDummyEnquiry(ctx) {
       if (isColorLabelProduct(pt)) {
         devState.height = (Math.random() * 40 + 10).toFixed(1);
         devState.width = (Math.random() * 40 + 10).toFixed(1);
-        devState.raisedHeight = (Math.random() * 3 + 0.5).toFixed(1);
+        devState.raisedHeight = needsRaisedHeight(pt) ? (Math.random() * 3 + 0.5).toFixed(1) : "";
         devState.noOfColor = String(Math.floor(Math.random() * 4) + 1);
         devState.pantones = [];
         for (let i = 0; i < Number(devState.noOfColor); i++) {
@@ -2144,6 +2148,7 @@ async function renderEnquiryEdit() {
   };
 
   const renderRaisedSiliconLabel = () => {
+    const showRaised = needsRaisedHeight(devState.product);
     part3Body.innerHTML = `
       <div class="dim-row">
         <div class="field">
@@ -2155,11 +2160,14 @@ async function renderEnquiryEdit() {
           <input id="enq-width" type="number" min="0" step="0.1" placeholder="0.0" autocomplete="off" />
         </div>
       </div>
+      ${showRaised ? `
       <div class="dim-row">
         <div class="field">
           <label for="enq-raised-height">Raised height (mm)</label>
           <input id="enq-raised-height" type="number" min="0" step="0.1" placeholder="0.0" autocomplete="off" />
         </div>
+      </div>` : ``}
+      <div class="dim-row">
         <div class="field">
           <label for="enq-no-of-color">No. of color</label>
           <input id="enq-no-of-color" type="number" min="1" step="1" placeholder="0" autocomplete="off" />
@@ -2424,8 +2432,10 @@ async function renderEnquiryEdit() {
     if (h.length === 0 || w.length === 0) return false;   // height + width always required
 
     if (isColorLabelProduct(devState.product)) {
-      const rh = (devState.raisedHeight || "").trim();
-      if (rh.length === 0) return false;                   // raised height required
+      if (needsRaisedHeight(devState.product)) {
+        const rh = (devState.raisedHeight || "").trim();
+        if (rh.length === 0) return false;                   // raised height required
+      }
 
       const n = parseInt(devState.noOfColor, 10);
       if (!n || n < 1) return false;                       // no. of color required (>= 1)
@@ -3029,6 +3039,7 @@ async function renderDevelopmentCreate() {
   };
 
   const renderRaisedSiliconLabel = () => {
+    const showRaised = needsRaisedHeight(devState.product);
     part3Body.innerHTML = `
       <div class="dim-row">
         <div class="field">
@@ -3040,11 +3051,14 @@ async function renderDevelopmentCreate() {
           <input id="dev-width" type="number" min="0" step="0.1" placeholder="0.0" autocomplete="off" />
         </div>
       </div>
+      ${showRaised ? `
       <div class="dim-row">
         <div class="field">
           <label for="dev-raised-height">Raised height (mm)</label>
           <input id="dev-raised-height" type="number" min="0" step="0.1" placeholder="0.0" autocomplete="off" />
         </div>
+      </div>` : ``}
+      <div class="dim-row">
         <div class="field">
           <label for="dev-no-of-color">No. of color</label>
           <input id="dev-no-of-color" type="number" min="1" step="1" placeholder="0" autocomplete="off" />
@@ -3327,8 +3341,10 @@ async function renderDevelopmentCreate() {
     if (h.length === 0 || w.length === 0) return false;   // height + width always required
 
     if (isColorLabelProduct(devState.product)) {
-      const rh = (devState.raisedHeight || "").trim();
-      if (rh.length === 0) return false;                   // raised height required
+      if (needsRaisedHeight(devState.product)) {
+        const rh = (devState.raisedHeight || "").trim();
+        if (rh.length === 0) return false;                   // raised height required
+      }
 
       const n = parseInt(devState.noOfColor, 10);
       if (!n || n < 1) return false;                       // no. of color required (>= 1)
@@ -3863,6 +3879,7 @@ async function renderDevelopmentEdit() {
   };
 
   const renderRaisedSiliconLabel = () => {
+    const showRaised = needsRaisedHeight(devState.product);
     part3Body.innerHTML = `
       <div class="dim-row">
         <div class="field">
@@ -3874,11 +3891,14 @@ async function renderDevelopmentEdit() {
           <input id="dev-width" type="number" min="0" step="0.1" placeholder="0.0" autocomplete="off" />
         </div>
       </div>
+      ${showRaised ? `
       <div class="dim-row">
         <div class="field">
           <label for="dev-raised-height">Raised height (mm)</label>
           <input id="dev-raised-height" type="number" min="0" step="0.1" placeholder="0.0" autocomplete="off" />
         </div>
+      </div>` : ``}
+      <div class="dim-row">
         <div class="field">
           <label for="dev-no-of-color">No. of color</label>
           <input id="dev-no-of-color" type="number" min="1" step="1" placeholder="0" autocomplete="off" />
@@ -4141,8 +4161,10 @@ async function renderDevelopmentEdit() {
     if (h.length === 0 || w.length === 0) return false;
 
     if (isColorLabelProduct(devState.product)) {
-      const rh = (devState.raisedHeight || "").trim();
-      if (rh.length === 0) return false;
+      if (needsRaisedHeight(devState.product)) {
+        const rh = (devState.raisedHeight || "").trim();
+        if (rh.length === 0) return false;
+      }
 
       const n = parseInt(devState.noOfColor, 10);
       if (!n || n < 1) return false;
@@ -4488,7 +4510,7 @@ function devDetailsSummary(d) {
   if (d.height || d.width) {
     parts.push(`${(d.height || "?")} × ${(d.width || "?")} mm`);
   }
-  if (d.raised_height) parts.push(`raised ${d.raised_height} mm`);
+  if (needsRaisedHeight(d.product_type) && d.raised_height) parts.push(`raised ${d.raised_height} mm`);
   if (d.no_of_color) {
     const cols = (d.pantones || []).filter((p) => p && p.value).map((p) => p.value);
     parts.push(`${d.no_of_color} color${Number(d.no_of_color) > 1 ? "s" : ""}` + (cols.length ? ` (${cols.join(", ")})` : ""));
@@ -4857,6 +4879,7 @@ async function openDevEditModal(id) {
           <input id="ed-width" type="number" step="0.1" value="${escapeHtml(rec.width ?? "")}" />
         </div>
       </div>
+      ${needsRaisedHeight(rec.product_type) ? `
       <div class="dim-row">
         <div class="field">
           <label for="ed-raised">Raised height (mm)</label>
@@ -4867,6 +4890,14 @@ async function openDevEditModal(id) {
           <input id="ed-nocolor" type="number" step="1" value="${escapeHtml(rec.no_of_color ?? "")}" />
         </div>
       </div>
+      ` : `
+      <div class="dim-row">
+        <div class="field">
+          <label for="ed-nocolor">No. of color</label>
+          <input id="ed-nocolor" type="number" step="1" value="${escapeHtml(rec.no_of_color ?? "")}" />
+        </div>
+      </div>
+      `}
 
       <h4 class="subhead">Images</h4>
       <div class="dropzone" id="ed-image-drop" tabindex="0">
@@ -5039,7 +5070,7 @@ async function openDevEditModal(id) {
       product_type,
       height: overlay.querySelector("#ed-height").value || null,
       width: overlay.querySelector("#ed-width").value || null,
-      raised_height: overlay.querySelector("#ed-raised").value || null,
+      raised_height: needsRaisedHeight(product_type) ? overlay.querySelector("#ed-raised")?.value || null : null,
       no_of_color: overlay.querySelector("#ed-nocolor").value || null,
       pantones: rec.pantones || [],
       image_names: editImages.map((i) => i.name),
