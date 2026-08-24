@@ -1301,6 +1301,28 @@ function findPantoneMatches(query, limit = 8) {
   return results.concat(fuzzy);
 }
 
+// Fill a pantone row with a chosen code and render it as the selected match.
+// Shared by the top-match click and the "similar" chip clicks so the first
+// suggestion is selectable just like the others.
+function applyPantoneSelection(matchEl, wrap, i, code, updateSaveState) {
+  const inp = wrap.querySelector('.pantone-input[data-idx="' + i + '"]');
+  if (inp) inp.value = code;
+  if (devState.pantones[i]) {
+    devState.pantones[i].value = code;
+    const chosen = findPantoneMatches(code)[0];
+    devState.pantones[i].color = chosen ? "#" + chosen.hex : "#000000";
+  }
+  const chosen = findPantoneMatches(code)[0];
+  matchEl.innerHTML = chosen
+    ? `<div class="pantone-top">` +
+      `<span class="swatch" style="background:#${escapeHtml(chosen.hex)}"></span>` +
+      `<span class="muted small">${escapeHtml(chosen.code)} · ${escapeHtml(chosen.name)} · ` +
+      `<span class="pantone-type" title="${escapeHtml(pantoneTypeName(chosen.type))}">${escapeHtml(pantoneTypeName(chosen.type))}</span> · #${escapeHtml(chosen.hex)}</span>` +
+      `</div>`
+    : "";
+  updateSaveState();
+}
+
 // Clear the Enquiry Create draft (blank new page on the right frame).
 function resetEnquiryState() {
   const s = enquiryCreateState;
@@ -2207,20 +2229,16 @@ async function renderEnquiryEdit() {
             `</div>`
           : "");
 
+      // Make the top suggestion clickable too (so the first fuzzy-match result
+      // can be selected, not just the "similar" chips).
+      const topEl = matchEl.querySelector(".pantone-top");
+      if (topEl) topEl.addEventListener("click", () => {
+        applyPantoneSelection(matchEl, wrap, i, top.code, updateSaveState);
+      });
+
       matchEl.querySelectorAll(".pantone-chip").forEach((chip) => {
         chip.addEventListener("click", () => {
-          const inp = wrap.querySelector("#enq-pantone-" + i);
-          if (inp) inp.value = chip.dataset.code;
-          if (devState.pantones[i]) devState.pantones[i].value = chip.dataset.code;
-          const chosen = findPantoneMatches(chip.dataset.code)[0];
-          matchEl.innerHTML = chosen
-            ? `<div class="pantone-top">` +
-              `<span class="swatch" style="background:#${escapeHtml(chosen.hex)}"></span>` +
-              `<span class="muted small">${escapeHtml(chosen.code)} · ${escapeHtml(chosen.name)} · ` +
-              `<span class="pantone-type" title="${escapeHtml(pantoneTypeName(chosen.type))}">${escapeHtml(pantoneTypeName(chosen.type))}</span> · #${escapeHtml(chosen.hex)}</span>` +
-              `</div>`
-            : "";
-          updateSaveState();
+          applyPantoneSelection(matchEl, wrap, i, chip.dataset.code, updateSaveState);
         });
       });
     };
@@ -3100,24 +3118,16 @@ async function renderDevelopmentCreate() {
             `</div>`
           : "");
 
-      // clicking a similar chip fills the input with that code and shows the
-      // chosen color as plain text + square swatch below
+      // Make the top suggestion clickable too (so the first fuzzy-match result
+      // can be selected, not just the "similar" chips).
+      const topEl = matchEl.querySelector(".pantone-top");
+      if (topEl) topEl.addEventListener("click", () => {
+        applyPantoneSelection(matchEl, wrap, i, top.code, updateSaveState);
+      });
+
       matchEl.querySelectorAll(".pantone-chip").forEach((chip) => {
         chip.addEventListener("click", () => {
-          const inp = wrap.querySelector("#dev-pantone-" + i);
-          if (inp) inp.value = chip.dataset.code;
-          if (devState.pantones[i]) devState.pantones[i].value = chip.dataset.code;
-          const chosen = findPantoneMatches(chip.dataset.code)[0];
-          matchEl.innerHTML = chosen
-            ? `<div class="pantone-top">` +
-              `<span class="swatch" style="background:#${escapeHtml(chosen.hex)}"></span>` +
-              `<span class="muted small">${escapeHtml(chosen.code)} · ${escapeHtml(chosen.name)} · ` +
-              `<span class="pantone-type" title="${escapeHtml(pantoneTypeName(chosen.type))}">${escapeHtml(pantoneTypeName(chosen.type))}</span> · #${escapeHtml(chosen.hex)}</span>` +
-              `</div>`
-            : "";
-          // picking a suggestion sets the value programmatically, which does NOT
-          // fire the input event — re-gate Save/Update so the button can light up.
-          updateSaveState();
+          applyPantoneSelection(matchEl, wrap, i, chip.dataset.code, updateSaveState);
         });
       });
     };
@@ -3937,20 +3947,16 @@ async function renderDevelopmentEdit() {
             `</div>`
           : "");
 
+      // Make the top suggestion clickable too (so the first fuzzy-match result
+      // can be selected, not just the "similar" chips).
+      const topEl = matchEl.querySelector(".pantone-top");
+      if (topEl) topEl.addEventListener("click", () => {
+        applyPantoneSelection(matchEl, wrap, i, top.code, updateSaveState);
+      });
+
       matchEl.querySelectorAll(".pantone-chip").forEach((chip) => {
         chip.addEventListener("click", () => {
-          const inp = wrap.querySelector("#dev-pantone-" + i);
-          if (inp) inp.value = chip.dataset.code;
-          if (devState.pantones[i]) devState.pantones[i].value = chip.dataset.code;
-          const chosen = findPantoneMatches(chip.dataset.code)[0];
-          matchEl.innerHTML = chosen
-            ? `<div class="pantone-top">` +
-              `<span class="swatch" style="background:#${escapeHtml(chosen.hex)}"></span>` +
-              `<span class="muted small">${escapeHtml(chosen.code)} · ${escapeHtml(chosen.name)} · ` +
-              `<span class="pantone-type" title="${escapeHtml(pantoneTypeName(chosen.type))}">${escapeHtml(pantoneTypeName(chosen.type))}</span> · #${escapeHtml(chosen.hex)}</span>` +
-              `</div>`
-            : "";
-          updateSaveState();
+          applyPantoneSelection(matchEl, wrap, i, chip.dataset.code, updateSaveState);
         });
       });
     };
@@ -4616,8 +4622,18 @@ function paintDevelopmentView() {
     });
   });
 
-  panel.querySelector("#dev-export").addEventListener("click", () =>
-    exportDevelopmentExcel(shown));
+  panel.querySelector("#dev-export").addEventListener("click", async () => {
+    try {
+      const a = document.createElement("a");
+      a.href = API + "/api/export/developments";
+      a.download = "developments.xlsx";
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+    } catch (err) {
+      openConfirmModal("Export failed", err.message, () => {});
+    }
+  });
 
   const refreshBtn = panel.querySelector("#dev-refresh");
   if (refreshBtn) {
@@ -5042,29 +5058,6 @@ async function openDevEditModal(id) {
   });
 }
 
-function exportDevelopmentExcel(rows) {
-  const headers = ["Company", "Member", "Item", "Product Type", "Created", "Updated", "Details", "Images"];
-  const lines = [headers.join(",")];
-  rows.forEach((r) => {
-    const cells = [
-      r.company_name, r.member_name || "", r.item_name, r.product_type,
-      r.created_at, r.updated_at, devDetailsSummary(r),
-      (r.image_names || []).join("; "),
-    ].map(csvCell);
-    lines.push(cells.join(","));
-  });
-  const csv = "﻿" + lines.join("\r\n");
-  const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = "developments.csv";
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  URL.revokeObjectURL(url);
-}
-
 function formatBytes(bytes) {
   if (!bytes && bytes !== 0) return "";
   if (bytes < 1024) return bytes + " B";
@@ -5180,6 +5173,7 @@ function paintEnquiryView() {
       <h2>Enquiry / View</h2>
       <div class="view-actions">
         <button class="btn ghost" id="enq-refresh" type="button" title="Refresh customer database">⟳ Refresh</button>
+        <button class="btn ghost" id="enq-export" type="button">Export Excel</button>
       </div>
     </div>
 
@@ -5229,6 +5223,22 @@ function paintEnquiryView() {
       } finally {
         refreshBtn.disabled = false;
         refreshBtn.classList.remove("spinning");
+      }
+    });
+  }
+
+  const enqExportBtn = panel.querySelector("#enq-export");
+  if (enqExportBtn) {
+    enqExportBtn.addEventListener("click", async () => {
+      try {
+        const a = document.createElement("a");
+        a.href = API + "/api/export/enquiries";
+        a.download = "enquiries.xlsx";
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+      } catch (err) {
+        openConfirmModal("Export failed", err.message, () => {});
       }
     });
   }
@@ -5550,7 +5560,18 @@ function paintView() {
     });
   });
 
-  panel.querySelector("#export-xlsx").addEventListener("click", () => exportExcel(shown));
+  panel.querySelector("#export-xlsx").addEventListener("click", async () => {
+    try {
+      const a = document.createElement("a");
+      a.href = API + "/api/export/customers";
+      a.download = "customers.xlsx";
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+    } catch (err) {
+      openConfirmModal("Export failed", err.message, () => {});
+    }
+  });
 
   // --- batch selection (company-level) ---
   const selectAll = panel.querySelector("#select-all");
@@ -6419,32 +6440,6 @@ function escapeHtml(s) {
   return String(s).replace(/[&<>"']/g, (c) => ({
     "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
   }[c]));
-}
-
-// ---------------------------------------------------------------------------
-// Export to Excel (CSV, opens in Excel)
-// ---------------------------------------------------------------------------
-
-function exportExcel(rows) {
-  const headers = ["Company Name", "Member Name", "Member Email", "Title", "Tel",
-                   "Currency", "Payment Term", "Shipment Term", "Ship To", "Projects"];
-  const lines = [headers.join(",")];
-  rows.forEach((r) => {
-    const cells = [r.company, r.name, r.email, r.title, r.tel,
-                   r.currency, r.payment_term, r.shipment_term,
-                   r.shipTo, r.projects].map(csvCell);
-    lines.push(cells.join(","));
-  });
-  const csv = "﻿" + lines.join("\r\n"); // BOM for Excel UTF-8
-  const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = "customers.csv";
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  URL.revokeObjectURL(url);
 }
 
 function csvCell(v) {

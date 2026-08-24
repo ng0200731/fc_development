@@ -465,7 +465,8 @@ select:focus-visible,
   flex: 0 0 auto;
 }
 .pantone-match .swatch.sm { width: 11px; height: 11px; }
-.pantone-top { display: flex; align-items: center; gap: 6px; }
+.pantone-top { display: flex; align-items: center; gap: 6px; cursor: pointer; padding: 2px 4px; margin: -2px -4px; border-radius: 4px; }
+.pantone-top:hover { background: var(--accent-weak); }
 .pantone-type {
   display: inline-block;
   font-size: 10px;

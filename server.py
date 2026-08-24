@@ -16,6 +16,7 @@ GET    /api/customers         -> flat list (company + its members) for the View 
 Run:  python server.py   (default port 8088)
 """
 
+import io
 import json
 import os
 import re
@@ -23,7 +24,11 @@ import uuid
 import sqlite3
 import datetime
 from http.server import HTTPServer, SimpleHTTPRequestHandler
-from urllib.parse import urlparse, unquote, quote
+from urllib.parse import urlparse, unquote, quote, parse_qs
+from openpyxl import Workbook
+from openpyxl.styles import Font, Alignment, PatternFill
+from openpyxl.drawing.image import Image as XLImage
+from openpyxl.utils import get_column_letter
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.path.join(BASE_DIR, "data", "fc.db")
@@ -232,6 +237,269 @@ def db():
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     return conn
+
+
+# --- Excel export (Development / Enquiry / Customer views) -------------------
+#
+# Each view exports a real .xlsx (via openpyxl) with one row per record and a
+# thumbnail image embedded in an "Image" column. Image bytes are read straight
+# off disk (sample images under SAMPLE_IMAGES_DIR, uploads under UPLOADS_DIR)
+# so the export works offline — no round-trip through the browser. Images that
+# can't be resolved are left blank rather than failing the whole export.
+
+IMG_THUMB_W = 110  # px, exported image width (height scaled to keep ratio)
+IMG_THUMB_H = 80   # px, exported image height (used for row height + grid)
+
+
+def display_name(name):
+    """Strip the embedded '<uuid>__' prefix (and any path) so uploaded files
+    show their original filename; sample paths show just the basename."""
+    if not name:
+        return ""
+    base = name.split("/")[-1] if "/" in name else name
+    return re.sub(r"^[^_]*__", "", base)
+
+
+def _resolve_image_path(name):
+    """Map a stored image name to an on-disk absolute path, or None.
+
+    - "uploads/<uuid>__<orig>" or bare "uploads/..." -> UPLOADS_DIR (best-effort)
+    - anything else (legacy sample / Dummy)          -> SAMPLE_IMAGES_DIR
+    """
+    if not name:
+        return None
+    if name.startswith("uploads/"):
+        rel = name[len("uploads/"):]
+        p = safe_upload_path(rel)
+        if p:
+            return p
+        resolved = resolve_upload_name(rel)
+        if resolved:
+            return os.path.join(UPLOADS_DIR, resolved)
+        return None
+    rel = name
+    p = safe_sample_path(rel)
+    if p:
+        return p
+    # Try the bare basename under the sample root (legacy names).
+    cand = os.path.join(SAMPLE_IMAGES_DIR, os.path.basename(rel))
+    return cand if os.path.isfile(cand) else None
+
+
+def _embed_thumbnail(ws, cell, name):
+    """Embed an image (scaled to a thumbnail) into `cell`. Returns True on success."""
+    path = _resolve_image_path(name)
+    if not path:
+        return False
+    try:
+        img = XLImage(path)
+    except Exception:
+        return False
+    # Scale uniformly so the larger dimension fits the thumbnail box.
+    w, h = img.width, img.height
+    if w <= 0 or h <= 0:
+        return False
+    scale = min(IMG_THUMB_W / w, IMG_THUMB_H / h, 1.0)
+    img.width = int(w * scale)
+    img.height = int(h * scale)
+    ws.add_image(img, cell)
+    return True
+
+
+def _style_header(ws, ncols):
+    fill = PatternFill("solid", fgColor="1F2937")
+    font = Font(bold=True, color="FFFFFF")
+    for c in range(1, ncols + 1):
+        cell = ws.cell(row=1, column=c)
+        cell.fill = fill
+        cell.font = font
+        cell.alignment = Alignment(vertical="center", horizontal="left")
+
+
+def _build_workbook(records, sheet_title):
+    """Build an openpyxl Workbook.
+
+    `records` is a list of (headers, cells, image_names) tuples. `headers` and
+    `cells` must have the same length; `image_names` is a list of stored image
+    names to embed into the column named "Image" (if present).
+    """
+    wb = Workbook()
+    ws = wb.active
+    ws.title = sheet_title
+    if not records:
+        ws.cell(row=1, column=1, value="(no data)")
+        return wb
+    headers = records[0][0]
+    has_image_col = "Image" in headers
+    img_col_idx = headers.index("Image") + 1 if has_image_col else None
+
+    for ci, h in enumerate(headers, start=1):
+        ws.cell(row=1, column=ci, value=h)
+
+    r = 2
+    note_col = len(headers) + 1
+    for _headers, cells, image_names in records:
+        for ci, val in enumerate(cells, start=1):
+            ws.cell(row=r, column=ci, value=val)
+        if has_image_col and image_names:
+            letter = get_column_letter(img_col_idx)
+            ws.row_dimensions[r].height = IMG_THUMB_H + 4
+            _embed_thumbnail(ws, f"{letter}{r}", image_names[0])
+            if len(image_names) > 1:
+                if r == 2:
+                    ws.cell(row=1, column=note_col,
+                            value=f"Image filenames ({len(image_names)} total)")
+                    _style_header(ws, note_col)
+                ws.cell(row=r, column=note_col,
+                        value="; ".join(display_name(n) for n in image_names))
+        r += 1
+
+    _style_header(ws, len(headers))
+    if has_image_col:
+        ws.column_dimensions[get_column_letter(img_col_idx)].width = 16
+    return wb
+
+
+def _send_xlsx(handler, wb, filename):
+    out = io.BytesIO()
+    wb.save(out)
+    data = out.getvalue()
+    handler.send_response(200)
+    handler.send_header(
+        "Content-Type",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
+    handler.send_header("Content-Length", str(len(data)))
+    ascii_name = filename.encode("ascii", "ignore").decode("ascii") or "export"
+    handler.send_header(
+        "Content-Disposition",
+        "attachment; filename=\"%s\"; filename*=UTF-8''%s"
+        % (ascii_name, quote(filename)),
+    )
+    handler.send_header("Cache-Control", "no-store")
+    handler.end_headers()
+    handler.wfile.write(data)
+
+
+def _dev_record_to_xlsx(d):
+    """Flat (headers, cells, image_names) for one development/enquiry row."""
+    images = d.get("image_names") or []
+    headers = ["Company", "Member", "Item", "Product Type", "Created",
+               "Updated", "Details", "Image"]
+    cells = [
+        d.get("company_name") or "",
+        d.get("member_name") or "",
+        d.get("item_name") or "",
+        d.get("product_type") or "",
+        d.get("created_at") or "",
+        d.get("updated_at") or "",
+        dev_details_summary(d),
+    ]
+    return headers, cells, images
+
+
+def _customer_record_to_xlsx(c):
+    members = c.get("members") or []
+    ship_to = " | ".join(s.get("address", "") for s in (c.get("ship_to") or []))
+    projects = ", ".join(p.get("name", "") for p in (c.get("projects") or []))
+    rows = []
+    if not members:
+        members = [None]
+    for m in members:
+        headers = ["Company Name", "Member Name", "Member Email", "Title",
+                   "Tel", "Currency", "Payment Term", "Shipment Term",
+                   "Ship To", "Projects"]
+        cells = [
+            c.get("name") or "",
+            m.get("name") if m else "",
+            (m.get("email_prefix") + "@" + c.get("email_suffix")) if m else "",
+            m.get("title") if m else "",
+            m.get("tel") if m else "",
+            c.get("currency") or "",
+            c.get("payment_term") or "",
+            c.get("shipment_term") or "",
+            ship_to,
+            projects,
+        ]
+        rows.append((headers, cells, []))
+    return rows
+
+
+def api_export_developments(handler):
+    conn = db()
+    rows = conn.execute("SELECT * FROM developments ORDER BY id DESC").fetchall()
+    conn.close()
+    records = [_dev_record_to_xlsx(_dev_row_to_payload(r)) for r in rows]
+    wb = _build_workbook(records, "Developments")
+    _send_xlsx(handler, wb, "developments.xlsx")
+
+
+def api_export_enquiries(handler):
+    conn = db()
+    rows = conn.execute("SELECT * FROM enquiries ORDER BY id DESC").fetchall()
+    conn.close()
+    records = []
+    for r in rows:
+        out = dict(r)
+        for k in ("pantones", "image_names", "doc_names"):
+            if out.get(k):
+                try:
+                    out[k] = json.loads(out[k])
+                except (json.JSONDecodeError, TypeError):
+                    out[k] = []
+            else:
+                out[k] = []
+        records.append(_dev_record_to_xlsx(out))
+    wb = _build_workbook(records, "Enquiries")
+    _send_xlsx(handler, wb, "enquiries.xlsx")
+
+
+def api_export_customers(handler):
+    conn = db()
+    companies = conn.execute(
+        "SELECT * FROM companies ORDER BY id DESC").fetchall()
+    records = []
+    for c in companies:
+        members = conn.execute(
+            "SELECT * FROM members WHERE company_id = ? ORDER BY id",
+            (c["id"],)).fetchall()
+        ship_to = conn.execute(
+            "SELECT * FROM ship_to WHERE company_id = ? ORDER BY is_default DESC, id",
+            (c["id"],)).fetchall()
+        projects = conn.execute(
+            "SELECT * FROM projects WHERE company_id = ? ORDER BY id",
+            (c["id"],)).fetchall()
+        item = dict(c)
+        item["members"] = [dict(m) for m in members]
+        item["ship_to"] = [dict(s) for s in ship_to]
+        item["projects"] = [dict(p) for p in projects]
+        records.extend(_customer_record_to_xlsx(item))
+    conn.close()
+    wb = _build_workbook(records, "Customers")
+    _send_xlsx(handler, wb, "customers.xlsx")
+
+
+def dev_details_summary(d):
+    parts = []
+    if d.get("height") or d.get("width"):
+        parts.append(f"{(d.get('height') or '?')} × {(d.get('width') or '?')} mm")
+    if d.get("raised_height"):
+        parts.append(f"raised {d.get('raised_height')} mm")
+    if d.get("no_of_color"):
+        cols = [(p.get("value") if isinstance(p, dict) else p)
+                for p in (d.get("pantones") or []) if p]
+        n = d.get("no_of_color")
+        try:
+            plural = int(n) > 1
+        except (TypeError, ValueError):
+            plural = False
+        parts.append(
+            f"{n} color{'s' if plural else ''}"
+            + (f" ({', '.join(str(c) for c in cols)})" if cols else "")
+        )
+    return " · ".join(parts)
+
+
 
 
 # --- Sample images (for Development / Create Dummy + image pool) -------------
@@ -1080,6 +1348,12 @@ class Handler(SimpleHTTPRequestHandler):
             api_list_companies(self); return True
         if path == "/api/customers" and method == "GET":
             api_list_customers(self); return True
+        if path == "/api/export/developments" and method == "GET":
+            api_export_developments(self); return True
+        if path == "/api/export/enquiries" and method == "GET":
+            api_export_enquiries(self); return True
+        if path == "/api/export/customers" and method == "GET":
+            api_export_customers(self); return True
         if path == "/api/sample-images" and method == "GET":
             return self._serve_sample_list()
         if path == "/api/uploads" and method == "POST":
