@@ -56,6 +56,17 @@ const FABRIC_OPTIONS = ["polyester", "nylon", "cotton"];
 // Folding options for the Material dropdown (screen print label only).
 const FOLDING_OPTIONS = ["loop fold", "end fold", "straight cut", "mitre fold", "Manhattan Fold", "Asymmetrical Fold"];
 
+// Map each folding option to its preview image (served under static/folding/).
+// Note: the "Asymmetrical Fold" artwork file is named "Asymmetry Fold.png".
+const FOLDING_IMAGES = {
+  "loop fold": "folding/loop fold.png",
+  "end fold": "folding/end fold.png",
+  "straight cut": "folding/straight cut.png",
+  "mitre fold": "folding/mitre fold.png",
+  "Manhattan Fold": "folding/Manhattan Fold.png",
+  "Asymmetrical Fold": "folding/Asymmetry Fold.png",
+};
+
 // Build a short summary of a screen-print material spec for badges / view cells.
 function materialSummary(mat) {
   if (!mat) return "";
@@ -1300,10 +1311,13 @@ function wireExtraParts(root, state, updateSaveState) {
 
         <div class="field">
           <label for="mat-folding">Folding</label>
-          <select id="mat-folding">
-            <option value="">— select —</option>
-            ${FOLDING_OPTIONS.map((f) => `<option value="${escapeHtml(f)}" ${cur.folding === f ? "selected" : ""}>${escapeHtml(f)}</option>`).join("")}
-          </select>
+          <div class="folding-row">
+            <select id="mat-folding">
+              <option value="">— select —</option>
+              ${FOLDING_OPTIONS.map((f) => `<option value="${escapeHtml(f)}" ${cur.folding === f ? "selected" : ""}>${escapeHtml(f)}</option>`).join("")}
+            </select>
+            <img id="mat-folding-img" class="folding-preview" alt="" ${cur.folding && FOLDING_IMAGES[cur.folding] ? `src="${FOLDING_IMAGES[cur.folding]}"` : ""} style="${cur.folding && FOLDING_IMAGES[cur.folding] ? "" : "display:none;"}"/>
+          </div>
         </div>
 
         <div class="actions modal-actions">
@@ -1330,6 +1344,19 @@ function wireExtraParts(root, state, updateSaveState) {
       updateMaterialBadge();
       if (typeof updateSaveState === "function") updateSaveState();
       close();
+    });
+
+    const foldingSelect = overlay.querySelector("#mat-folding");
+    const foldingImg = overlay.querySelector("#mat-folding-img");
+    foldingSelect.addEventListener("change", () => {
+      const img = FOLDING_IMAGES[foldingSelect.value];
+      if (img) {
+        foldingImg.src = img;
+        foldingImg.style.display = "";
+      } else {
+        foldingImg.removeAttribute("src");
+        foldingImg.style.display = "none";
+      }
     });
   };
 
@@ -5299,10 +5326,13 @@ async function openDevEditModal(id) {
       </div>
       <div class="field">
         <label for="ed-mat-folding">Folding</label>
-        <select id="ed-mat-folding">
-          <option value="">— select —</option>
-          ${FOLDING_OPTIONS.map((f) => `<option value="${escapeHtml(f)}" ${rec.material && rec.material.folding === f ? "selected" : ""}>${escapeHtml(f)}</option>`).join("")}
-        </select>
+        <div class="folding-row">
+          <select id="ed-mat-folding">
+            <option value="">— select —</option>
+            ${FOLDING_OPTIONS.map((f) => `<option value="${escapeHtml(f)}" ${rec.material && rec.material.folding === f ? "selected" : ""}>${escapeHtml(f)}</option>`).join("")}
+          </select>
+          <img id="ed-mat-folding-img" class="folding-preview" alt="" ${rec.material && rec.material.folding && FOLDING_IMAGES[rec.material.folding] ? `src="${FOLDING_IMAGES[rec.material.folding]}"` : ""} style="${rec.material && rec.material.folding && FOLDING_IMAGES[rec.material.folding] ? "" : "display:none;"}"/>
+        </div>
       </div>
       ` : `
       <div class="field">
@@ -5507,6 +5537,21 @@ async function openDevEditModal(id) {
     if (e.key === "Enter") { e.preventDefault(); addRemark(); }
   });
   renderRemarks();
+
+  const edFoldingSelect = overlay.querySelector("#ed-mat-folding");
+  const edFoldingImg = overlay.querySelector("#ed-mat-folding-img");
+  if (edFoldingSelect && edFoldingImg) {
+    edFoldingSelect.addEventListener("change", () => {
+      const img = FOLDING_IMAGES[edFoldingSelect.value];
+      if (img) {
+        edFoldingImg.src = img;
+        edFoldingImg.style.display = "";
+      } else {
+        edFoldingImg.removeAttribute("src");
+        edFoldingImg.style.display = "none";
+      }
+    });
+  }
 
   overlay.querySelector("#ed-cancel").addEventListener("click", () => overlay.remove());
   overlay.addEventListener("click", (e) => { if (e.target === overlay) overlay.remove(); });
