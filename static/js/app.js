@@ -805,7 +805,7 @@ function blankDevState() {
     // Part 4 material / Part 5 special (TBA — popup details, stored as JSON)
     material: null, // [{ ... }]  (placeholder structure, TBA)
     special: null,  // [{ ... }]  (placeholder structure, TBA)
-    // Part 6 remake — array of free-text strings
+    // Part 6 remark — array of free-text strings (stored in DB `remake` column)
     remake: [],     // ["note 1", "note 2"]
     images: [],   // [{ id, name, url }]
     docs: [],     // [{ id, name, file }]
@@ -1242,8 +1242,8 @@ async function fillDummyEnquiry(ctx) {
 }
 
 // Wire the Part 4 (Material) / Part 5 (Special) popup buttons and the Part 6
-// (Remake) list editor. `state` is the active devState (Create or Edit);
-// `updateSaveState` re-evaluates Save/Update gating after a remake change.
+// (Remark) list editor. `state` is the active devState (Create or Edit);
+// `updateSaveState` re-evaluates Save/Update gating after a remark change.
 function wireExtraParts(root, state, updateSaveState) {
   // --- Material & Special popups ---
   const updateMaterialBadge = () => {
@@ -1381,15 +1381,15 @@ function wireExtraParts(root, state, updateSaveState) {
     updateSpecialBadge();
   }
 
-  // --- Remake: array of free-text strings, add one per entry ---
+  // --- Remark: array of free-text strings, add one per entry ---
   const listEl = root.querySelector("#dev-remake-list");
   const inputEl = root.querySelector("#dev-remake-input");
   const addBtn = root.querySelector("#dev-remake-add");
 
-  const renderRemake = () => {
+  const renderRemarkList = () => {
     if (!listEl) return;
     if (!state.remake || !state.remake.length) {
-      listEl.innerHTML = `<li class="remake-empty muted small">No remake notes yet.</li>`;
+      listEl.innerHTML = `<li class="remake-empty muted small">No remarks yet.</li>`;
       return;
     }
     listEl.innerHTML = state.remake.map((note, i) => `
@@ -1402,33 +1402,33 @@ function wireExtraParts(root, state, updateSaveState) {
         const i = Number(b.dataset.idx);
         if (i >= 0 && i < state.remake.length) {
           state.remake.splice(i, 1);
-          renderRemake();
+          renderRemarkList();
           if (typeof updateSaveState === "function") updateSaveState();
         }
       });
     });
   };
 
-  const addRemake = () => {
+  const addRemarkItem = () => {
     if (!inputEl) return;
     const v = inputEl.value.trim();
     if (!v) return;
     if (!Array.isArray(state.remake)) state.remake = [];
     state.remake.push(v);
     inputEl.value = "";
-    renderRemake();
+    renderRemarkList();
     if (typeof updateSaveState === "function") updateSaveState();
     inputEl.focus();
   };
 
-  if (addBtn) addBtn.addEventListener("click", addRemake);
+  if (addBtn) addBtn.addEventListener("click", addRemarkItem);
   if (inputEl) {
     inputEl.addEventListener("keydown", (e) => {
-      if (e.key === "Enter") { e.preventDefault(); addRemake(); }
+      if (e.key === "Enter") { e.preventDefault(); addRemarkItem(); }
     });
   }
 
-  renderRemake();
+  renderRemarkList();
 }
 // After removing an image it re-evaluates Save gating (via devSaveStateFn).
 function renderDevImageThumbs() {
@@ -3129,7 +3129,7 @@ async function renderDevelopmentCreate() {
         </div>
       </div>
 
-      <!-- 4 (material) · 5 (special) · 6 (remake) stacked below Part 3 details -->
+      <!-- 4 (material) · 5 (special) · 6 (remark) stacked below Part 3 details -->
       <div class="dev-part dev-part-extra" id="dev-part-extra">
         <h3 class="subhead part-head">4 · Material</h3>
         <div class="field">
@@ -3147,10 +3147,10 @@ async function renderDevelopmentCreate() {
           <p class="muted small">Click to set special requirements (variable / non variable).</p>
         </div>
 
-        <h3 class="subhead part-head">6 · Remake</h3>
+        <h3 class="subhead part-head">6 · Remark</h3>
         <div class="field">
           <div class="remake-input-row">
-            <input id="dev-remake-input" type="text" autocomplete="off" placeholder="Type a remake note, then press Add…" />
+            <input id="dev-remake-input" type="text" autocomplete="off" placeholder="Type a remark, then press Add…" />
             <button type="button" class="btn ghost" id="dev-remake-add">Add</button>
           </div>
           <ul class="remake-list" id="dev-remake-list"></ul>
@@ -3679,7 +3679,7 @@ async function renderDevelopmentCreate() {
   updateSaveState();
   devSaveStateFn = updateSaveState;   // let the shared image renderer re-gate Save
 
-  // ===== Part 4/5/6: material popup + special popup + remake list =====
+  // ===== Part 4/5/6: material popup + special popup + remark list =====
   wireExtraParts(panel, devState, updateSaveState);
 
   // ===== 4th part: image dropzone + documents =====
@@ -4018,7 +4018,7 @@ async function renderDevelopmentEdit() {
         </div>
       </div>
 
-      <!-- 4 (material) · 5 (special) · 6 (remake) stacked below Part 3 details -->
+      <!-- 4 (material) · 5 (special) · 6 (remark) stacked below Part 3 details -->
       <div class="dev-part dev-part-extra" id="dev-part-extra">
         <h3 class="subhead part-head">4 · Material</h3>
         <div class="field">
@@ -4036,10 +4036,10 @@ async function renderDevelopmentEdit() {
           <p class="muted small">Click to set special requirements (variable / non variable).</p>
         </div>
 
-        <h3 class="subhead part-head">6 · Remake</h3>
+        <h3 class="subhead part-head">6 · Remark</h3>
         <div class="field">
           <div class="remake-input-row">
-            <input id="dev-remake-input" type="text" autocomplete="off" placeholder="Type a remake note, then press Add…" />
+            <input id="dev-remake-input" type="text" autocomplete="off" placeholder="Type a remark, then press Add…" />
             <button type="button" class="btn ghost" id="dev-remake-add">Add</button>
           </div>
           <ul class="remake-list" id="dev-remake-list"></ul>
@@ -4530,7 +4530,7 @@ async function renderDevelopmentEdit() {
   updateSaveState();
   devSaveStateFn = updateSaveState;
 
-  // ===== Part 4/5/6: material popup + special popup + remake list =====
+  // ===== Part 4/5/6: material popup + special popup + remark list =====
   wireExtraParts(panel, devState, updateSaveState);
   const imageDrop = panel.querySelector("#dev-image-drop");
   const imageThumbs = panel.querySelector("#dev-image-thumbs");
@@ -4853,15 +4853,15 @@ function paintDevelopmentView() {
     { key: "documents", label: "Documents" },
     { key: "material", label: "Material" },
     { key: "special", label: "Special" },
-    { key: "remake", label: "Remake" },
+    { key: "remark", label: "Remark" },
     { key: "created_at", label: "Created" },
     { key: "updated_at", label: "Updated" },
     { key: "details", label: "Details" },
   ];
 
-  // image / documents / details / material / special / remake are rendered
+  // image / documents / details / material / special / remark are rendered
   // specially and not column-searched
-  const specialKeys = new Set(["image", "documents", "details", "material", "special", "remake"]);
+  const specialKeys = new Set(["image", "documents", "details", "material", "special", "remark"]);
   const searchCols = cols.filter((c) => !specialKeys.has(c.key));
 
   const shown = devViewData.filter((r) =>
@@ -4899,10 +4899,10 @@ function paintDevelopmentView() {
     const specialCell = specialSummaryText
       ? `<span class="pill-badge filled">${escapeHtml(specialSummaryText)}</span>`
       : `<span class="muted">—</span>`;
-    const remakeArr = Array.isArray(r.remake) ? r.remake
+    const remarkArr = Array.isArray(r.remake) ? r.remake
       : (typeof r.remake === "string" && r.remake ? safeJsonParse(r.remake) : []) || [];
-    const remakeCell = (remakeArr && remakeArr.length)
-      ? `<ul class="remake-list compact">` + remakeArr.map((n) =>
+    const remarkCell = (remarkArr && remarkArr.length)
+      ? `<ul class="remake-list compact">` + remarkArr.map((n) =>
           `<li>${escapeHtml(n)}</li>`).join("") + `</ul>`
       : `<span class="muted">—</span>`;
     return `
@@ -4920,7 +4920,7 @@ function paintDevelopmentView() {
         <td class="cell-docs">${docLinks}</td>
         <td>${materialCell}</td>
         <td>${specialCell}</td>
-        <td>${remakeCell}</td>
+        <td>${remarkCell}</td>
         <td>${escapeHtml(r.created_at)}</td>
         <td>${escapeHtml(r.updated_at)}</td>
         <td class="details-cell">${escapeHtml(devDetailsSummary(r))}</td>
@@ -5126,7 +5126,7 @@ async function editDevelopmentInCreate(id) {
   s.noOfColor = rec.no_of_color != null ? String(rec.no_of_color) : "";
   s.pantones = Array.isArray(rec.pantones) ? rec.pantones.map((p) => ({ value: p.value || "", color: p.color || "#000000" })) : [];
 
-  // Part 4/5/6 — material & special (TBA structures) + remake (array of strings).
+  // Part 4/5/6 — material & special (TBA structures) + remark (array of strings).
   s.material = rec.material != null ? rec.material : null;
   s.special = rec.special != null ? rec.special : null;
   s.remake = Array.isArray(rec.remake) ? rec.remake.slice() : [];
@@ -5266,6 +5266,15 @@ async function openDevEditModal(id) {
           <label class="radio-opt"><input type="radio" name="ed-spec-variable" value="variable" ${rec.special && rec.special.variable === "variable" ? "checked" : ""}/> variable</label>
           <label class="radio-opt"><input type="radio" name="ed-spec-variable" value="non-variable" ${rec.special && rec.special.variable === "non-variable" ? "checked" : ""}/> non variable</label>
         </div>
+      </div>
+
+      <h4 class="subhead">Remark</h4>
+      <div class="field">
+        <div class="remake-input-row">
+          <input id="ed-remark-input" type="text" autocomplete="off" placeholder="Type a remark, then press Add…" />
+          <button type="button" class="btn ghost" id="ed-remark-add">Add</button>
+        </div>
+        <ul class="remake-list" id="ed-remark-list"></ul>
       </div>
 
       <h4 class="subhead">Documents <span class="req-mark optional">optional</span></h4>
@@ -5410,6 +5419,44 @@ async function openDevEditModal(id) {
   }));
   docDropEl.addEventListener("drop", (e) => { [...(e.dataTransfer?.files || [])].forEach((f) => { if (f.type && !f.type.startsWith("image/")) addDocFile(f); }); });
 
+  // ---- Remark list (array of free-text strings, stored in DB `remake`) ----
+  const remarkInput = overlay.querySelector("#ed-remark-input");
+  const remarkAddBtn = overlay.querySelector("#ed-remark-add");
+  const remarkList = overlay.querySelector("#ed-remark-list");
+  const editRemarks = Array.isArray(rec.remake) ? rec.remake.slice() : [];
+  const renderRemarks = () => {
+    if (!editRemarks.length) {
+      remarkList.innerHTML = `<li class="remake-empty muted small">No remarks yet.</li>`;
+      return;
+    }
+    remarkList.innerHTML = editRemarks.map((note, i) => `
+      <li class="remake-item">
+        <span class="remake-text">${escapeHtml(note)}</span>
+        <button type="button" class="icon-btn danger remark-rm" data-idx="${i}" title="Remove">✕</button>
+      </li>`).join("");
+    remarkList.querySelectorAll(".remark-rm").forEach((b) => {
+      b.addEventListener("click", () => {
+        const i = Number(b.dataset.idx);
+        if (i >= 0 && i < editRemarks.length) {
+          editRemarks.splice(i, 1);
+          renderRemarks();
+        }
+      });
+    });
+  };
+  const addRemark = () => {
+    const v = remarkInput.value.trim();
+    if (!v) return;
+    editRemarks.push(v);
+    remarkInput.value = "";
+    renderRemarks();
+  };
+  if (remarkAddBtn) remarkAddBtn.addEventListener("click", addRemark);
+  if (remarkInput) remarkInput.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") { e.preventDefault(); addRemark(); }
+  });
+  renderRemarks();
+
   overlay.querySelector("#ed-cancel").addEventListener("click", () => overlay.remove());
   overlay.addEventListener("click", (e) => { if (e.target === overlay) overlay.remove(); });
 
@@ -5443,6 +5490,7 @@ async function openDevEditModal(id) {
       special: {
         variable: overlay.querySelector('input[name="ed-spec-variable"]:checked')?.value || null,
       },
+      remake: editRemarks.slice().sort(),
     };
     const saveBtn = overlay.querySelector("#ed-save");
     saveBtn.disabled = true;
