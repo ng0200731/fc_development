@@ -53,6 +53,9 @@ const PRODUCT_TYPES = [
 // Fabric options for the Material dropdown.
 const FABRIC_OPTIONS = ["polyester", "nylon", "cotton"];
 
+// Folding options for the Material dropdown (screen print label only).
+const FOLDING_OPTIONS = ["loop fold", "end fold", "straight cut", "mitre fold", "Manhattan Fold", "Asymmetrical Fold"];
+
 // Build a short summary of a screen-print material spec for badges / view cells.
 function materialSummary(mat) {
   if (!mat) return "";
@@ -60,6 +63,7 @@ function materialSummary(mat) {
   if (mat.recycle) parts.push(mat.recycle === "recycle" ? "recycle" : "non-recycle");
   if (mat.fabric) parts.push(mat.fabric);
   if (mat.edge) parts.push(mat.edge === "slit" ? "slit edge" : "woven edge");
+  if (mat.folding) parts.push(mat.folding);
   return parts.join(" · ");
 }
 
@@ -1294,6 +1298,14 @@ function wireExtraParts(root, state, updateSaveState) {
           </div>
         </div>
 
+        <div class="field">
+          <label for="mat-folding">Folding</label>
+          <select id="mat-folding">
+            <option value="">— select —</option>
+            ${FOLDING_OPTIONS.map((f) => `<option value="${escapeHtml(f)}" ${cur.folding === f ? "selected" : ""}>${escapeHtml(f)}</option>`).join("")}
+          </select>
+        </div>
+
         <div class="actions modal-actions">
           <button class="btn ghost" id="mat-clear" type="button">Clear</button>
           <button class="btn primary" id="mat-save" type="button">Save</button>
@@ -1307,7 +1319,8 @@ function wireExtraParts(root, state, updateSaveState) {
       const recycle = overlay.querySelector('input[name="mat-recycle"]:checked')?.value || null;
       const fabric = overlay.querySelector("#mat-fabric").value || null;
       const edge = overlay.querySelector('input[name="mat-edge"]:checked')?.value || null;
-      devState.material = { recycle, fabric, edge };
+      const folding = overlay.querySelector("#mat-folding").value || null;
+      devState.material = { recycle, fabric, edge, folding };
       updateMaterialBadge();
       if (typeof updateSaveState === "function") updateSaveState();
       close();
@@ -5284,6 +5297,13 @@ async function openDevEditModal(id) {
           <label class="radio-opt"><input type="radio" name="ed-mat-edge" value="woven" ${rec.material && rec.material.edge === "woven" ? "checked" : ""}/> woven edge</label>
         </div>
       </div>
+      <div class="field">
+        <label for="ed-mat-folding">Folding</label>
+        <select id="ed-mat-folding">
+          <option value="">— select —</option>
+          ${FOLDING_OPTIONS.map((f) => `<option value="${escapeHtml(f)}" ${rec.material && rec.material.folding === f ? "selected" : ""}>${escapeHtml(f)}</option>`).join("")}
+        </select>
+      </div>
       ` : `
       <div class="field">
         <p class="muted small">Material details to be confirmed (TBA).</p>
@@ -5517,6 +5537,7 @@ async function openDevEditModal(id) {
         recycle: overlay.querySelector('input[name="ed-mat-recycle"]:checked')?.value || null,
         fabric: overlay.querySelector("#ed-mat-fabric").value || null,
         edge: overlay.querySelector('input[name="ed-mat-edge"]:checked')?.value || null,
+        folding: overlay.querySelector("#ed-mat-folding").value || null,
       } : (rec.material != null ? rec.material : null),
       special: {
         variable: overlay.querySelector('input[name="ed-spec-variable"]:checked')?.value || null,
