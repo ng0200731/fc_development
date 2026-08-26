@@ -470,6 +470,16 @@ select:focus-visible,
   color: #15803d;
 }
 
+/* Filled variant for the Material hint line (replaces the TBA sentence). */
+.muted.small.filled {
+  display: inline-block;
+  background: #dcfce7;
+  color: #15803d;
+  border-radius: 999px;
+  padding: 1px 8px;
+  font-weight: 600;
+}
+
 /* Radio groups inside the Material popup / inline edit modal */
 .radio-label {
   display: block;

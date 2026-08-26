@@ -1403,6 +1403,15 @@ class Handler(SimpleHTTPRequestHandler):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, directory=STATIC_DIR, **kwargs)
 
+    def end_headers(self):
+        # Never let the browser cache static assets. app.js / css are edited
+        # frequently during development; a cached old copy silently hides
+        # every fix. Force re-fetch on every request.
+        self.send_header("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0")
+        self.send_header("Pragma", "no-cache")
+        self.send_header("Expires", "0")
+        super().end_headers()
+
     def _serve_sample_list(self):
         return json_response(self, list_sample_images())
 

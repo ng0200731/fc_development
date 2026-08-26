@@ -85,14 +85,60 @@ function specialSummary(spec) {
   return "";
 }
 
+// Refresh the Material (part 4) badge + hint line and the Special (part 5) badge
+// directly from devState. Uses document.querySelector so it works from any panel
+// (only one dev panel is mounted at a time) and is independent of closure scope.
+function refreshDevExtras() {
+  const matBadge = document.querySelector("#dev-material-badge");
+  const matHint = document.querySelector("#dev-material-hint");
+  const specBadge = document.querySelector("#dev-special-badge");
+
+  if (matBadge) {
+    const ms = materialSummary(devState.material);
+    matBadge.textContent = ms ? ms : "TBA";
+    matBadge.classList.toggle("filled", !!ms);
+  }
+  if (matHint) {
+    if (isScreenPrintProduct(devState.product)) {
+      const ms = materialSummary(devState.material);
+      matHint.textContent = ms ? ms : "Click to set material specs (recycle / fabric / edge / folding).";
+      matHint.classList.toggle("filled", !!ms);
+    } else {
+      matHint.textContent = "Material details are to be confirmed (TBA) for this product type.";
+      matHint.classList.remove("filled");
+    }
+  }
+  if (specBadge) {
+    const ss = specialSummary(devState.special);
+    specBadge.textContent = ss ? ss : "TBA";
+    specBadge.classList.toggle("filled", !!ss);
+  }
+}
+
+// For screen print label, seed Material + Special with dummy defaults so the
+// green summary words appear immediately (no need to open the popup first).
+// Other product types keep Material as TBA.
+function seedScreenPrintDefaults() {
+  if (isScreenPrintProduct(devState.product)) {
+    if (!devState.material || typeof devState.material !== "object" || !devState.material.recycle) {
+      devState.material = { recycle: "recycle", fabric: "polyester", edge: "slit", folding: "loop fold" };
+    }
+    if (!devState.special || typeof devState.special !== "object" || !devState.special.variable) {
+      devState.special = { variable: "variable" };
+    }
+  }
+  refreshDevExtras();
+}
+
 // Only "screen print label" uses the full Material popup (recycle / fabric / edge).
 // Other product types keep the generic "TBA" material stub.
 const isScreenPrintProduct = (p) => p === "screen print label";
-// Product types that show the "No. of color" + Pantone-row layout.
-// "heat transfer label" behaves like "raised silicon label" for color, but has
-// no "Raised height" field — see needsRaisedHeight() below.
-const isColorLabelProduct = (p) =>
-  p === "raised silicon label" || p === "heat transfer label";
+// All product types show the "No. of color" + Pantone-row layout (same as
+// "raised silicon label"). "heat transfer label" behaves like "raised silicon
+// label" for color but has no "Raised height" field — see needsRaisedHeight().
+// (isColorLabelProduct is kept only for reference; the colour layout is now
+// universal, so callers use needsRaisedHeight() directly instead.)
+const isColorLabelProduct = () => true;
 
 // Only "raised silicon label" additionally needs a "Raised height" field.
 const needsRaisedHeight = (p) => p === "raised silicon label";
@@ -1078,6 +1124,8 @@ function openPostSaveModal() {
   document.body.appendChild(overlay);
   overlay.querySelector("#ps-view").addEventListener("click", () => {
     overlay.remove();
+    resetDevState();   // clear the Create draft entirely (incl. company/member/project)
+    renderDevelopmentCreate();   // re-render so Create is blank when they return
     openTab("development-view");
   });
   overlay.querySelector("#ps-continue").addEventListener("click", () => {
@@ -1139,22 +1187,16 @@ async function fillDummyDevelopment(ctx) {
     productEl.value = pt;
     devState.product = pt;
 
-    // 3) Part 3 details — set BEFORE rendering so inputs show the values
-    if (isColorLabelProduct(pt)) {
-      devState.height = (Math.random() * 40 + 10).toFixed(1);
-      devState.width = (Math.random() * 40 + 10).toFixed(1);
-      devState.raisedHeight = needsRaisedHeight(pt) ? (Math.random() * 3 + 0.5).toFixed(1) : "";
-      devState.noOfColor = String(Math.floor(Math.random() * 4) + 1);
-      devState.pantones = [];
-      for (let i = 0; i < Number(devState.noOfColor); i++) {
-        devState.pantones.push({ value: "19-" + (Math.floor(Math.random() * 400) + 100) + " TCX", color: "#888888" });
-      }
-    } else {
-      devState.height = (Math.random() * 40 + 10).toFixed(1);
-      devState.width = (Math.random() * 40 + 10).toFixed(1);
-      devState.raisedHeight = "";
-      devState.noOfColor = "";
-      devState.pantones.length = 0;
+    // 3) Part 3 details — set BEFORE rendering so inputs show the values.
+    // Every product type now gets No. of color + Pantones (like raised
+    // silicon label). Only "raised silicon label" additionally gets Raised height.
+    devState.height = (Math.random() * 40 + 10).toFixed(1);
+    devState.width = (Math.random() * 40 + 10).toFixed(1);
+    devState.raisedHeight = needsRaisedHeight(pt) ? (Math.random() * 3 + 0.5).toFixed(1) : "";
+    devState.noOfColor = String(Math.floor(Math.random() * 4) + 1);
+    devState.pantones = [];
+    for (let i = 0; i < Number(devState.noOfColor); i++) {
+      devState.pantones.push({ value: "19-" + (Math.floor(Math.random() * 400) + 100) + " TCX", color: "#888888" });
     }
 
     // 4) single image from the pool (attachments are optional — but the Dummy
@@ -1221,21 +1263,15 @@ async function fillDummyEnquiry(ctx) {
       productEl.value = pt;
       devState.product = pt;
 
-      if (isColorLabelProduct(pt)) {
-        devState.height = (Math.random() * 40 + 10).toFixed(1);
-        devState.width = (Math.random() * 40 + 10).toFixed(1);
-        devState.raisedHeight = needsRaisedHeight(pt) ? (Math.random() * 3 + 0.5).toFixed(1) : "";
-        devState.noOfColor = String(Math.floor(Math.random() * 4) + 1);
-        devState.pantones = [];
-        for (let i = 0; i < Number(devState.noOfColor); i++) {
-          devState.pantones.push({ value: "19-" + (Math.floor(Math.random() * 400) + 100) + " TCX", color: "#888888" });
-        }
-      } else {
-        devState.height = (Math.random() * 40 + 10).toFixed(1);
-        devState.width = (Math.random() * 40 + 10).toFixed(1);
-        devState.raisedHeight = "";
-        devState.noOfColor = "";
-        devState.pantones.length = 0;
+      // Every product type now gets No. of color + Pantones (like raised
+      // silicon label). Only "raised silicon label" additionally gets Raised height.
+      devState.height = (Math.random() * 40 + 10).toFixed(1);
+      devState.width = (Math.random() * 40 + 10).toFixed(1);
+      devState.raisedHeight = needsRaisedHeight(pt) ? (Math.random() * 3 + 0.5).toFixed(1) : "";
+      devState.noOfColor = String(Math.floor(Math.random() * 4) + 1);
+      devState.pantones = [];
+      for (let i = 0; i < Number(devState.noOfColor); i++) {
+        devState.pantones.push({ value: "19-" + (Math.floor(Math.random() * 400) + 100) + " TCX", color: "#888888" });
       }
     }
 
@@ -1264,21 +1300,14 @@ async function fillDummyEnquiry(ctx) {
 // `updateSaveState` re-evaluates Save/Update gating after a remark change.
 function wireExtraParts(root, state, updateSaveState) {
   // --- Material & Special popups ---
-  const updateMaterialBadge = () => {
-    const badge = root.querySelector("#dev-material-badge");
-    if (!badge) return;
-    const summary = materialSummary(devState.material);
-    if (summary) {
-      badge.textContent = summary;
-      badge.classList.add("filled");
-    } else {
-      badge.textContent = "TBA";
-      badge.classList.remove("filled");
-    }
-  };
-
   const openMaterialPopup = () => {
-    const cur = devState.material && typeof devState.material === "object" ? devState.material : {};
+    // Pre-fill with sensible defaults the first time (screen print label).
+    const cur = devState.material && typeof devState.material === "object" ? devState.material : {
+      recycle: "recycle",
+      fabric: "polyester",
+      edge: "slit",
+      folding: "loop fold",
+    };
     const overlay = document.createElement("div");
     overlay.className = "modal-overlay";
     overlay.innerHTML = `
@@ -1335,13 +1364,13 @@ function wireExtraParts(root, state, updateSaveState) {
       const edge = overlay.querySelector('input[name="mat-edge"]:checked')?.value || null;
       const folding = overlay.querySelector("#mat-folding").value || null;
       devState.material = { recycle, fabric, edge, folding };
-      updateMaterialBadge();
+      refreshDevExtras();
       if (typeof updateSaveState === "function") updateSaveState();
       close();
     });
     overlay.querySelector("#mat-clear").addEventListener("click", () => {
       devState.material = null;
-      updateMaterialBadge();
+      refreshDevExtras();
       if (typeof updateSaveState === "function") updateSaveState();
       close();
     });
@@ -1358,19 +1387,6 @@ function wireExtraParts(root, state, updateSaveState) {
         foldingImg.style.display = "none";
       }
     });
-  };
-
-  const updateSpecialBadge = () => {
-    const badge = root.querySelector("#dev-special-badge");
-    if (!badge) return;
-    const summary = specialSummary(devState.special);
-    if (summary) {
-      badge.textContent = summary;
-      badge.classList.add("filled");
-    } else {
-      badge.textContent = "TBA";
-      badge.classList.remove("filled");
-    }
   };
 
   const openTbaPopup = (title) => {
@@ -1390,7 +1406,7 @@ function wireExtraParts(root, state, updateSaveState) {
   };
 
   const openSpecialPopup = () => {
-    const cur = devState.special && typeof devState.special === "object" ? devState.special : {};
+    const cur = devState.special && typeof devState.special === "object" ? devState.special : { variable: "variable" };
     const overlay = document.createElement("div");
     overlay.className = "modal-overlay";
     overlay.innerHTML = `
@@ -1417,13 +1433,13 @@ function wireExtraParts(root, state, updateSaveState) {
     overlay.querySelector("#spec-save").addEventListener("click", () => {
       const variable = overlay.querySelector('input[name="spec-variable"]:checked')?.value || null;
       devState.special = variable ? { variable } : null;
-      updateSpecialBadge();
+      refreshDevExtras();
       if (typeof updateSaveState === "function") updateSaveState();
       close();
     });
     overlay.querySelector("#spec-clear").addEventListener("click", () => {
       devState.special = null;
-      updateSpecialBadge();
+      refreshDevExtras();
       if (typeof updateSaveState === "function") updateSaveState();
       close();
     });
@@ -1431,6 +1447,9 @@ function wireExtraParts(root, state, updateSaveState) {
 
   const matBtn = root.querySelector("#dev-material-btn");
   const specBtn = root.querySelector("#dev-special-btn");
+
+  // The Material/Special badges + hint now live in refreshDevExtras() (module-
+  // level, document-scoped). Wire the buttons + product-change hook to it.
   if (matBtn) {
     // Bind once; decide at CLICK time because devState.product is empty when the
     // panel first mounts (Create tab). Screen print label opens the full Material
@@ -1439,12 +1458,14 @@ function wireExtraParts(root, state, updateSaveState) {
       if (isScreenPrintProduct(devState.product)) openMaterialPopup();
       else openTbaPopup("Material");
     });
-    updateMaterialBadge();
   }
   if (specBtn) {
     specBtn.addEventListener("click", openSpecialPopup);
-    updateSpecialBadge();
   }
+  // Seed green defaults + repaint badges/hint when product changes or on mount.
+  const prodEl = root.querySelector("#dev-product");
+  if (prodEl) prodEl.addEventListener("change", () => { devState.product = prodEl.value; seedScreenPrintDefaults(); });
+  seedScreenPrintDefaults();
 
   // --- Remark: array of free-text strings, add one per entry ---
   const listEl = root.querySelector("#dev-remake-list");
@@ -2418,22 +2439,9 @@ async function renderEnquiryEdit() {
   // ---- Part 3 dynamic body (depends on product type) ----
   const renderPart3 = () => {
     ensurePantoneData();
-    if (isColorLabelProduct(devState.product)) {
-      renderRaisedSiliconLabel();
-    } else {
-      part3Body.innerHTML = `
-        <div class="dim-row">
-          <div class="field">
-            <label for="enq-height">Height (mm)</label>
-            <input id="enq-height" type="number" min="0" step="0.1" placeholder="0.0" autocomplete="off" />
-          </div>
-          <div class="field">
-            <label for="enq-width">Width (mm)</label>
-            <input id="enq-width" type="number" min="0" step="0.1" placeholder="0.0" autocomplete="off" />
-          </div>
-        </div>`;
-      bindDimInputs();
-    }
+    // Every product type now shows No. of color + Pantone rows (like raised
+    // silicon patch). Only "raised silicon label" additionally shows Raised height.
+    renderRaisedSiliconLabel();
   };
 
   const bindDimInputs = () => {
@@ -2727,20 +2735,20 @@ async function renderEnquiryEdit() {
     const w = (devState.width || "").trim();
     if (h.length === 0 || w.length === 0) return false;   // height + width always required
 
-    if (isColorLabelProduct(devState.product)) {
-      if (needsRaisedHeight(devState.product)) {
-        const rh = (devState.raisedHeight || "").trim();
-        if (rh.length === 0) return false;                   // raised height required
-      }
+    // Every product type now requires No. of color (and its Pantone rows),
+    // mirroring "raised silicon label" behaviour.
+    if (needsRaisedHeight(devState.product)) {
+      const rh = (devState.raisedHeight || "").trim();
+      if (rh.length === 0) return false;                   // raised height required (raised silicon label only)
+    }
 
-      const n = parseInt(devState.noOfColor, 10);
-      if (!n || n < 1) return false;                       // no. of color required (>= 1)
+    const n = parseInt(devState.noOfColor, 10);
+    if (!n || n < 1) return false;                       // no. of color required (>= 1)
 
-      if (n >= 1) {
-        for (const p of devState.pantones) {
-          const v = (p && (p.value || "") || "").trim().length;
-          if (v <= 1) return false;
-        }
+    if (n >= 1) {
+      for (const p of devState.pantones) {
+        const v = (p && (p.value || "") || "").trim().length;
+        if (v <= 1) return false;
       }
     }
     return true;
@@ -3201,7 +3209,7 @@ async function renderDevelopmentCreate() {
           <button type="button" class="pill-btn" id="dev-material-btn">
             Material details <span class="pill-badge" id="dev-material-badge">TBA</span>
           </button>
-          <p class="muted small">Click to view material specs (details TBA).</p>
+          <p class="muted small" id="dev-material-hint">Select a product type, then click to set material specs.</p>
         </div>
 
         <h3 class="subhead part-head">5 · Special</h3>
@@ -3209,7 +3217,7 @@ async function renderDevelopmentCreate() {
           <button type="button" class="pill-btn" id="dev-special-btn">
             Special details <span class="pill-badge" id="dev-special-badge">TBA</span>
           </button>
-          <p class="muted small">Click to set special requirements (variable / non variable).</p>
+          <p class="muted small" id="dev-special-hint">Click to set special requirements (variable / non variable).</p>
         </div>
 
         <h3 class="subhead part-head">6 · Remark</h3>
@@ -3336,23 +3344,9 @@ async function renderDevelopmentCreate() {
   // ---- Part 3 dynamic body (depends on product type) ----
   const renderPart3 = () => {
     ensurePantoneData();   // load the TCX dataset (no-op if already cached)
-    if (isColorLabelProduct(devState.product)) {
-      renderRaisedSiliconLabel();
-    } else {
-      // default: just height + width
-      part3Body.innerHTML = `
-        <div class="dim-row">
-          <div class="field">
-            <label for="dev-height">Height (mm)</label>
-            <input id="dev-height" type="number" min="0" step="0.1" placeholder="0.0" autocomplete="off" />
-          </div>
-          <div class="field">
-            <label for="dev-width">Width (mm)</label>
-            <input id="dev-width" type="number" min="0" step="0.1" placeholder="0.0" autocomplete="off" />
-          </div>
-        </div>`;
-      bindDimInputs();
-    }
+    // Every product type now shows No. of color + Pantone rows (like raised
+    // silicon label). Only "raised silicon label" additionally shows Raised height.
+    renderRaisedSiliconLabel();
   };
 
   const bindDimInputs = () => {
@@ -3649,6 +3643,7 @@ async function renderDevelopmentCreate() {
   });
   productEl.addEventListener("change", () => {
     devState.product = productEl.value;
+    seedScreenPrintDefaults();   // auto-dummy the Material/Special green words for screen print label
     updateNextState();
   });
 
@@ -3664,22 +3659,22 @@ async function renderDevelopmentCreate() {
     const w = (devState.width || "").trim();
     if (h.length === 0 || w.length === 0) return false;   // height + width always required
 
-    if (isColorLabelProduct(devState.product)) {
-      if (needsRaisedHeight(devState.product)) {
-        const rh = (devState.raisedHeight || "").trim();
-        if (rh.length === 0) return false;                   // raised height required
-      }
+    // Every product type now requires No. of color (and its Pantone rows),
+    // mirroring "raised silicon label" behaviour.
+    if (needsRaisedHeight(devState.product)) {
+      const rh = (devState.raisedHeight || "").trim();
+      if (rh.length === 0) return false;                   // raised height required (raised silicon label only)
+    }
 
-      const n = parseInt(devState.noOfColor, 10);
-      if (!n || n < 1) return false;                       // no. of color required (>= 1)
+    const n = parseInt(devState.noOfColor, 10);
+    if (!n || n < 1) return false;                       // no. of color required (>= 1)
 
-      if (n >= 1) {
-        // every shown Pantone row needs a non-trivial code (length must be > 1).
-        // Pantone #1 is shown as soon as no. of color >= 1, so it must be filled.
-        for (const p of devState.pantones) {
-          const v = (p && (p.value || "") || "").trim().length;
-          if (v <= 1) return false;
-        }
+    if (n >= 1) {
+      // every shown Pantone row needs a non-trivial code (length must be > 1).
+      // Pantone #1 is shown as soon as no. of color >= 1, so it must be filled.
+      for (const p of devState.pantones) {
+        const v = (p && (p.value || "") || "").trim().length;
+        if (v <= 1) return false;
       }
     }
     return true;
@@ -4090,7 +4085,7 @@ async function renderDevelopmentEdit() {
           <button type="button" class="pill-btn" id="dev-material-btn">
             Material details <span class="pill-badge" id="dev-material-badge">TBA</span>
           </button>
-          <p class="muted small">Click to view material specs (details TBA).</p>
+          <p class="muted small" id="dev-material-hint">Select a product type, then click to set material specs.</p>
         </div>
 
         <h3 class="subhead part-head">5 · Special</h3>
@@ -4098,7 +4093,7 @@ async function renderDevelopmentEdit() {
           <button type="button" class="pill-btn" id="dev-special-btn">
             Special details <span class="pill-badge" id="dev-special-badge">TBA</span>
           </button>
-          <p class="muted small">Click to set special requirements (variable / non variable).</p>
+          <p class="muted small" id="dev-special-hint">Click to set special requirements (variable / non variable).</p>
         </div>
 
         <h3 class="subhead part-head">6 · Remark</h3>
@@ -4211,22 +4206,9 @@ async function renderDevelopmentEdit() {
   // ---- Part 3 dynamic body (depends on product type) ----
   const renderPart3 = () => {
     ensurePantoneData();
-    if (isColorLabelProduct(devState.product)) {
-      renderRaisedSiliconLabel();
-    } else {
-      part3Body.innerHTML = `
-        <div class="dim-row">
-          <div class="field">
-            <label for="dev-height">Height (mm)</label>
-            <input id="dev-height" type="number" min="0" step="0.1" placeholder="0.0" autocomplete="off" />
-          </div>
-          <div class="field">
-            <label for="dev-width">Width (mm)</label>
-            <input id="dev-width" type="number" min="0" step="0.1" placeholder="0.0" autocomplete="off" />
-          </div>
-        </div>`;
-      bindDimInputs();
-    }
+    // Every product type now shows No. of color + Pantone rows (like raised
+    // silicon label). Only "raised silicon label" additionally shows Raised height.
+    renderRaisedSiliconLabel();
   };
 
   const bindDimInputs = () => {
@@ -4510,6 +4492,7 @@ async function renderDevelopmentEdit() {
   });
   productEl.addEventListener("change", () => {
     devState.product = productEl.value;
+    seedScreenPrintDefaults();   // auto-dummy the Material/Special green words for screen print label
     updateNextState();
   });
 
@@ -4518,20 +4501,20 @@ async function renderDevelopmentEdit() {
     const w = (devState.width || "").trim();
     if (h.length === 0 || w.length === 0) return false;
 
-    if (isColorLabelProduct(devState.product)) {
-      if (needsRaisedHeight(devState.product)) {
-        const rh = (devState.raisedHeight || "").trim();
-        if (rh.length === 0) return false;
-      }
+    // Every product type now requires No. of color (and its Pantone rows),
+    // mirroring "raised silicon label" behaviour.
+    if (needsRaisedHeight(devState.product)) {
+      const rh = (devState.raisedHeight || "").trim();
+      if (rh.length === 0) return false;
+    }
 
-      const n = parseInt(devState.noOfColor, 10);
-      if (!n || n < 1) return false;
+    const n = parseInt(devState.noOfColor, 10);
+    if (!n || n < 1) return false;
 
-      if (n >= 1) {
-        for (const p of devState.pantones) {
-          const v = (p && (p.value || "") || "").trim().length;
-          if (v <= 1) return false;
-        }
+    if (n >= 1) {
+      for (const p of devState.pantones) {
+        const v = (p && (p.value || "") || "").trim().length;
+        if (v <= 1) return false;
       }
     }
     return true;
