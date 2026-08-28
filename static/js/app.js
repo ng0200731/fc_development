@@ -616,20 +616,29 @@ const needsRaisedHeight = (p) => p === "raised silicon label";
 const SPLIT_COLOR_PRODUCTS = ["screen print label", "printed label", "hang tag"];
 const isSplitColorProduct = (p) => SPLIT_COLOR_PRODUCTS.includes(p);
 
-// Validate one side of a split color spec: at least 1 color and every Pantone
-// row must carry a non-trivial code (length > 1), mirroring part3Valid().
-const splitSideValid = (side) => {
-  if (!side) return false;
-  const n = parseInt(side.noOfColor, 10);
-  if (!n || n < 1) return false;
-  for (const p of side.pantones) {
-    if (!p || (p.value || "").trim().length <= 1) return false;
+// For a split color spec (Front + Back) the gating rule is: the TOTAL number of
+// colors across both sides must be > 1 (i.e. at least 2), and every Pantone row
+// that has been entered must carry a non-trivial code (length > 1). We do NOT
+// require both sides to individually have colors — a single side with 2+ colors
+// (or 1 color on each side) is enough. This matches the badge, which already
+// sums both sides ("2 colors"), and matches the user's expectation that a
+// "printed label" with 2 colors is valid without forcing a Back side.
+const splitColorsValid = (sides) => {
+  if (!sides) return false;
+  let total = 0;
+  let allEnteredValid = true;
+  for (const side of [sides.front, sides.back]) {
+    if (!side) continue;
+    const n = parseInt(side.noOfColor, 10);
+    if (n > 0) total += n;
+    for (const p of (side.pantones || [])) {
+      const v = (p && (p.value || "") || "").trim().length;
+      // An entered stub (exactly 1 char) is invalid; empty rows are allowed.
+      if (v > 0 && v <= 1) allEnteredValid = false;
+    }
   }
-  return true;
+  return total >= 1 && allEnteredValid;   // at least 1 color total
 };
-// A split color spec (Front + Back) is valid only when BOTH sides are valid.
-const splitColorsValid = (sides) =>
-  !!(sides && sides.front && sides.back && splitSideValid(sides.front) && splitSideValid(sides.back));
 
 // Parse the `color_sides` signature string (from a saved record) back into the
 // { front:{noOfColor,pantones}, back:{noOfColor,pantones} } object shape.
