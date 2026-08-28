@@ -193,6 +193,70 @@ function matchSinglePantone(value) {
   return matches.length ? matches[0] : null;
 }
 
+// Wire a Pantone text input with a fuzzy-suggestion dropdown. On every
+// keystroke the matching catalog entries are listed below the field; clicking
+// an entry fills the input and the underlying state via `setValue`. `get`/`set`
+// are already index-bound accessors for this row's pantone object. `onChange`
+// fires after any keystroke or selection.
+function bindPantoneAutofill(input, matchEl, get, set, onChange) {
+  const field = input.closest(".field") || input.parentElement;
+  let dd = field.querySelector(".pantone-dd");
+  if (!dd) {
+    dd = document.createElement("div");
+    dd.className = "pantone-dd";
+    field.appendChild(dd);
+  }
+  const renderMatch = (value) => {
+    if (!matchEl) return;
+    matchEl.innerHTML = colorMatchHtml(value ? matchSinglePantone(value) : null);
+  };
+  const closeDd = () => { if (dd) { dd.innerHTML = ""; dd.style.display = "none"; } };
+  // Show ALL fuzzy matches (the dropdown scrolls). A higher cap keeps even
+  // short queries from truncating the suggestion list.
+  const openDd = (matches) => {
+    if (!dd || !matches.length) { closeDd(); return; }
+    dd.innerHTML = matches.map((m, idx) =>
+      `<div class="pantone-dd-item" data-code="${escapeHtml(m.code)}" data-name="${escapeHtml(m.name)}">` +
+        `<span class="swatch sm" style="background:#${escapeHtml(m.hex)}"></span>` +
+        `<span class="pantone-dd-code">${escapeHtml(m.code)}</span>` +
+        `<span class="pantone-dd-name">${escapeHtml(m.name)}</span>` +
+        `<span class="pantone-type" title="${escapeHtml(pantoneTypeName(m.type))}">${escapeHtml(pantoneTypeName(m.type))}</span>` +
+      `</div>`).join("");
+    dd.style.display = "block";
+    dd.querySelectorAll(".pantone-dd-item").forEach((item) => {
+      // Clicking anywhere on the row (swatch, code, name, type) fills the field.
+      item.addEventListener("mousedown", (e) => {
+        e.preventDefault();   // keep focus / avoid blur race
+        const code = item.dataset.code;
+        input.value = code;
+        set(code);
+        renderMatch(code);
+        closeDd();
+        if (onChange) onChange();
+      });
+    });
+  };
+  input.addEventListener("input", () => {
+    const v = input.value;
+    set(v);
+    renderMatch(v);
+    openDd(findPantoneMatches(v, 999));
+    if (onChange) onChange();
+  });
+  input.addEventListener("focus", () => {
+    const v = input.value;
+    // Empty field on focus => show the entire catalog so the user can browse
+    // and click any Pantone to fill the input.
+    if (!v.trim()) {
+      if (pantoneData && pantoneData.length) openDd(pantoneData.slice(0, 999));
+    } else {
+      openDd(findPantoneMatches(v, 999));
+    }
+  });
+  input.addEventListener("blur", () => { setTimeout(closeDd, 120); });
+  renderMatch(get());
+}
+
 // Build a single editable color side (No. of color + Pantone rows) inside a
 // container element. Returns nothing; wires its own inputs. `side` is the
 // working { noOfColor, pantones } object; `onChange` fires after each edit.
@@ -230,16 +294,16 @@ function renderColorSide(container, side, onChange) {
     }).join("");
 
     wrap.querySelectorAll(".pantone-input").forEach((inp) => {
-      inp.addEventListener("input", () => {
-        const i = Number(inp.dataset.idx);
-        if (!side.pantones[i]) return;
-        side.pantones[i].value = inp.value;
-        const matched = inp.value ? matchSinglePantone(inp.value) : null;
-        side.pantones[i].color = matched ? "#" + matched.hex : "#000000";
-        const matchEl = wrap.querySelector("#cp-pantone-match-" + i);
-        if (matchEl) matchEl.innerHTML = colorMatchHtml(matched);
-        if (onChange) onChange();
-      });
+      const i = Number(inp.dataset.idx);
+      if (!side.pantones[i]) return;
+      const matchEl = wrap.querySelector("#cp-pantone-match-" + i);
+      bindPantoneAutofill(
+        inp,
+        matchEl,
+        () => side.pantones[i].value,
+        (v) => { side.pantones[i].value = v; const m = v ? matchSinglePantone(v) : null; side.pantones[i].color = m ? "#" + m.hex : "#000000"; },
+        () => { if (onChange) onChange(); }
+      );
     });
     if (onChange) onChange();
   };
@@ -333,15 +397,16 @@ async function openColorsPopup(getState, setState, onChange) {
       }).join("");
 
       wrap.querySelectorAll(".pantone-input").forEach((inp) => {
-        inp.addEventListener("input", () => {
-          const i = Number(inp.dataset.idx);
-          if (!work.pantones[i]) return;
-          work.pantones[i].value = inp.value;
-          const matched = inp.value ? matchSinglePantone(inp.value) : null;
-          work.pantones[i].color = matched ? "#" + matched.hex : "#000000";
-          const matchEl = wrap.querySelector("#cp-pantone-match-" + i);
-          if (matchEl) matchEl.innerHTML = colorMatchHtml(matched);
-        });
+        const i = Number(inp.dataset.idx);
+        if (!work.pantones[i]) return;
+        const matchEl = wrap.querySelector("#cp-pantone-match-" + i);
+        bindPantoneAutofill(
+          inp,
+          matchEl,
+          () => work.pantones[i].value,
+          (v) => { work.pantones[i].value = v; const m = v ? matchSinglePantone(v) : null; work.pantones[i].color = m ? "#" + m.hex : "#000000"; },
+          () => {}
+        );
       });
     };
 
@@ -1992,13 +2057,13 @@ function detectPantoneHint(q) {
 // Resolve a user query to a list of matching entries (best first), each tagged
 // with its catalog type. Exact code -> exact name -> scored fuzzy (catalog-hint
 // boost, then start-with, then shortest).
-function findPantoneMatches(query, limit = 8) {
+function findPantoneMatches(query, limit = 999) {
   if (!pantoneData) return [];
   const q = (query || "").trim();
   if (!q) return [];
 
   const norm = normalizePantone(q);
-  const lower = q.toLowerCase().replace(/pantone/g, "").trim();
+  const lower = q.toLowerCase().replace(/pantone/g, "").replace(/\s+/g, " ").trim();
   const hint = detectPantoneHint(q);
   const results = [];
   const seen = new Set();
@@ -2018,14 +2083,25 @@ function findPantoneMatches(query, limit = 8) {
   const byName = pantoneData.find((e) => e.name.toLowerCase() === lower && !seen.has(e.code + e.type));
   if (byName) { results.push(byName); seen.add(byName.code + byName.type); }
 
-  // 3) fuzzy name matches, ranked with a small score
+  // 3) fuzzy match across CODE, NAME and TYPE (so "co" finds code 16-1422 cork,
+  //    "tcx"/"tcp" in the type, etc.). Ranked by a small score, all returned.
   const fuzzy = pantoneData
-    .filter((e) => !seen.has(e.code + e.type) && fuzzyMatch(e.name, lower))
+    .filter((e) => {
+      if (seen.has(e.code + e.type)) return false;
+      const hay = (e.code + " " + e.name + " " + (pantoneTypeName(e.type) || e.type)).toLowerCase()
+        .replace(/pantone/g, "").replace(/\s+/g, " ");
+      // match the whole query as a subsequence against code+name+type
+      return fuzzyMatch(hay, lower) || (norm && normKey(e.code).includes(norm));
+    })
     .sort((a, b) => {
       const score = (e) => {
         let s = 0;
+        const hay = (e.code + " " + e.name + " " + (pantoneTypeName(e.type) || e.type)).toLowerCase()
+          .replace(/pantone/g, "").replace(/\s+/g, " ");
         if (hint && e.type === hint) s += 100;
-        if (e.name.toLowerCase().startsWith(lower)) s += 10;
+        if (e.name.toLowerCase().startsWith(lower)) s += 20;
+        if (e.code.toLowerCase().includes(lower)) s += 15;
+        if (e.name.toLowerCase().includes(lower)) s += 10;
         s -= e.name.length * 0.1;
         return s;
       };

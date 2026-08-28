@@ -653,6 +653,34 @@ select:focus-visible,
   transition: background var(--ease), border-color var(--ease);
 }
 .pantone-chip:hover { background: var(--accent-weak); border-color: var(--accent-border); }
+.pantone-dd {
+  position: absolute;
+  z-index: 40;
+  left: 0;
+  right: 0;
+  margin-top: 4px;
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  box-shadow: 0 10px 28px rgba(0,0,0,.18);
+  max-height: 240px;
+  overflow-y: auto;
+  display: none;
+}
+.field.pantone-code { position: relative; }
+.pantone-dd-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 10px;
+  cursor: pointer;
+  border-bottom: 1px solid var(--border);
+  font-size: 12px;
+}
+.pantone-dd-item:last-child { border-bottom: none; }
+.pantone-dd-item:hover { background: var(--accent-weak); }
+.pantone-dd-code { font-weight: 700; color: var(--text); }
+.pantone-dd-name { color: var(--text-soft); flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .dropzone {
   border: 2px dashed var(--border-strong);
   border-radius: var(--radius);
