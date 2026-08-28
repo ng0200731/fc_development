@@ -4959,7 +4959,9 @@ async function renderDevelopmentEdit() {
     const canSave = allFilled && dirty;
     saveBtn.disabled = !canSave;
     saveBtn.classList.toggle("active", canSave);
-    resetBtn.disabled = !dirty;
+    // Header Reset is always available while editing — it restores the record
+    // to its originally-loaded state (reverting even a product-type change).
+    resetBtn.disabled = !devOriginal;
     resetBtn.classList.toggle("active", dirty);
   };
 
@@ -5177,35 +5179,43 @@ async function renderDevelopmentEdit() {
     });
   }
 
-  // Reset: restore every field to the originally-loaded record.
+  // Reset: restore every field to the originally-loaded record. Always enabled
+  // while editing (even with no unsaved changes, so a product-type change can be
+  // fully reverted). Requires an in-page confirm — never a native alert.
   if (resetBtn) {
     resetBtn.addEventListener("click", () => {
       if (!devOriginal) return;
-      const s = devEditState;
-      s.companyId = devOriginal.company_id != null ? String(devOriginal.company_id) : "";
-      s.companyName = devOriginal.company_name || "";
-      s.memberId = devOriginal.member_id != null ? String(devOriginal.member_id) : "";
-      s.memberName = devOriginal.member_name || "";
-      s.projectId = devOriginal.project_id != null ? String(devOriginal.project_id) : "";
-      s.projectName = devOriginal.project_name || "";
-      s.item = devOriginal.item_name || "";
-      s.product = devOriginal.product_type || "";
-      s.height = devOriginal.height != null ? String(devOriginal.height) : "";
-      s.width = devOriginal.width != null ? String(devOriginal.width) : "";
-      s.raisedHeight = devOriginal.raised_height != null ? String(devOriginal.raised_height) : "";
-      s.noOfColor = devOriginal.no_of_color != null ? String(devOriginal.no_of_color) : "";
-      s.pantones = Array.isArray(devOriginal.pantones) ? devOriginal.pantones.map((p) => ({ value: p.value || "", color: p.color || "#000000" })) : [];
-      s.colorSides = isSplitColorProduct(devOriginal.product_type) && devOriginal.color_sides
-        ? (typeof devOriginal.color_sides === "string"
-            ? parseColorSidesString(devOriginal.color_sides)
-            : (devOriginal.color_sides || null))
-        : null;
-      s.images = (devOriginal.image_names || []).map((n) => ({ id: "eimg-" + n, name: n, url: assetUrl(n) }));
-      s.docs = (devOriginal.doc_names || []).map((name, i) => ({ id: "edoc-" + devEditId + "-" + i, name, file: null }));
-      s.material = devOriginal.material != null ? devOriginal.material : null;
-      s.special = devOriginal.special != null ? devOriginal.special : null;
-      s.remake = Array.isArray(devOriginal.remake) ? devOriginal.remake.slice() : [];
-      renderDevelopmentEdit();   // re-render with restored data
+      openConfirmModal(
+        "Reset record?",
+        "This will discard all changes and restore the record to its originally loaded state, including the product type and Parts 3–6.",
+        () => {
+          const s = devEditState;
+          s.companyId = devOriginal.company_id != null ? String(devOriginal.company_id) : "";
+          s.companyName = devOriginal.company_name || "";
+          s.memberId = devOriginal.member_id != null ? String(devOriginal.member_id) : "";
+          s.memberName = devOriginal.member_name || "";
+          s.projectId = devOriginal.project_id != null ? String(devOriginal.project_id) : "";
+          s.projectName = devOriginal.project_name || "";
+          s.item = devOriginal.item_name || "";
+          s.product = devOriginal.product_type || "";
+          s.height = devOriginal.height != null ? String(devOriginal.height) : "";
+          s.width = devOriginal.width != null ? String(devOriginal.width) : "";
+          s.raisedHeight = devOriginal.raised_height != null ? String(devOriginal.raised_height) : "";
+          s.noOfColor = devOriginal.no_of_color != null ? String(devOriginal.no_of_color) : "";
+          s.pantones = Array.isArray(devOriginal.pantones) ? devOriginal.pantones.map((p) => ({ value: p.value || "", color: p.color || "#000000" })) : [];
+          s.colorSides = isSplitColorProduct(devOriginal.product_type) && devOriginal.color_sides
+            ? (typeof devOriginal.color_sides === "string"
+                ? parseColorSidesString(devOriginal.color_sides)
+                : (devOriginal.color_sides || null))
+            : null;
+          s.images = (devOriginal.image_names || []).map((n) => ({ id: "eimg-" + n, name: n, url: assetUrl(n) }));
+          s.docs = (devOriginal.doc_names || []).map((name, i) => ({ id: "edoc-" + devEditId + "-" + i, name, file: null }));
+          s.material = devOriginal.material != null ? devOriginal.material : null;
+          s.special = devOriginal.special != null ? devOriginal.special : null;
+          s.remake = Array.isArray(devOriginal.remake) ? devOriginal.remake.slice() : [];
+          renderDevelopmentEdit();   // re-render with restored data
+        }
+      );
     });
   }
 
