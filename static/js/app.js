@@ -90,23 +90,12 @@ function specialSummary(spec) {
 // (only one dev panel is mounted at a time) and is independent of closure scope.
 function refreshDevExtras() {
   const matBadge = document.querySelector("#dev-material-badge");
-  const matHint = document.querySelector("#dev-material-hint");
   const specBadge = document.querySelector("#dev-special-badge");
 
   if (matBadge) {
     const ms = materialSummary(devState.material);
     matBadge.textContent = ms ? ms : "TBA";
     matBadge.classList.toggle("filled", !!ms);
-  }
-  if (matHint) {
-    if (isScreenPrintProduct(devState.product)) {
-      const ms = materialSummary(devState.material);
-      matHint.textContent = ms ? ms : "Click to set material specs (recycle / fabric / edge / folding).";
-      matHint.classList.toggle("filled", !!ms);
-    } else {
-      matHint.textContent = "Material details are to be confirmed (TBA) for this product type.";
-      matHint.classList.remove("filled");
-    }
   }
   if (specBadge) {
     const ss = specialSummary(devState.special);
@@ -3798,7 +3787,6 @@ async function renderDevelopmentCreate() {
           <button type="button" class="pill-btn" id="dev-colors-btn">
             Color details <span class="pill-badge" id="dev-colors-badge">TBA</span>
           </button>
-          <p class="muted small" id="dev-colors-hint">Click to set No. of color and Pantone codes.</p>
         </div>
       </div>
 
@@ -3809,7 +3797,6 @@ async function renderDevelopmentCreate() {
           <button type="button" class="pill-btn" id="dev-material-btn">
             Material details <span class="pill-badge" id="dev-material-badge">TBA</span>
           </button>
-          <p class="muted small" id="dev-material-hint">Select a product type, then click to set material specs.</p>
         </div>
 
         <h3 class="subhead part-head">5 · Special</h3>
@@ -3817,7 +3804,6 @@ async function renderDevelopmentCreate() {
           <button type="button" class="pill-btn" id="dev-special-btn">
             Special details <span class="pill-badge" id="dev-special-badge">TBA</span>
           </button>
-          <p class="muted small" id="dev-special-hint">Click to set special requirements (variable / non variable).</p>
         </div>
 
         <h3 class="subhead part-head">6 · Remark</h3>
@@ -4559,7 +4545,6 @@ async function renderDevelopmentEdit() {
           <button type="button" class="pill-btn" id="dev-colors-btn">
             Color details <span class="pill-badge" id="dev-colors-badge">TBA</span>
           </button>
-          <p class="muted small" id="dev-colors-hint">Click to set No. of color and Pantone codes.</p>
         </div>
       </div>
 
@@ -4570,7 +4555,6 @@ async function renderDevelopmentEdit() {
           <button type="button" class="pill-btn" id="dev-material-btn">
             Material details <span class="pill-badge" id="dev-material-badge">TBA</span>
           </button>
-          <p class="muted small" id="dev-material-hint">Select a product type, then click to set material specs.</p>
         </div>
 
         <h3 class="subhead part-head">5 · Special</h3>
@@ -4578,7 +4562,6 @@ async function renderDevelopmentEdit() {
           <button type="button" class="pill-btn" id="dev-special-btn">
             Special details <span class="pill-badge" id="dev-special-badge">TBA</span>
           </button>
-          <p class="muted small" id="dev-special-hint">Click to set special requirements (variable / non variable).</p>
         </div>
 
         <h3 class="subhead part-head">6 · Remark</h3>
