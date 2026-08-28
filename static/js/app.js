@@ -118,6 +118,36 @@ function refreshDevExtras() {
 // Refresh the Colors (part 3) badge from devState — shows "N colors" once at
 // least one Pantone code has been entered, otherwise "TBA". Split-color
 // products (Front/Back) show the combined total across both sides.
+// Re-render the Part 6 (Remark) list from devState.remake. Used by the
+// product-type reset so any existing remarks are cleared from the DOM.
+function refreshDevRemarks() {
+  const listEl = document.querySelector("#dev-remake-list");
+  if (!listEl) return;
+  const remake = devState.remake || [];
+  if (!remake.length) {
+    listEl.innerHTML = `<li class="remake-empty muted small">No remarks yet.</li>`;
+    return;
+  }
+  listEl.innerHTML = remake.map((note, i) => `
+    <li class="remake-item">
+      <span class="remake-text">${escapeHtml(note)}</span>
+      <button type="button" class="icon-btn danger remake-rm" data-idx="${i}" title="Remove">✕</button>
+    </li>`).join("");
+  listEl.querySelectorAll(".remake-rm").forEach((b) => {
+    b.addEventListener("click", () => {
+      const i = Number(b.dataset.idx);
+      if (i >= 0 && i < devState.remake.length) {
+        devState.remake.splice(i, 1);
+        refreshDevRemarks();
+        if (typeof updateSaveState === "function") updateSaveState();
+      }
+    });
+  });
+}
+
+// Refresh the Colors (part 3) badge from devState — shows "N colors" once at
+// least one Pantone code has been entered, otherwise "TBA". Split-color
+// products (Front/Back) show the combined total across both sides.
 function refreshDevColorsBadge() {
   const badge = document.querySelector("#dev-colors-badge");
   if (!badge) return;
@@ -144,9 +174,28 @@ function refreshDevColorsBadge() {
   }
 }
 
-// For screen print label, seed Material + Special with dummy defaults so the
-// green summary words appear immediately (no need to open the popup first).
-// Other product types keep Material as TBA.
+// Reset Part 3 (Colors / Pantone), Part 4 (Material), Part 5 (Special) and
+// Part 6 (Remark) back to blank. Used when the product type changes, because
+// those sections are product-specific.
+function resetProductParts() {
+  devState.colorSides = null;
+  devState.noOfColor = "";
+  devState.pantones = [];
+  devState.material = null;
+  devState.special = null;
+  devState.remake = [];
+  // Reflect the cleared state in the DOM: badges back to TBA, remarks list empty.
+  // Defer to next frame so the panel (and its badge/remark nodes) is mounted.
+  if (typeof requestAnimationFrame === "function") {
+    requestAnimationFrame(() => { refreshDevColorsBadge(); refreshDevExtras(); refreshDevRemarks(); });
+  } else {
+    refreshDevColorsBadge(); refreshDevExtras(); refreshDevRemarks();
+  }
+}
+
+// For screen print label / printed label, seed Material + Special with dummy
+// defaults so the green summary words appear immediately (no need to open the
+// popup first). Other product types keep Material as TBA.
 function seedScreenPrintDefaults() {
   if (isScreenPrintProduct(devState.product)) {
     if (!devState.material || typeof devState.material !== "object" || !devState.material.recycle) {
@@ -158,6 +207,63 @@ function seedScreenPrintDefaults() {
   }
   refreshDevExtras();
 }
+
+// True when any product-specific section (Parts 3–6) already holds data, so a
+// product-type change would discard real work worth warning about.
+function productPartsHaveData() {
+  return !!(
+    (devState.colorSides && (devState.colorSides.front || devState.colorSides.back)) ||
+    devState.noOfColor || (devState.pantones && devState.pantones.length) ||
+    devState.material || devState.special || (devState.remake && devState.remake.length)
+  );
+}
+
+// Shared handler for the product-type <select> change. Changing the product
+// resets Parts 3–6 and reminds the user (in-page modal, no native alert). If
+// the user cancels, the select reverts to the previous product.
+function onProductTypeChanged(prodEl) {
+  const prevProduct = devState.product;
+  const newProduct = prodEl.value;
+  if (newProduct === prevProduct) return;
+
+  const apply = () => {
+    prodEl.value = newProduct;        // reflect the new choice in the dropdown
+    devState.product = newProduct;
+    resetProductParts();              // clears Parts 3–6 AND re-renders badges/remarks
+    if (typeof updateNextState === "function") updateNextState();
+    if (typeof updateSaveState === "function") updateSaveState();
+  };
+
+  // No data yet → just apply quietly.
+  if (!productPartsHaveData()) { apply(); return; }
+
+  // Revert the <select> so the visible value stays old until confirmed; the
+  // confirm modal's cancel path then leaves it untouched.
+  prodEl.value = prevProduct;
+  const overlay = document.createElement("div");
+  overlay.className = "modal-overlay";
+  overlay.innerHTML = `
+    <div class="modal" role="dialog" aria-modal="true" style="max-width:440px">
+      <h3>Product type changed</h3>
+      <p class="muted">Changing the product type will reset these sections to empty:</p>
+      <ul class="muted small" style="margin:6px 0 0 18px; line-height:1.7;">
+        <li>Part 3 — Colors / Pantone</li>
+        <li>Part 4 — Material</li>
+        <li>Part 5 — Special</li>
+        <li>Part 6 — Remark</li>
+      </ul>
+      <div class="actions modal-actions">
+        <button class="btn ghost" id="pt-cancel" type="button">Cancel</button>
+        <button class="btn primary" id="pt-ok" type="button">Reset &amp; continue</button>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+  overlay.addEventListener("click", (e) => { if (e.target === overlay) overlay.remove(); });
+  overlay.querySelector("#pt-cancel").addEventListener("click", () => overlay.remove());
+  overlay.querySelector("#pt-ok").addEventListener("click", () => { overlay.remove(); apply(); });
+}
+
+
 
 // Render one Pantone row for the Colors popup (editable) from a saved/blank
 // pantone object. Mirrors the inline Create/Edit layout. `i` is the 0-based
@@ -1941,7 +2047,7 @@ function wireExtraParts(root, state, updateSaveState) {
   }
   // Seed green defaults + repaint badges/hint when product changes or on mount.
   const prodEl = root.querySelector("#dev-product");
-  if (prodEl) prodEl.addEventListener("change", () => { devState.product = prodEl.value; seedScreenPrintDefaults(); });
+  if (prodEl) prodEl.addEventListener("change", () => onProductTypeChanged(prodEl));
   seedScreenPrintDefaults();
   refreshDevColorsBadge();
 
@@ -3217,8 +3323,7 @@ async function renderEnquiryEdit() {
     updateSaveState();
   });
   productEl.addEventListener("change", () => {
-    devState.product = productEl.value;
-    updateNextState();
+    onProductTypeChanged(productEl);
   });
 
   // Part 3 (Details) validation: every visible Details field must be filled
@@ -4034,9 +4139,7 @@ async function renderDevelopmentCreate() {
     updateSaveState();
   });
   productEl.addEventListener("change", () => {
-    devState.product = productEl.value;
-    seedScreenPrintDefaults();   // auto-dummy the Material/Special green words for screen print label
-    updateNextState();
+    onProductTypeChanged(productEl);
   });
 
   // Part 3 (Colors / Pantone) validation: the height/width/raised-height fields
@@ -4775,9 +4878,7 @@ async function renderDevelopmentEdit() {
     updateSaveState();
   });
   productEl.addEventListener("change", () => {
-    devState.product = productEl.value;
-    seedScreenPrintDefaults();   // auto-dummy the Material/Special green words for screen print label
-    updateNextState();
+    onProductTypeChanged(productEl);
   });
 
   // Part 3 (Colors / Pantone) validation: the height/width/raised-height fields
