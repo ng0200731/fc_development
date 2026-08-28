@@ -219,8 +219,11 @@ function onProductTypeChanged(prodEl) {
     prodEl.value = newProduct;        // reflect the new choice in the dropdown
     devState.product = newProduct;
     resetProductParts();              // clears Parts 3–6 AND re-renders badges/remarks
-    if (typeof updateNextState === "function") updateNextState();
-    if (typeof updateSaveState === "function") updateSaveState();
+    // `updateNextState`/`updateSaveState` are render-local closures (Create/Edit)
+    // and are NOT in scope here — calling them would be a no-op. Re-run the
+    // current render's gating via the module-level alias so Save re-evaluates
+    // after the reset and goes inactive (Parts 3–6 are now empty).
+    if (typeof devSaveStateFn === "function") devSaveStateFn();
   };
 
   // No data yet → just apply quietly.
