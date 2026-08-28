@@ -501,9 +501,10 @@ function openColorsViewPopup(rec) {
   overlay.querySelector("#cpv-close").addEventListener("click", () => overlay.remove());
 }
 
-// Only "screen print label" uses the full Material popup (recycle / fabric / edge).
-// Other product types keep the generic "TBA" material stub.
-const isScreenPrintProduct = (p) => p === "screen print label";
+// "screen print label" and "printed label" share the full Material popup
+// (recycle / fabric / edge / folding). Other product types keep the generic
+// "TBA" material stub.
+const isScreenPrintProduct = (p) => p === "screen print label" || p === "printed label";
 // All product types show the "No. of color" + Pantone-row layout (same as
 // "raised silicon label"). "heat transfer label" behaves like "raised silicon
 // label" for color but has no "Raised height" field — see needsRaisedHeight().
