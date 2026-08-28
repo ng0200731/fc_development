@@ -1759,7 +1759,12 @@ async function fillDummyDevelopment(ctx) {
     updateNextState();
     updateUnlock();          // renders Part 3 from current devState
     renderDevImageThumbs();  // draws the single image thumbnail
-    updateSaveState();       // enables Save (>=1 image)
+    // Reflect all seeded popups in the badges immediately (green words appear in
+    // the panel, not just inside the popup after clicking Save):
+    seedScreenPrintDefaults();   // dummy Material/Special for screen print / printed label
+    refreshDevColorsBadge();     // Part 3 colors
+    refreshDevRemarks();         // Part 6 remark list
+    updateSaveState();           // enables Save (>=1 image)
   } catch (err) {
     openConfirmModal("Dummy failed", String(err && err.message ? err.message : err), () => {});
   }
