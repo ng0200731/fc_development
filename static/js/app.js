@@ -115,6 +115,22 @@ function refreshDevExtras() {
   }
 }
 
+// Refresh the Colors (part 3) badge from devState — shows "N colors" once at
+// least one Pantone code has been entered, otherwise "TBA".
+function refreshDevColorsBadge() {
+  const badge = document.querySelector("#dev-colors-badge");
+  if (!badge) return;
+  const n = devState.noOfColor ? Number(devState.noOfColor) : 0;
+  const hasPantone = Array.isArray(devState.pantones) && devState.pantones.some((p) => p && (p.value || "").trim());
+  if (n > 0 && hasPantone) {
+    badge.textContent = `${n} color${n > 1 ? "s" : ""}`;
+    badge.classList.add("filled");
+  } else {
+    badge.textContent = "TBA";
+    badge.classList.remove("filled");
+  }
+}
+
 // For screen print label, seed Material + Special with dummy defaults so the
 // green summary words appear immediately (no need to open the popup first).
 // Other product types keep Material as TBA.
@@ -128,6 +144,155 @@ function seedScreenPrintDefaults() {
     }
   }
   refreshDevExtras();
+}
+
+// Render one Pantone row for the Colors popup (editable) from a saved/blank
+// pantone object. Mirrors the inline Create/Edit layout. `i` is the 0-based
+// index, `onChange` is called with (i, value) after each keystroke.
+function colorPantoneRowHtml(i, p, matched) {
+  const val = p && p.value ? p.value : (matched && matched.code ? matched.code : "");
+  return `
+    <div class="pantone-row">
+      <div class="field pantone-code">
+        <label for="cp-pantone-${i}">Pantone #${i + 1}</label>
+        <input id="cp-pantone-${i}" type="text" class="pantone-input"
+               data-idx="${i}" value="${escapeHtml(val)}"
+               placeholder="code (11-0103) or name (egret)" autocomplete="off" />
+        <div class="pantone-match" id="cp-pantone-match-${i}">${colorMatchHtml(matched)}</div>
+      </div>
+    </div>`;
+}
+
+// Build the match status line for a Pantone value (swatch + code/name, or
+// "No match"). Returns an HTML string (no surrounding row wrapper).
+function colorMatchHtml(matched) {
+  if (!matched) return `<span class="muted small">No match</span>`;
+  return `<div class="pantone-top">` +
+    `<span class="swatch" style="background:#${escapeHtml(matched.hex)}"></span>` +
+    `<span class="muted small">${escapeHtml(matched.code)} · ${escapeHtml(matched.name)} · ` +
+    `<span class="pantone-type" title="${escapeHtml(pantoneTypeName(matched.type))}">${escapeHtml(pantoneTypeName(matched.type))}</span> · #${escapeHtml(matched.hex)}</span>` +
+    `</div>`;
+}
+
+// Resolve a single Pantone value to its best match (or null if none).
+function matchSinglePantone(value) {
+  const matches = findPantoneMatches(value || "");
+  return matches.length ? matches[0] : null;
+}
+
+// Open the editable "Colors / Pantone" popup (Material-like). `getState` and
+// `setState` let the popup read/write the active devState (closures differ
+// between Create and Edit). `onChange` re-runs Save/Update gating + badge.
+async function openColorsPopup(getState, setState, onChange) {
+  const state = getState();
+  await ensurePantoneData();
+  // Working copy so Cancel discards edits.
+  const work = {
+    noOfColor: state.noOfColor || "",
+    pantones: (state.pantones || []).map((p) => ({ value: (p && p.value) || "", color: (p && p.color) || "#000000" })),
+  };
+  // Normalise pantones array to match noOfColor.
+  const syncPantones = () => {
+    const n = parseInt(work.noOfColor, 10);
+    if (!isNaN(n) && n > 0) {
+      while (work.pantones.length < n) work.pantones.push({ value: "", color: "#000000" });
+      if (work.pantones.length > n) work.pantones.length = n;
+    }
+  };
+  syncPantones();
+
+  const overlay = document.createElement("div");
+  overlay.className = "modal-overlay";
+  overlay.innerHTML = `
+    <div class="modal" role="dialog" aria-modal="true" style="max-width:480px">
+      <h3>Colors / Pantone</h3>
+      <div class="field">
+        <label for="cp-no-of-color">No. of color</label>
+        <input id="cp-no-of-color" type="number" min="1" step="1" placeholder="0" autocomplete="off" value="${escapeHtml(work.noOfColor)}" />
+      </div>
+      <div id="cp-pantone-wrap"></div>
+      <div class="actions modal-actions">
+        <button class="btn ghost" id="cp-cancel" type="button">Cancel</button>
+        <button class="btn primary" id="cp-save" type="button">Save</button>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+  overlay.addEventListener("click", (e) => { if (e.target === overlay) overlay.remove(); });
+
+  const wrap = overlay.querySelector("#cp-pantone-wrap");
+  const nc = overlay.querySelector("#cp-no-of-color");
+
+  const renderRows = () => {
+    syncPantones();
+    if ((parseInt(work.noOfColor, 10) || 0) <= 0) {
+      wrap.innerHTML = "";
+      return;
+    }
+    wrap.innerHTML = work.pantones.map((p, i) => {
+      const matched = p && p.value ? matchSinglePantone(p.value) : null;
+      return colorPantoneRowHtml(i, p, matched);
+    }).join("");
+
+    wrap.querySelectorAll(".pantone-input").forEach((inp) => {
+      inp.addEventListener("input", () => {
+        const i = Number(inp.dataset.idx);
+        if (!work.pantones[i]) return;
+        work.pantones[i].value = inp.value;
+        const matched = inp.value ? matchSinglePantone(inp.value) : null;
+        work.pantones[i].color = matched ? "#" + matched.hex : "#000000";
+        const matchEl = wrap.querySelector("#cp-pantone-match-" + i);
+        if (matchEl) matchEl.innerHTML = colorMatchHtml(matched);
+      });
+    });
+  };
+
+  nc.addEventListener("input", () => { work.noOfColor = nc.value; renderRows(); });
+  renderRows();
+
+  overlay.querySelector("#cp-cancel").addEventListener("click", () => overlay.remove());
+  overlay.querySelector("#cp-save").addEventListener("click", () => {
+    setState({ noOfColor: work.noOfColor || "", pantones: work.pantones.map((p) => ({ value: (p.value || "").trim(), color: p.color })) });
+    refreshDevColorsBadge();
+    if (typeof onChange === "function") onChange();
+    overlay.remove();
+  });
+}
+
+// Open a read-only "Colors / Pantone" popup from a saved Development/Enquiry
+// record (used by the View screen's Details cell click).
+function openColorsViewPopup(rec) {
+  const n = rec.no_of_color ? Number(rec.no_of_color) : 0;
+  const pantones = Array.isArray(rec.pantones) ? rec.pantones : [];
+  ensurePantoneData();   // best-effort; matches show "No match" if data not yet loaded
+  const overlay = document.createElement("div");
+  overlay.className = "modal-overlay";
+  overlay.innerHTML = `
+    <div class="modal" role="dialog" aria-modal="true" style="max-width:480px">
+      <h3>Colors / Pantone</h3>
+      <div class="field">
+        <label>No. of color</label>
+        <div class="readonly-value">${n > 0 ? escapeHtml(String(n)) : "—"}</div>
+      </div>
+      <div id="cpv-pantone-wrap">
+        ${n > 0 && pantones.length ? pantones.map((p, i) => {
+          const matched = (p && p.value) ? matchSinglePantone(p.value) : null;
+          return `
+            <div class="pantone-row">
+              <div class="field pantone-code">
+                <label>Pantone #${i + 1}</label>
+                <div class="readonly-value">${escapeHtml((p && p.value) || "—")}</div>
+                <div class="pantone-match">${colorMatchHtml(matched)}</div>
+              </div>
+            </div>`;
+        }).join("") : `<p class="muted small">No colors recorded.</p>`}
+      </div>
+      <div class="actions modal-actions">
+        <button class="btn primary" id="cpv-close" type="button">Close</button>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+  overlay.addEventListener("click", (e) => { if (e.target === overlay) overlay.remove(); });
+  overlay.querySelector("#cpv-close").addEventListener("click", () => overlay.remove());
 }
 
 // Only "screen print label" uses the full Material popup (recycle / fabric / edge).
@@ -1462,10 +1627,27 @@ function wireExtraParts(root, state, updateSaveState) {
   if (specBtn) {
     specBtn.addEventListener("click", openSpecialPopup);
   }
+
+  // --- Colors / Pantone popup (Part 3) — editable like Material ---
+  const colorsBtn = root.querySelector("#dev-colors-btn");
+  if (colorsBtn) {
+    colorsBtn.addEventListener("click", () => {
+      openColorsPopup(
+        () => state,
+        (next) => {
+          state.noOfColor = next.noOfColor;
+          state.pantones = next.pantones;
+          refreshDevColorsBadge();
+        },
+        () => { if (typeof updateSaveState === "function") updateSaveState(); }
+      );
+    });
+  }
   // Seed green defaults + repaint badges/hint when product changes or on mount.
   const prodEl = root.querySelector("#dev-product");
   if (prodEl) prodEl.addEventListener("change", () => { devState.product = prodEl.value; seedScreenPrintDefaults(); });
   seedScreenPrintDefaults();
+  refreshDevColorsBadge();
 
   // --- Remark: array of free-text strings, add one per entry ---
   const listEl = root.querySelector("#dev-remake-list");
@@ -3128,6 +3310,7 @@ async function renderDevelopmentCreate() {
     </div>
 
     <div class="dev-2col">
+      <div class="dev-col-left">
       <!-- Parts 1 + 2 + 3 stacked in one card -->
       <div class="dev-part" id="dev-main">
         <h3 class="subhead part-head">
@@ -3176,29 +3359,16 @@ async function renderDevelopmentCreate() {
           </div>
         </div>
 
-        <h3 class="subhead">3 · Details</h3>
-        <div id="dev-part3-body"></div>
       </div>
 
-      <!-- 4th part: image + documents. -->
-      <div class="dev-part" id="dev-part4">
-        <h3 class="subhead">7 · Image <span class="req-mark">required</span></h3>
-
-        <div class="dropzone" id="dev-image-drop" tabindex="0">
-          <div class="drop-region">
-            <span class="drop-icon">🖼️</span>
-            <p class="muted small drop-hint">Drop or paste an image here — required to save.<br/>A new image replaces the current one.</p>
-          </div>
-          <div class="thumb-grid" id="dev-image-thumbs"></div>
-        </div>
-
-        <h4 class="subhead">Documents <span class="req-mark optional">optional</span></h4>
-        <div class="dropzone" id="dev-doc-drop" tabindex="0">
-          <div class="drop-region">
-            <span class="drop-icon">📁</span>
-            <p class="muted small drop-hint">Drag &amp; drop multiple files here.</p>
-          </div>
-          <div class="file-list" id="dev-doc-list"></div>
+      <!-- 3 (colors) pill button, opened like Material -->
+      <div class="dev-part dev-part-extra" id="dev-colors-part">
+        <h3 class="subhead part-head">3 · Colors / Pantone</h3>
+        <div class="field">
+          <button type="button" class="pill-btn" id="dev-colors-btn">
+            Color details <span class="pill-badge" id="dev-colors-badge">TBA</span>
+          </button>
+          <p class="muted small" id="dev-colors-hint">Click to set No. of color and Pantone codes.</p>
         </div>
       </div>
 
@@ -3229,6 +3399,31 @@ async function renderDevelopmentCreate() {
           <ul class="remake-list" id="dev-remake-list"></ul>
         </div>
       </div>
+      </div><!-- /dev-col-left -->
+
+      <div class="dev-col-right">
+      <!-- 7th part: image + documents. -->
+      <div class="dev-part" id="dev-part4">
+        <h3 class="subhead">7 · Image <span class="req-mark">required</span></h3>
+
+        <div class="dropzone" id="dev-image-drop" tabindex="0">
+          <div class="drop-region">
+            <span class="drop-icon">🖼️</span>
+            <p class="muted small drop-hint">Drop or paste an image here — required to save.<br/>A new image replaces the current one.</p>
+          </div>
+          <div class="thumb-grid" id="dev-image-thumbs"></div>
+        </div>
+
+        <h4 class="subhead">Documents <span class="req-mark optional">optional</span></h4>
+        <div class="dropzone" id="dev-doc-drop" tabindex="0">
+          <div class="drop-region">
+            <span class="drop-icon">📁</span>
+            <p class="muted small drop-hint">Drag &amp; drop multiple files here.</p>
+          </div>
+          <div class="file-list" id="dev-doc-list"></div>
+        </div>
+      </div>
+      </div><!-- /dev-col-right -->
     </div>
   `;
 
@@ -3245,8 +3440,8 @@ async function renderDevelopmentCreate() {
   const dummyBtn = panel.querySelector("#dev-dummy");
 
   // --- Part 4 unlock when part 1 AND part 2 are complete ---
-  const part3Body = panel.querySelector("#dev-part3-body");
-  const part3 = part3Body;
+  const part3Body = null;
+  const part3 = null;
   const part4 = panel.querySelector("#dev-part4");
 
   const updateUnlock = () => {
@@ -3276,6 +3471,9 @@ async function renderDevelopmentCreate() {
   if (devState.product) productEl.value = devState.product;
   // restore item name
   if (devState.item) itemEl.value = devState.item;
+
+  // refresh the Colors badge from restored state (runs after the panel mounts)
+  refreshDevColorsBadge();
 
   // When the Create draft still carries a company/member/project (e.g. after a
   // "same customer" post-save), repopulate the dropdowns so Part 1 stays filled
@@ -3342,147 +3540,21 @@ async function renderDevelopmentCreate() {
   });
 
   // ---- Part 3 dynamic body (depends on product type) ----
+  // The inline Height/Width/No.of.color/Pantone rows were moved into the
+  // "3 · Colors / Pantone" popup (openColorsPopup). There is nothing to render
+  // inline any more, so this is a no-op kept for the unlock pipeline.
   const renderPart3 = () => {
     ensurePantoneData();   // load the TCX dataset (no-op if already cached)
-    // Every product type now shows No. of color + Pantone rows (like raised
-    // silicon label). Only "raised silicon label" additionally shows Raised height.
-    renderRaisedSiliconLabel();
   };
 
-  const bindDimInputs = () => {
-    const h = part3Body.querySelector("#dev-height");
-    const w = part3Body.querySelector("#dev-width");
-    if (h) { h.value = devState.height; h.addEventListener("input", () => { devState.height = h.value; updateSaveState(); }); }
-    if (w) { w.value = devState.width;  w.addEventListener("input",  () => { devState.width  = w.value; updateSaveState(); }); }
-  };
+  const bindDimInputs = () => {};
 
   const renderRaisedSiliconLabel = () => {
-    const showRaised = needsRaisedHeight(devState.product);
-    part3Body.innerHTML = `
-      <div class="dim-row">
-        <div class="field">
-          <label for="dev-height">Height (mm)</label>
-          <input id="dev-height" type="number" min="0" step="0.1" placeholder="0.0" autocomplete="off" />
-        </div>
-        <div class="field">
-          <label for="dev-width">Width (mm)</label>
-          <input id="dev-width" type="number" min="0" step="0.1" placeholder="0.0" autocomplete="off" />
-        </div>
-      </div>
-      ${showRaised ? `
-      <div class="dim-row">
-        <div class="field">
-          <label for="dev-raised-height">Raised height (mm)</label>
-          <input id="dev-raised-height" type="number" min="0" step="0.1" placeholder="0.0" autocomplete="off" />
-        </div>
-      </div>` : ``}
-      <div class="dim-row">
-        <div class="field">
-          <label for="dev-no-of-color">No. of color</label>
-          <input id="dev-no-of-color" type="number" min="1" step="1" placeholder="0" autocomplete="off" />
-        </div>
-      </div>
-      <div id="dev-pantone-wrap"></div>
-    `;
-
-    bindDimInputs();
-    const rh = part3Body.querySelector("#dev-raised-height");
-    const nc = part3Body.querySelector("#dev-no-of-color");
-    if (rh) { rh.value = devState.raisedHeight; rh.addEventListener("input", () => { devState.raisedHeight = rh.value; updateSaveState(); }); }
-    if (nc) {
-      nc.value = devState.noOfColor;
-      // update only the pantone rows (not the whole body) to keep focus
-      nc.addEventListener("input", () => {
-        devState.noOfColor = nc.value;
-        renderPantoneRows();
-        updateSaveState();
-      });
-    }
-    renderPantoneRows();
+    // Replaced by the Colors/Pantone popup — no inline inputs render here.
   };
 
-  // re-render only the pantone input rows (keeps focus on the No. of color field)
   const renderPantoneRows = () => {
-    const wrap = part3Body.querySelector("#dev-pantone-wrap");
-    if (!wrap) return;
-    const n = parseInt(devState.noOfColor, 10);
-    if (!isNaN(n) && n > 0) {
-      while (devState.pantones.length < n) devState.pantones.push({ value: "", color: "#000000" });
-      if (devState.pantones.length > n) devState.pantones.length = n;
-    }
-    if ((parseInt(devState.noOfColor, 10) || 0) <= 0) {
-      wrap.innerHTML = "";
-      return;
-    }
-    wrap.innerHTML = devState.pantones.map((p, i) => `
-      <div class="pantone-row">
-        <div class="field pantone-code">
-          <label for="dev-pantone-${i}">Pantone #${i + 1}</label>
-          <input id="dev-pantone-${i}" type="text" class="pantone-input"
-                 data-idx="${i}" value="${escapeHtml(p.value)}"
-                 placeholder="code (11-0103) or name (egret)" autocomplete="off" />
-          <div class="pantone-match" id="dev-pantone-match-${i}"></div>
-        </div>
-      </div>`).join("");
-    // Build + fill the match display for row i from a query string.
-    // Used both on live typing and when restoring state after a tab switch.
-    const showPantoneMatch = (i, query) => {
-      const matchEl = wrap.querySelector("#dev-pantone-match-" + i);
-      if (!matchEl) return;
-      const matches = findPantoneMatches(query);
-      if (!matches.length) {
-        matchEl.innerHTML = `<span class="muted small">No match</span>`;
-        return;
-      }
-      const top = matches[0];
-      if (devState.pantones[i]) devState.pantones[i].color = "#" + top.hex;
-
-      matchEl.innerHTML =
-        `<div class="pantone-top">` +
-          `<span class="swatch" style="background:#${escapeHtml(top.hex)}"></span>` +
-          `<span class="muted small">${escapeHtml(top.code)} · ${escapeHtml(top.name)} · ` +
-          `<span class="pantone-type" title="${escapeHtml(pantoneTypeName(top.type))}">${escapeHtml(pantoneTypeName(top.type))}</span> · #${escapeHtml(top.hex)}</span>` +
-        `</div>` +
-        (matches.length > 1
-          ? `<div class="pantone-similar">similar: ` +
-            matches.slice(1).map((m) =>
-              `<span class="pantone-chip" data-code="${escapeHtml(m.code)}" ` +
-              `title="${escapeHtml(m.code)} · ${escapeHtml(m.name)} · ${escapeHtml(pantoneTypeName(m.type))}">` +
-                `<span class="swatch sm" style="background:#${escapeHtml(m.hex)}"></span>` +
-                `${escapeHtml(m.name)} ` +
-                `<span class="pantone-type" title="${escapeHtml(pantoneTypeName(m.type))}">${escapeHtml(pantoneTypeName(m.type))}</span></span>`
-            ).join("") +
-            `</div>`
-          : "");
-
-      // Make the top suggestion clickable too (so the first fuzzy-match result
-      // can be selected, not just the "similar" chips).
-      const topEl = matchEl.querySelector(".pantone-top");
-      if (topEl) topEl.addEventListener("click", () => {
-        applyPantoneSelection(matchEl, wrap, i, top.code, updateSaveState);
-      });
-
-      matchEl.querySelectorAll(".pantone-chip").forEach((chip) => {
-        chip.addEventListener("click", () => {
-          applyPantoneSelection(matchEl, wrap, i, chip.dataset.code, updateSaveState);
-        });
-      });
-    };
-
-    wrap.querySelectorAll(".pantone-input").forEach((inp) => {
-      inp.addEventListener("input", () => {
-        const i = Number(inp.dataset.idx);
-        if (!devState.pantones[i]) return;
-        devState.pantones[i].value = inp.value;
-        showPantoneMatch(i, inp.value);
-        updateSaveState();
-      });
-    });
-
-    // restore any previously-typed matches (so they survive a tab switch)
-    devState.pantones.forEach((p, i) => {
-      if (p && p.value) showPantoneMatch(i, p.value);
-    });
+    // Replaced by the Colors/Pantone popup.
   };
 
   const resetCompanySelection = () => {
@@ -3647,25 +3719,13 @@ async function renderDevelopmentCreate() {
     updateNextState();
   });
 
-  // Part 3 (Details) validation: every visible Details field must be filled
-  // before Save/Update is allowed.
-  //   • Height + Width are always required.
-  //   • For "raised silicon label" / "heat transfer label": Raised height +
-  //     No. of color are required.
-  //   • When No. of color > 1, every Pantone code must be filled and be
-  //     meaningful — its length must be greater than 1 (reject single-char stubs).
+  // Part 3 (Colors / Pantone) validation: the height/width/raised-height fields
+  // were moved into the Colors/Pantone popup, so only No. of color + its Pantone
+  // codes are validated here now (mirrors the old "raised silicon label" rule).
+  //   • No. of color must be >= 1.
+  //   • When No. of color >= 1, every Pantone row must have a code of length > 1
+  //     (reject single-char stubs).
   const part3Valid = () => {
-    const h = (devState.height || "").trim();
-    const w = (devState.width || "").trim();
-    if (h.length === 0 || w.length === 0) return false;   // height + width always required
-
-    // Every product type now requires No. of color (and its Pantone rows),
-    // mirroring "raised silicon label" behaviour.
-    if (needsRaisedHeight(devState.product)) {
-      const rh = (devState.raisedHeight || "").trim();
-      if (rh.length === 0) return false;                   // raised height required (raised silicon label only)
-    }
-
     const n = parseInt(devState.noOfColor, 10);
     if (!n || n < 1) return false;                       // no. of color required (>= 1)
 
@@ -4006,6 +4066,7 @@ async function renderDevelopmentEdit() {
     </div>
 
     <div class="dev-2col">
+      <div class="dev-col-left">
       <div class="dev-part" id="dev-main">
         <h3 class="subhead part-head">
           1 · Company &amp; Member
@@ -4053,28 +4114,16 @@ async function renderDevelopmentEdit() {
           </div>
         </div>
 
-        <h3 class="subhead">3 · Details</h3>
-        <div id="dev-part3-body"></div>
       </div>
 
-      <div class="dev-part" id="dev-part4">
-        <h3 class="subhead">7 · Image <span class="req-mark">required</span></h3>
-
-        <div class="dropzone" id="dev-image-drop" tabindex="0">
-          <div class="drop-region">
-            <span class="drop-icon">🖼️</span>
-            <p class="muted small drop-hint">Drop or paste an image here — required to save.<br/>A new image replaces the current one.</p>
-          </div>
-          <div class="thumb-grid" id="dev-image-thumbs"></div>
-        </div>
-
-        <h4 class="subhead">Documents <span class="req-mark optional">optional</span></h4>
-        <div class="dropzone" id="dev-doc-drop" tabindex="0">
-          <div class="drop-region">
-            <span class="drop-icon">📁</span>
-            <p class="muted small drop-hint">Drag &amp; drop multiple files here.</p>
-          </div>
-          <div class="file-list" id="dev-doc-list"></div>
+      <!-- 3 (colors) pill button, opened like Material -->
+      <div class="dev-part dev-part-extra" id="dev-colors-part">
+        <h3 class="subhead part-head">3 · Colors / Pantone</h3>
+        <div class="field">
+          <button type="button" class="pill-btn" id="dev-colors-btn">
+            Color details <span class="pill-badge" id="dev-colors-badge">TBA</span>
+          </button>
+          <p class="muted small" id="dev-colors-hint">Click to set No. of color and Pantone codes.</p>
         </div>
       </div>
 
@@ -4105,6 +4154,31 @@ async function renderDevelopmentEdit() {
           <ul class="remake-list" id="dev-remake-list"></ul>
         </div>
       </div>
+      </div><!-- /dev-col-left -->
+
+      <div class="dev-col-right">
+      <!-- 7th part: image + documents. -->
+      <div class="dev-part" id="dev-part4">
+        <h3 class="subhead">7 · Image <span class="req-mark">required</span></h3>
+
+        <div class="dropzone" id="dev-image-drop" tabindex="0">
+          <div class="drop-region">
+            <span class="drop-icon">🖼️</span>
+            <p class="muted small drop-hint">Drop or paste an image here — required to save.<br/>A new image replaces the current one.</p>
+          </div>
+          <div class="thumb-grid" id="dev-image-thumbs"></div>
+        </div>
+
+        <h4 class="subhead">Documents <span class="req-mark optional">optional</span></h4>
+        <div class="dropzone" id="dev-doc-drop" tabindex="0">
+          <div class="drop-region">
+            <span class="drop-icon">📁</span>
+            <p class="muted small drop-hint">Drag &amp; drop multiple files here.</p>
+          </div>
+          <div class="file-list" id="dev-doc-list"></div>
+        </div>
+      </div>
+      </div><!-- /dev-col-right -->
     </div>
   `;
 
@@ -4121,8 +4195,8 @@ async function renderDevelopmentEdit() {
   const dummyBtn = panel.querySelector("#dev-dummy");
   const resetBtn = panel.querySelector("#dev-reset");
 
-  const part3Body = panel.querySelector("#dev-part3-body");
-  const part3 = part3Body;
+  const part3Body = null;
+  const part3 = null;
   const part4 = panel.querySelector("#dev-part4");
 
   const updateUnlock = () => {
@@ -4147,6 +4221,9 @@ async function renderDevelopmentEdit() {
 
   if (devState.product) productEl.value = devState.product;
   if (devState.item) itemEl.value = devState.item;
+
+  // refresh the Colors badge from the loaded record (runs after the panel mounts)
+  refreshDevColorsBadge();
 
   // The record is already fully valid: seed company/member/project dropdowns
   // synchronously so Part 2 stays enabled and Update unlocks without waiting on
@@ -4204,142 +4281,21 @@ async function renderDevelopmentEdit() {
   });
 
   // ---- Part 3 dynamic body (depends on product type) ----
+  // The inline Height/Width/No.of.color/Pantone rows were moved into the
+  // "3 · Colors / Pantone" popup (openColorsPopup). There is nothing to render
+  // inline any more, so this is a no-op kept for the unlock pipeline.
   const renderPart3 = () => {
-    ensurePantoneData();
-    // Every product type now shows No. of color + Pantone rows (like raised
-    // silicon label). Only "raised silicon label" additionally shows Raised height.
-    renderRaisedSiliconLabel();
+    ensurePantoneData();   // load the TCX dataset (no-op if already cached)
   };
 
-  const bindDimInputs = () => {
-    const h = part3Body.querySelector("#dev-height");
-    const w = part3Body.querySelector("#dev-width");
-    if (h) { h.value = devState.height; h.addEventListener("input", () => { devState.height = h.value; updateSaveState(); }); }
-    if (w) { w.value = devState.width;  w.addEventListener("input",  () => { devState.width  = w.value; updateSaveState(); }); }
-  };
+  const bindDimInputs = () => {};
 
   const renderRaisedSiliconLabel = () => {
-    const showRaised = needsRaisedHeight(devState.product);
-    part3Body.innerHTML = `
-      <div class="dim-row">
-        <div class="field">
-          <label for="dev-height">Height (mm)</label>
-          <input id="dev-height" type="number" min="0" step="0.1" placeholder="0.0" autocomplete="off" />
-        </div>
-        <div class="field">
-          <label for="dev-width">Width (mm)</label>
-          <input id="dev-width" type="number" min="0" step="0.1" placeholder="0.0" autocomplete="off" />
-        </div>
-      </div>
-      ${showRaised ? `
-      <div class="dim-row">
-        <div class="field">
-          <label for="dev-raised-height">Raised height (mm)</label>
-          <input id="dev-raised-height" type="number" min="0" step="0.1" placeholder="0.0" autocomplete="off" />
-        </div>
-      </div>` : ``}
-      <div class="dim-row">
-        <div class="field">
-          <label for="dev-no-of-color">No. of color</label>
-          <input id="dev-no-of-color" type="number" min="1" step="1" placeholder="0" autocomplete="off" />
-        </div>
-      </div>
-      <div id="dev-pantone-wrap"></div>
-    `;
-
-    bindDimInputs();
-    const rh = part3Body.querySelector("#dev-raised-height");
-    const nc = part3Body.querySelector("#dev-no-of-color");
-    if (rh) { rh.value = devState.raisedHeight; rh.addEventListener("input", () => { devState.raisedHeight = rh.value; updateSaveState(); }); }
-    if (nc) {
-      nc.value = devState.noOfColor;
-      nc.addEventListener("input", () => {
-        devState.noOfColor = nc.value;
-        renderPantoneRows();
-        updateSaveState();
-      });
-    }
-    renderPantoneRows();
+    // Replaced by the Colors/Pantone popup — no inline inputs render here.
   };
 
   const renderPantoneRows = () => {
-    const wrap = part3Body.querySelector("#dev-pantone-wrap");
-    if (!wrap) return;
-    const n = parseInt(devState.noOfColor, 10);
-    if (!isNaN(n) && n > 0) {
-      while (devState.pantones.length < n) devState.pantones.push({ value: "", color: "#000000" });
-      if (devState.pantones.length > n) devState.pantones.length = n;
-    }
-    if ((parseInt(devState.noOfColor, 10) || 0) <= 0) {
-      wrap.innerHTML = "";
-      return;
-    }
-    wrap.innerHTML = devState.pantones.map((p, i) => `
-      <div class="pantone-row">
-        <div class="field pantone-code">
-          <label for="dev-pantone-${i}">Pantone #${i + 1}</label>
-          <input id="dev-pantone-${i}" type="text" class="pantone-input"
-                 data-idx="${i}" value="${escapeHtml(p.value)}"
-                 placeholder="code (11-0103) or name (egret)" autocomplete="off" />
-          <div class="pantone-match" id="dev-pantone-match-${i}"></div>
-        </div>
-      </div>`).join("");
-    const showPantoneMatch = (i, query) => {
-      const matchEl = wrap.querySelector("#dev-pantone-match-" + i);
-      if (!matchEl) return;
-      const matches = findPantoneMatches(query);
-      if (!matches.length) {
-        matchEl.innerHTML = `<span class="muted small">No match</span>`;
-        return;
-      }
-      const top = matches[0];
-      if (devState.pantones[i]) devState.pantones[i].color = "#" + top.hex;
-
-      matchEl.innerHTML =
-        `<div class="pantone-top">` +
-          `<span class="swatch" style="background:#${escapeHtml(top.hex)}"></span>` +
-          `<span class="muted small">${escapeHtml(top.code)} · ${escapeHtml(top.name)} · ` +
-          `<span class="pantone-type" title="${escapeHtml(pantoneTypeName(top.type))}">${escapeHtml(pantoneTypeName(top.type))}</span> · #${escapeHtml(top.hex)}</span>` +
-        `</div>` +
-        (matches.length > 1
-          ? `<div class="pantone-similar">similar: ` +
-            matches.slice(1).map((m) =>
-              `<span class="pantone-chip" data-code="${escapeHtml(m.code)}" ` +
-              `title="${escapeHtml(m.code)} · ${escapeHtml(m.name)} · ${escapeHtml(pantoneTypeName(m.type))}">` +
-                `<span class="swatch sm" style="background:#${escapeHtml(m.hex)}"></span>` +
-                `${escapeHtml(m.name)} ` +
-                `<span class="pantone-type" title="${escapeHtml(pantoneTypeName(m.type))}">${escapeHtml(pantoneTypeName(m.type))}</span></span>`
-            ).join("") +
-            `</div>`
-          : "");
-
-      // Make the top suggestion clickable too (so the first fuzzy-match result
-      // can be selected, not just the "similar" chips).
-      const topEl = matchEl.querySelector(".pantone-top");
-      if (topEl) topEl.addEventListener("click", () => {
-        applyPantoneSelection(matchEl, wrap, i, top.code, updateSaveState);
-      });
-
-      matchEl.querySelectorAll(".pantone-chip").forEach((chip) => {
-        chip.addEventListener("click", () => {
-          applyPantoneSelection(matchEl, wrap, i, chip.dataset.code, updateSaveState);
-        });
-      });
-    };
-
-    wrap.querySelectorAll(".pantone-input").forEach((inp) => {
-      inp.addEventListener("input", () => {
-        const i = Number(inp.dataset.idx);
-        if (!devState.pantones[i]) return;
-        devState.pantones[i].value = inp.value;
-        showPantoneMatch(i, inp.value);
-        updateSaveState();
-      });
-    });
-
-    devState.pantones.forEach((p, i) => {
-      if (p && p.value) showPantoneMatch(i, p.value);
-    });
+    // Replaced by the Colors/Pantone popup.
   };
 
   const resetCompanySelection = () => {
@@ -4496,20 +4452,15 @@ async function renderDevelopmentEdit() {
     updateNextState();
   });
 
+  // Part 3 (Colors / Pantone) validation: the height/width/raised-height fields
+  // were moved into the Colors/Pantone popup, so only No. of color + its Pantone
+  // codes are validated here now (mirrors the old "raised silicon label" rule).
+  //   • No. of color must be >= 1.
+  //   • When No. of color >= 1, every Pantone row must have a code of length > 1
+  //     (reject single-char stubs).
   const part3Valid = () => {
-    const h = (devState.height || "").trim();
-    const w = (devState.width || "").trim();
-    if (h.length === 0 || w.length === 0) return false;
-
-    // Every product type now requires No. of color (and its Pantone rows),
-    // mirroring "raised silicon label" behaviour.
-    if (needsRaisedHeight(devState.product)) {
-      const rh = (devState.raisedHeight || "").trim();
-      if (rh.length === 0) return false;
-    }
-
     const n = parseInt(devState.noOfColor, 10);
-    if (!n || n < 1) return false;
+    if (!n || n < 1) return false;                       // no. of color required (>= 1)
 
     if (n >= 1) {
       for (const p of devState.pantones) {
@@ -4971,7 +4922,7 @@ function paintDevelopmentView() {
         <td>${remarkCell}</td>
         <td>${escapeHtml(r.created_at)}</td>
         <td>${escapeHtml(r.updated_at)}</td>
-        <td class="details-cell">${escapeHtml(devDetailsSummary(r))}</td>
+        <td class="details-cell"><button type="button" class="link-btn dev-details-btn" data-details="${r.id}" title="View color &amp; Pantone details">${escapeHtml(devDetailsSummary(r))}</button></td>
         <td class="row-actions">
           <button class="icon-btn" data-edit="${r.id}" title="Edit">✎</button>
           <button class="icon-btn danger" data-del="${r.id}" title="Delete">🗑</button>
@@ -5099,6 +5050,12 @@ function paintDevelopmentView() {
   });
   panel.querySelectorAll("[data-del]").forEach((b) => {
     b.addEventListener("click", () => deleteDevelopment(Number(b.dataset.del)));
+  });
+  panel.querySelectorAll("[data-details]").forEach((b) => {
+    b.addEventListener("click", () => {
+      const rec = devViewData.find((r) => r.id === Number(b.dataset.details));
+      if (rec) openColorsViewPopup(rec);
+    });
   });
 }
 
