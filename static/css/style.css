@@ -1054,6 +1054,23 @@ select:focus-visible,
 .modal .actions { margin-top: 16px; }
 .modal-actions { display: flex; justify-content: flex-end; gap: 10px; border-top: 1px solid var(--border); padding-top: 16px; }
 
+/* ---- Colors / Pantone popup: split Front | Back layout ---- */
+.color-sides { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; margin: 4px 0 4px; }
+.color-side { border: 1px solid var(--border); border-radius: 10px; padding: 14px 14px 12px; background: var(--surface-weak, #f8fafc); }
+.color-side h4 { margin: 0 0 12px; color: var(--text); font-size: 14px; display: flex; align-items: center; gap: 8px; }
+.color-side h4 .side-tag { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; padding: 2px 8px; border-radius: 999px; background: var(--accent); color: #fff; }
+.cs-body { display: flex; flex-direction: column; gap: 12px; }
+.cs-nocolor { display: flex; align-items: center; gap: 10px; }
+.cs-nocolor label { font-size: 13px; font-weight: 600; color: var(--text-soft); white-space: nowrap; }
+.cs-nocolor input { width: 90px; }
+.cs-pantone-wrap { display: flex; flex-direction: column; gap: 8px; }
+.cs-pantone-wrap .pantone-row { display: flex; align-items: center; gap: 8px; }
+.cs-pantone-wrap .pantone-row input { flex: 1; }
+.cs-side-add { margin-top: 4px; align-self: flex-start; }
+@media (max-width: 560px) {
+  .color-sides { grid-template-columns: 1fr; }
+}
+
 .toast {
   position: fixed;
   left: 50%;

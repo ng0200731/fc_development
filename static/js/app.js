@@ -116,12 +116,25 @@ function refreshDevExtras() {
 }
 
 // Refresh the Colors (part 3) badge from devState — shows "N colors" once at
-// least one Pantone code has been entered, otherwise "TBA".
+// least one Pantone code has been entered, otherwise "TBA". Split-color
+// products (Front/Back) show the combined total across both sides.
 function refreshDevColorsBadge() {
   const badge = document.querySelector("#dev-colors-badge");
   if (!badge) return;
-  const n = devState.noOfColor ? Number(devState.noOfColor) : 0;
-  const hasPantone = Array.isArray(devState.pantones) && devState.pantones.some((p) => p && (p.value || "").trim());
+  const split = isSplitColorProduct(devState.product);
+  let n = 0;
+  let hasPantone = false;
+  if (split && devState.colorSides) {
+    for (const side of [devState.colorSides.front, devState.colorSides.back]) {
+      if (!side) continue;
+      const m = parseInt(side.noOfColor, 10);
+      if (m > 0) n += m;
+      if (Array.isArray(side.pantones) && side.pantones.some((p) => p && (p.value || "").trim())) hasPantone = true;
+    }
+  } else {
+    n = devState.noOfColor ? Number(devState.noOfColor) : 0;
+    hasPantone = Array.isArray(devState.pantones) && devState.pantones.some((p) => p && (p.value || "").trim());
+  }
   if (n > 0 && hasPantone) {
     badge.textContent = `${n} color${n > 1 ? "s" : ""}`;
     badge.classList.add("filled");
@@ -180,37 +193,110 @@ function matchSinglePantone(value) {
   return matches.length ? matches[0] : null;
 }
 
-// Open the editable "Colors / Pantone" popup (Material-like). `getState` and
-// `setState` let the popup read/write the active devState (closures differ
-// between Create and Edit). `onChange` re-runs Save/Update gating + badge.
-async function openColorsPopup(getState, setState, onChange) {
-  const state = getState();
-  await ensurePantoneData();
-  // Working copy so Cancel discards edits.
-  const work = {
-    noOfColor: state.noOfColor || "",
-    pantones: (state.pantones || []).map((p) => ({ value: (p && p.value) || "", color: (p && p.color) || "#000000" })),
-  };
-  // Normalise pantones array to match noOfColor.
-  const syncPantones = () => {
-    const n = parseInt(work.noOfColor, 10);
+// Build a single editable color side (No. of color + Pantone rows) inside a
+// container element. Returns nothing; wires its own inputs. `side` is the
+// working { noOfColor, pantones } object; `onChange` fires after each edit.
+function renderColorSide(container, side, onChange) {
+  const sync = () => {
+    const n = parseInt(side.noOfColor, 10);
     if (!isNaN(n) && n > 0) {
-      while (work.pantones.length < n) work.pantones.push({ value: "", color: "#000000" });
-      if (work.pantones.length > n) work.pantones.length = n;
+      while (side.pantones.length < n) side.pantones.push({ value: "", color: "#000000" });
+      if (side.pantones.length > n) side.pantones.length = n;
     }
   };
-  syncPantones();
+  sync();
+
+  container.innerHTML = `
+    <div class="field">
+      <label>No. of color</label>
+      <input type="number" min="1" step="1" placeholder="0" autocomplete="off"
+             class="cs-nocolor" value="${escapeHtml(side.noOfColor || "")}" />
+    </div>
+    <div class="cs-pantone-wrap"></div>`;
+
+  const wrap = container.querySelector(".cs-pantone-wrap");
+  const nc = container.querySelector(".cs-nocolor");
+
+  const renderRows = () => {
+    sync();
+    if ((parseInt(side.noOfColor, 10) || 0) <= 0) {
+      wrap.innerHTML = "";
+      if (onChange) onChange();
+      return;
+    }
+    wrap.innerHTML = side.pantones.map((p, i) => {
+      const matched = p && p.value ? matchSinglePantone(p.value) : null;
+      return colorPantoneRowHtml(i, p, matched);
+    }).join("");
+
+    wrap.querySelectorAll(".pantone-input").forEach((inp) => {
+      inp.addEventListener("input", () => {
+        const i = Number(inp.dataset.idx);
+        if (!side.pantones[i]) return;
+        side.pantones[i].value = inp.value;
+        const matched = inp.value ? matchSinglePantone(inp.value) : null;
+        side.pantones[i].color = matched ? "#" + matched.hex : "#000000";
+        const matchEl = wrap.querySelector("#cp-pantone-match-" + i);
+        if (matchEl) matchEl.innerHTML = colorMatchHtml(matched);
+        if (onChange) onChange();
+      });
+    });
+    if (onChange) onChange();
+  };
+
+  nc.addEventListener("input", () => { side.noOfColor = nc.value; renderRows(); });
+  renderRows();
+}
+
+// Open the editable "Colors / Pantone" popup (Material-like). When the active
+// product type is split-color (Front/Back) the popup shows two side-by-side
+// sets; otherwise a single set. `getState`/`setState` read/write devState;
+// `onChange` re-runs Save/Update gating + badge.
+async function openColorsPopup(getState, setState, onChange) {
+  const state = getState();
+  const split = isSplitColorProduct(state.product);
+  await ensurePantoneData();
+
+  // Deep-clone one color side from persisted state (or empty).
+  const cloneColorSide = (s) => ({
+    noOfColor: (s && s.noOfColor) || "",
+    pantones: Array.isArray(s && s.pantones)
+      ? s.pantones.map((p) => ({ value: (p && p.value) || "", color: (p && p.color) || "#000000" }))
+      : [],
+  });
+
+  // Working copy so Cancel discards edits.
+  const work = split
+    ? {
+        front: cloneColorSide(state.colorSides && state.colorSides.front),
+        back: cloneColorSide(state.colorSides && state.colorSides.back),
+      }
+    : {
+        noOfColor: state.noOfColor || "",
+        pantones: (state.pantones || []).map((p) => ({ value: (p && p.value) || "", color: (p && p.color) || "#000000" })),
+      };
 
   const overlay = document.createElement("div");
   overlay.className = "modal-overlay";
   overlay.innerHTML = `
-    <div class="modal" role="dialog" aria-modal="true" style="max-width:480px">
+    <div class="modal" role="dialog" aria-modal="true" style="max-width:${split ? "760px" : "480px"}">
       <h3>Colors / Pantone</h3>
+      ${split ? `
+      <div class="color-sides">
+        <div class="color-side">
+          <h4 class="subhead">Front</h4>
+          <div class="cs-body" data-side="front"></div>
+        </div>
+        <div class="color-side">
+          <h4 class="subhead">Back</h4>
+          <div class="cs-body" data-side="back"></div>
+        </div>
+      </div>` : `
       <div class="field">
         <label for="cp-no-of-color">No. of color</label>
         <input id="cp-no-of-color" type="number" min="1" step="1" placeholder="0" autocomplete="off" value="${escapeHtml(work.noOfColor)}" />
       </div>
-      <div id="cp-pantone-wrap"></div>
+      <div id="cp-pantone-wrap"></div>`}
       <div class="actions modal-actions">
         <button class="btn ghost" id="cp-cancel" type="button">Cancel</button>
         <button class="btn primary" id="cp-save" type="button">Save</button>
@@ -219,39 +305,57 @@ async function openColorsPopup(getState, setState, onChange) {
   document.body.appendChild(overlay);
   overlay.addEventListener("click", (e) => { if (e.target === overlay) overlay.remove(); });
 
-  const wrap = overlay.querySelector("#cp-pantone-wrap");
-  const nc = overlay.querySelector("#cp-no-of-color");
+  if (split) {
+    overlay.querySelector('[data-side="front"]')._side = work.front;
+    overlay.querySelector('[data-side="back"]')._side = work.back;
+    renderColorSide(overlay.querySelector('[data-side="front"]'), work.front, () => {});
+    renderColorSide(overlay.querySelector('[data-side="back"]'), work.back, () => {});
+  } else {
+    const wrap = overlay.querySelector("#cp-pantone-wrap");
+    const nc = overlay.querySelector("#cp-no-of-color");
 
-  const renderRows = () => {
-    syncPantones();
-    if ((parseInt(work.noOfColor, 10) || 0) <= 0) {
-      wrap.innerHTML = "";
-      return;
-    }
-    wrap.innerHTML = work.pantones.map((p, i) => {
-      const matched = p && p.value ? matchSinglePantone(p.value) : null;
-      return colorPantoneRowHtml(i, p, matched);
-    }).join("");
+    const renderRows = () => {
+      const sync = () => {
+        const n = parseInt(work.noOfColor, 10);
+        if (!isNaN(n) && n > 0) {
+          while (work.pantones.length < n) work.pantones.push({ value: "", color: "#000000" });
+          if (work.pantones.length > n) work.pantones.length = n;
+        }
+      };
+      sync();
+      if ((parseInt(work.noOfColor, 10) || 0) <= 0) {
+        wrap.innerHTML = "";
+        return;
+      }
+      wrap.innerHTML = work.pantones.map((p, i) => {
+        const matched = p && p.value ? matchSinglePantone(p.value) : null;
+        return colorPantoneRowHtml(i, p, matched);
+      }).join("");
 
-    wrap.querySelectorAll(".pantone-input").forEach((inp) => {
-      inp.addEventListener("input", () => {
-        const i = Number(inp.dataset.idx);
-        if (!work.pantones[i]) return;
-        work.pantones[i].value = inp.value;
-        const matched = inp.value ? matchSinglePantone(inp.value) : null;
-        work.pantones[i].color = matched ? "#" + matched.hex : "#000000";
-        const matchEl = wrap.querySelector("#cp-pantone-match-" + i);
-        if (matchEl) matchEl.innerHTML = colorMatchHtml(matched);
+      wrap.querySelectorAll(".pantone-input").forEach((inp) => {
+        inp.addEventListener("input", () => {
+          const i = Number(inp.dataset.idx);
+          if (!work.pantones[i]) return;
+          work.pantones[i].value = inp.value;
+          const matched = inp.value ? matchSinglePantone(inp.value) : null;
+          work.pantones[i].color = matched ? "#" + matched.hex : "#000000";
+          const matchEl = wrap.querySelector("#cp-pantone-match-" + i);
+          if (matchEl) matchEl.innerHTML = colorMatchHtml(matched);
+        });
       });
-    });
-  };
+    };
 
-  nc.addEventListener("input", () => { work.noOfColor = nc.value; renderRows(); });
-  renderRows();
+    nc.addEventListener("input", () => { work.noOfColor = nc.value; renderRows(); });
+    renderRows();
+  }
 
   overlay.querySelector("#cp-cancel").addEventListener("click", () => overlay.remove());
   overlay.querySelector("#cp-save").addEventListener("click", () => {
-    setState({ noOfColor: work.noOfColor || "", pantones: work.pantones.map((p) => ({ value: (p.value || "").trim(), color: p.color })) });
+    if (split) {
+      setState({ colorSides: { front: work.front, back: work.back } });
+    } else {
+      setState({ noOfColor: work.noOfColor || "", pantones: work.pantones.map((p) => ({ value: (p.value || "").trim(), color: p.color })) });
+    }
     refreshDevColorsBadge();
     if (typeof onChange === "function") onChange();
     overlay.remove();
@@ -259,16 +363,40 @@ async function openColorsPopup(getState, setState, onChange) {
 }
 
 // Open a read-only "Colors / Pantone" popup from a saved Development/Enquiry
-// record (used by the View screen's Details cell click).
+// record (used by the View screen's Details cell click). Split-color products
+// (Front/Back) render two sections; others render the single No. of color +
+// Pantone list from the saved record.
 function openColorsViewPopup(rec) {
-  const n = rec.no_of_color ? Number(rec.no_of_color) : 0;
-  const pantones = Array.isArray(rec.pantones) ? rec.pantones : [];
+  const split = isSplitColorProduct(rec.product_type);
+  const sides = rec.color_sides;
   ensurePantoneData();   // best-effort; matches show "No match" if data not yet loaded
-  const overlay = document.createElement("div");
-  overlay.className = "modal-overlay";
-  overlay.innerHTML = `
-    <div class="modal" role="dialog" aria-modal="true" style="max-width:480px">
-      <h3>Colors / Pantone</h3>
+
+  const sideHtml = (label, side) => {
+    const n = side && side.noOfColor ? Number(side.noOfColor) : 0;
+    const pantones = (side && Array.isArray(side.pantones)) ? side.pantones : [];
+    return `
+      <h4 class="subhead">${label}</h4>
+      <div class="field">
+        <label>No. of color</label>
+        <div class="readonly-value">${n > 0 ? escapeHtml(String(n)) : "—"}</div>
+      </div>
+      ${n > 0 && pantones.length ? pantones.map((p, i) => {
+        const matched = (p && p.value) ? matchSinglePantone(p.value) : null;
+        return `
+          <div class="pantone-row">
+            <div class="field pantone-code">
+              <label>Pantone #${i + 1}</label>
+              <div class="readonly-value">${escapeHtml((p && p.value) || "—")}</div>
+              <div class="pantone-match">${colorMatchHtml(matched)}</div>
+            </div>
+          </div>`;
+      }).join("") : `<p class="muted small">No colors recorded.</p>`}`;
+  };
+
+  const singleHtml = () => {
+    const n = rec.no_of_color ? Number(rec.no_of_color) : 0;
+    const pantones = Array.isArray(rec.pantones) ? rec.pantones : [];
+    return `
       <div class="field">
         <label>No. of color</label>
         <div class="readonly-value">${n > 0 ? escapeHtml(String(n)) : "—"}</div>
@@ -285,7 +413,20 @@ function openColorsViewPopup(rec) {
               </div>
             </div>`;
         }).join("") : `<p class="muted small">No colors recorded.</p>`}
-      </div>
+      </div>`;
+  };
+
+  const overlay = document.createElement("div");
+  overlay.className = "modal-overlay";
+  overlay.innerHTML = `
+    <div class="modal" role="dialog" aria-modal="true" style="max-width:${split ? "760px" : "480px"}">
+      <h3>Colors / Pantone</h3>
+      ${split
+        ? `<div class="color-sides">
+             <div class="color-side">${sideHtml("Front", sides && sides.front)}</div>
+             <div class="color-side">${sideHtml("Back", sides && sides.back)}</div>
+           </div>`
+        : singleHtml()}
       <div class="actions modal-actions">
         <button class="btn primary" id="cpv-close" type="button">Close</button>
       </div>
@@ -307,6 +448,47 @@ const isColorLabelProduct = () => true;
 
 // Only "raised silicon label" additionally needs a "Raised height" field.
 const needsRaisedHeight = (p) => p === "raised silicon label";
+
+// Product types whose color popup is split into a Front side and a Back side,
+// each with its own "No. of color" + Pantone rows. All other product types
+// keep the single-set color layout (one No. of color + Pantone rows).
+const SPLIT_COLOR_PRODUCTS = ["screen print label", "printed label", "hang tag"];
+const isSplitColorProduct = (p) => SPLIT_COLOR_PRODUCTS.includes(p);
+
+// Validate one side of a split color spec: at least 1 color and every Pantone
+// row must carry a non-trivial code (length > 1), mirroring part3Valid().
+const splitSideValid = (side) => {
+  if (!side) return false;
+  const n = parseInt(side.noOfColor, 10);
+  if (!n || n < 1) return false;
+  for (const p of side.pantones) {
+    if (!p || (p.value || "").trim().length <= 1) return false;
+  }
+  return true;
+};
+// A split color spec (Front + Back) is valid only when BOTH sides are valid.
+const splitColorsValid = (sides) =>
+  !!(sides && sides.front && sides.back && splitSideValid(sides.front) && splitSideValid(sides.back));
+
+// Parse the `color_sides` signature string (from a saved record) back into the
+// { front:{noOfColor,pantones}, back:{noOfColor,pantones} } object shape.
+const parseColorSidesString = (sig) => {
+  if (!sig || typeof sig !== "string") return null;
+  const out = { front: { noOfColor: "", pantones: [] }, back: { noOfColor: "", pantones: [] } };
+  const parts = sig.split(";");
+  for (const part of parts) {
+    const m = part.match(/^([FB]):(.*)$/);
+    if (!m) continue;
+    const side = m[1] === "F" ? out.front : out.back;
+    const body = m[2];
+    const idx = body.indexOf("|");
+    if (idx === -1) { side.noOfColor = body; continue; }
+    side.noOfColor = body.slice(0, idx);
+    const codes = body.slice(idx + 1).split(",");
+    side.pantones = codes.map((c) => ({ value: c, color: c ? "#000000" : "" }));
+  }
+  return out;
+};
 
 // Dropdown option sets for the Company step of Customer / Create.
 const CURRENCIES = ["USD", "RMB", "HKD"];
@@ -1031,6 +1213,9 @@ function blankDevState() {
     raisedHeight: "",
     noOfColor: "",
     pantones: [],   // [{ value, color }]  one entry per color
+    // Split-color (Front/Back) state for screen print label / printed label / hang tag.
+    // `null` means "not applicable"; an object means the product uses the split layout.
+    colorSides: null,   // { front: { noOfColor, pantones }, back: { noOfColor, pantones } }
     // Part 4 material / Part 5 special (TBA — popup details, stored as JSON)
     material: null, // [{ ... }]  (placeholder structure, TBA)
     special: null,  // [{ ... }]  (placeholder structure, TBA)
@@ -1066,6 +1251,9 @@ function blankEnquiryState() {
     raisedHeight: "",
     noOfColor: "",
     pantones: [],   // [{ value, color }]  one entry per color
+    // Split-color (Front/Back) state for screen print label / printed label / hang tag.
+    // `null` means "not applicable"; an object means the product uses the split layout.
+    colorSides: null,   // { front: { noOfColor, pantones }, back: { noOfColor, pantones } }
     images: [],   // [{ id, name, url }] — MULTIPLE images allowed (unlike Development)
     docs: [],     // [{ id, name, file }]
   };
@@ -1200,6 +1388,7 @@ function resetDevState() {
   s.raisedHeight = "";
   s.noOfColor = "";
   s.pantones = [];
+  s.colorSides = null;
   s.material = null;   // Part 4 (TBA)
   s.special = null;    // Part 5 (TBA)
   s.remake = [];       // Part 6 (array of strings)
@@ -1235,6 +1424,7 @@ function buildDevelopmentPayload() {
     raised_height: devState.raisedHeight || null,
     no_of_color: devState.noOfColor ? Number(devState.noOfColor) : null,
     pantones: devState.pantones.filter((p) => p && p.value).map((p) => ({ value: p.value, color: p.color })),
+    color_sides: isSplitColorProduct(product) ? devState.colorSides || null : null,
     image_names: devState.images.map((i) => i.name),
     doc_names: devState.docs.map((d) => d.name),
     material: devState.material,
@@ -1355,13 +1545,30 @@ async function fillDummyDevelopment(ctx) {
     // 3) Part 3 details — set BEFORE rendering so inputs show the values.
     // Every product type now gets No. of color + Pantones (like raised
     // silicon label). Only "raised silicon label" additionally gets Raised height.
+    // Split-color products (screen print label / printed label / hang tag) get
+    // Front + Back sides instead of a single No. of color set.
     devState.height = (Math.random() * 40 + 10).toFixed(1);
     devState.width = (Math.random() * 40 + 10).toFixed(1);
     devState.raisedHeight = needsRaisedHeight(pt) ? (Math.random() * 3 + 0.5).toFixed(1) : "";
-    devState.noOfColor = String(Math.floor(Math.random() * 4) + 1);
-    devState.pantones = [];
-    for (let i = 0; i < Number(devState.noOfColor); i++) {
-      devState.pantones.push({ value: "19-" + (Math.floor(Math.random() * 400) + 100) + " TCX", color: "#888888" });
+    if (isSplitColorProduct(pt)) {
+      const mkSide = () => {
+        const n = String(Math.floor(Math.random() * 4) + 1);
+        const pantones = [];
+        for (let i = 0; i < Number(n); i++) {
+          pantones.push({ value: "19-" + (Math.floor(Math.random() * 400) + 100) + " TCX", color: "#888888" });
+        }
+        return { noOfColor: n, pantones };
+      };
+      devState.colorSides = { front: mkSide(), back: mkSide() };
+      devState.noOfColor = "";
+      devState.pantones = [];
+    } else {
+      devState.noOfColor = String(Math.floor(Math.random() * 4) + 1);
+      devState.pantones = [];
+      for (let i = 0; i < Number(devState.noOfColor); i++) {
+        devState.pantones.push({ value: "19-" + (Math.floor(Math.random() * 400) + 100) + " TCX", color: "#888888" });
+      }
+      devState.colorSides = null;
     }
 
     // 4) single image from the pool (attachments are optional — but the Dummy
@@ -1430,13 +1637,29 @@ async function fillDummyEnquiry(ctx) {
 
       // Every product type now gets No. of color + Pantones (like raised
       // silicon label). Only "raised silicon label" additionally gets Raised height.
+      // Split-color products get Front + Back sides.
       devState.height = (Math.random() * 40 + 10).toFixed(1);
       devState.width = (Math.random() * 40 + 10).toFixed(1);
       devState.raisedHeight = needsRaisedHeight(pt) ? (Math.random() * 3 + 0.5).toFixed(1) : "";
-      devState.noOfColor = String(Math.floor(Math.random() * 4) + 1);
-      devState.pantones = [];
-      for (let i = 0; i < Number(devState.noOfColor); i++) {
-        devState.pantones.push({ value: "19-" + (Math.floor(Math.random() * 400) + 100) + " TCX", color: "#888888" });
+      if (isSplitColorProduct(pt)) {
+        const mkSide = () => {
+          const n = String(Math.floor(Math.random() * 4) + 1);
+          const pantones = [];
+          for (let i = 0; i < Number(n); i++) {
+            pantones.push({ value: "19-" + (Math.floor(Math.random() * 400) + 100) + " TCX", color: "#888888" });
+          }
+          return { noOfColor: n, pantones };
+        };
+        devState.colorSides = { front: mkSide(), back: mkSide() };
+        devState.noOfColor = "";
+        devState.pantones = [];
+      } else {
+        devState.noOfColor = String(Math.floor(Math.random() * 4) + 1);
+        devState.pantones = [];
+        for (let i = 0; i < Number(devState.noOfColor); i++) {
+          devState.pantones.push({ value: "19-" + (Math.floor(Math.random() * 400) + 100) + " TCX", color: "#888888" });
+        }
+        devState.colorSides = null;
       }
     }
 
@@ -1635,8 +1858,15 @@ function wireExtraParts(root, state, updateSaveState) {
       openColorsPopup(
         () => state,
         (next) => {
-          state.noOfColor = next.noOfColor;
-          state.pantones = next.pantones;
+          if (next.colorSides && Object.keys(next.colorSides).length) {
+            state.colorSides = next.colorSides;
+            state.noOfColor = "";
+            state.pantones = [];
+          } else {
+            state.colorSides = null;
+            state.noOfColor = next.noOfColor;
+            state.pantones = next.pantones;
+          }
           refreshDevColorsBadge();
         },
         () => { if (typeof updateSaveState === "function") updateSaveState(); }
@@ -1837,6 +2067,9 @@ function resetEnquiryState() {
   s.memberName = "";
   s.projectId = "";
   s.projectName = "";
+  s.noOfColor = "";
+  s.pantones = [];
+  s.colorSides = null;
   s.images = [];
 }
 
@@ -1874,6 +2107,7 @@ function buildEnquiryPayload() {
     raised_height: devState.raisedHeight || null,
     no_of_color: devState.noOfColor ? Number(devState.noOfColor) : null,
     pantones: devState.pantones.filter((p) => p && p.value).map((p) => ({ value: p.value, color: p.color })),
+    color_sides: isSplitColorProduct(product) ? devState.colorSides || null : null,
     image_names: devState.images.map((i) => i.name),
     doc_names: devState.docs.map((d) => d.name),
     material: devState.material,
@@ -2924,6 +3158,11 @@ async function renderEnquiryEdit() {
       if (rh.length === 0) return false;                   // raised height required (raised silicon label only)
     }
 
+    // Split-color products require BOTH Front and Back sides to be valid.
+    if (isSplitColorProduct(devState.product)) {
+      return splitColorsValid(devState.colorSides);
+    }
+
     const n = parseInt(devState.noOfColor, 10);
     if (!n || n < 1) return false;                       // no. of color required (>= 1)
 
@@ -2949,6 +3188,7 @@ async function renderEnquiryEdit() {
     raised_height: devState.raisedHeight ? Number(devState.raisedHeight) : null,
     no_of_color: devState.noOfColor ? Number(devState.noOfColor) : null,
     pantones: devState.pantones.filter((p) => p && p.value).map((p) => ({ value: p.value.trim(), color: p.color })),
+    color_sides: isSplitColorProduct(devState.product) ? (devState.colorSides || null) : null,
     image_names: devState.images.map((i) => i.name).sort(),
     doc_names: devState.docs.map((d) => d.name).sort(),
   });
@@ -2965,6 +3205,9 @@ async function renderEnquiryEdit() {
     raised_height: enquiryOriginal.raised_height != null ? Number(enquiryOriginal.raised_height) : null,
     no_of_color: enquiryOriginal.no_of_color != null ? Number(enquiryOriginal.no_of_color) : null,
     pantones: (enquiryOriginal.pantones || []).map((p) => ({ value: (p.value || "").trim(), color: p.color })),
+    color_sides: enquiryOriginal.color_sides
+      ? (typeof enquiryOriginal.color_sides === "string" ? parseColorSidesString(enquiryOriginal.color_sides) : enquiryOriginal.color_sides)
+      : null,
     image_names: (enquiryOriginal.image_names || []).slice().sort(),
     doc_names: (enquiryOriginal.doc_names || []).slice().sort(),
   });
@@ -3726,6 +3969,12 @@ async function renderDevelopmentCreate() {
   //   • When No. of color >= 1, every Pantone row must have a code of length > 1
   //     (reject single-char stubs).
   const part3Valid = () => {
+    // Split-color products require BOTH Front and Back sides to be valid.
+    // Other product types keep the single No. of color + Pantone-row validation.
+    if (isSplitColorProduct(devState.product)) {
+      return splitColorsValid(devState.colorSides);
+    }
+
     const n = parseInt(devState.noOfColor, 10);
     if (!n || n < 1) return false;                       // no. of color required (>= 1)
 
@@ -3754,6 +4003,7 @@ async function renderDevelopmentCreate() {
     raised_height: devState.raisedHeight ? Number(devState.raisedHeight) : null,
     no_of_color: devState.noOfColor ? Number(devState.noOfColor) : null,
     pantones: devState.pantones.filter((p) => p && p.value).map((p) => ({ value: p.value.trim(), color: p.color })),
+    color_sides: isSplitColorProduct(devState.product) ? (devState.colorSides || null) : null,
     image_names: devState.images.map((i) => i.name).sort(),
     doc_names: devState.docs.map((d) => d.name).sort(),
   });
@@ -3770,6 +4020,7 @@ async function renderDevelopmentCreate() {
     raised_height: devOriginal.raised_height != null ? Number(devOriginal.raised_height) : null,
     no_of_color: devOriginal.no_of_color != null ? Number(devOriginal.no_of_color) : null,
     pantones: (devOriginal.pantones || []).map((p) => ({ value: (p.value || "").trim(), color: p.color })),
+    color_sides: isSplitColorProduct(devOriginal.product_type) ? (devOriginal.color_sides || null) : null,
     image_names: (devOriginal.image_names || []).slice().sort(),
     doc_names: (devOriginal.doc_names || []).slice().sort(),
     material: devOriginal.material,
@@ -4459,6 +4710,11 @@ async function renderDevelopmentEdit() {
   //   • When No. of color >= 1, every Pantone row must have a code of length > 1
   //     (reject single-char stubs).
   const part3Valid = () => {
+    // Split-color products require BOTH Front and Back sides to be valid.
+    if (isSplitColorProduct(devState.product)) {
+      return splitColorsValid(devState.colorSides);
+    }
+
     const n = parseInt(devState.noOfColor, 10);
     if (!n || n < 1) return false;                       // no. of color required (>= 1)
 
@@ -4484,6 +4740,7 @@ async function renderDevelopmentEdit() {
     raised_height: devState.raisedHeight ? Number(devState.raisedHeight) : null,
     no_of_color: devState.noOfColor ? Number(devState.noOfColor) : null,
     pantones: devState.pantones.filter((p) => p && p.value).map((p) => ({ value: p.value.trim(), color: p.color })),
+    color_sides: isSplitColorProduct(devState.product) ? (devState.colorSides || null) : null,
     image_names: devState.images.map((i) => i.name).sort(),
     doc_names: devState.docs.map((d) => d.name).sort(),
     material: devState.material,
@@ -4503,6 +4760,9 @@ async function renderDevelopmentEdit() {
     raised_height: devOriginal.raised_height != null ? Number(devOriginal.raised_height) : null,
     no_of_color: devOriginal.no_of_color != null ? Number(devOriginal.no_of_color) : null,
     pantones: (devOriginal.pantones || []).map((p) => ({ value: (p.value || "").trim(), color: p.color })),
+    color_sides: devOriginal.color_sides
+      ? (typeof devOriginal.color_sides === "string" ? parseColorSidesString(devOriginal.color_sides) : devOriginal.color_sides)
+      : null,
     image_names: (devOriginal.image_names || []).slice().sort(),
     doc_names: (devOriginal.doc_names || []).slice().sort(),
     material: devOriginal.material,
@@ -4757,6 +5017,11 @@ async function renderDevelopmentEdit() {
       s.raisedHeight = devOriginal.raised_height != null ? String(devOriginal.raised_height) : "";
       s.noOfColor = devOriginal.no_of_color != null ? String(devOriginal.no_of_color) : "";
       s.pantones = Array.isArray(devOriginal.pantones) ? devOriginal.pantones.map((p) => ({ value: p.value || "", color: p.color || "#000000" })) : [];
+      s.colorSides = isSplitColorProduct(devOriginal.product_type) && devOriginal.color_sides
+        ? (typeof devOriginal.color_sides === "string"
+            ? parseColorSidesString(devOriginal.color_sides)
+            : (devOriginal.color_sides || null))
+        : null;
       s.images = (devOriginal.image_names || []).map((n) => ({ id: "eimg-" + n, name: n, url: assetUrl(n) }));
       s.docs = (devOriginal.doc_names || []).map((name, i) => ({ id: "edoc-" + devEditId + "-" + i, name, file: null }));
       s.material = devOriginal.material != null ? devOriginal.material : null;
@@ -4813,7 +5078,19 @@ function devDetailsSummary(d) {
     parts.push(`${(d.height || "?")} × ${(d.width || "?")} mm`);
   }
   if (needsRaisedHeight(d.product_type) && d.raised_height) parts.push(`raised ${d.raised_height} mm`);
-  if (d.no_of_color) {
+  // Split-color products (screen print label / printed label / hang tag) store
+  // their colors under `color_sides` (Front + Back); others use no_of_color/pantones.
+  const sides = d.color_sides;
+  if (sides && (sides.front || sides.back)) {
+    for (const label of ["front", "back"]) {
+      const side = sides[label];
+      if (!side) continue;
+      const n = side.noOfColor ? Number(side.noOfColor) : 0;
+      if (!n) continue;
+      const cols = (side.pantones || []).filter((p) => p && p.value).map((p) => p.value);
+      parts.push(`${label.charAt(0).toUpperCase() + label.slice(1)} ${n} color${n > 1 ? "s" : ""}` + (cols.length ? ` (${cols.join(", ")})` : ""));
+    }
+  } else if (d.no_of_color) {
     const cols = (d.pantones || []).filter((p) => p && p.value).map((p) => p.value);
     parts.push(`${d.no_of_color} color${Number(d.no_of_color) > 1 ? "s" : ""}` + (cols.length ? ` (${cols.join(", ")})` : ""));
   }
@@ -5130,6 +5407,9 @@ async function editDevelopmentInCreate(id) {
   s.raisedHeight = rec.raised_height != null ? String(rec.raised_height) : "";
   s.noOfColor = rec.no_of_color != null ? String(rec.no_of_color) : "";
   s.pantones = Array.isArray(rec.pantones) ? rec.pantones.map((p) => ({ value: p.value || "", color: p.color || "#000000" })) : [];
+  s.colorSides = isSplitColorProduct(rec.product_type) && rec.color_sides
+    ? (typeof rec.color_sides === "string" ? parseColorSidesString(rec.color_sides) : (rec.color_sides || null))
+    : null;
 
   // Part 4/5/6 — material & special (TBA structures) + remark (array of strings).
   s.material = rec.material != null ? rec.material : null;
@@ -5212,7 +5492,18 @@ async function openDevEditModal(id) {
           <input id="ed-width" type="number" step="0.1" value="${escapeHtml(rec.width ?? "")}" />
         </div>
       </div>
-      ${needsRaisedHeight(rec.product_type) ? `
+      ${isSplitColorProduct(rec.product_type) ? `
+      <div class="dim-row" style="grid-template-columns:1fr 1fr;">
+        <div class="field">
+          <label for="ed-nocolor-front">No. of color — Front</label>
+          <input id="ed-nocolor-front" type="number" step="1" value="${escapeHtml((rec.color_sides && rec.color_sides.front && rec.color_sides.front.noOfColor) ?? "")}" />
+        </div>
+        <div class="field">
+          <label for="ed-nocolor-back">No. of color — Back</label>
+          <input id="ed-nocolor-back" type="number" step="1" value="${escapeHtml((rec.color_sides && rec.color_sides.back && rec.color_sides.back.noOfColor) ?? "")}" />
+        </div>
+      </div>
+      ` : needsRaisedHeight(rec.product_type) ? `
       <div class="dim-row">
         <div class="field">
           <label for="ed-raised">Raised height (mm)</label>
@@ -5514,8 +5805,12 @@ async function openDevEditModal(id) {
       height: overlay.querySelector("#ed-height").value || null,
       width: overlay.querySelector("#ed-width").value || null,
       raised_height: needsRaisedHeight(product_type) ? overlay.querySelector("#ed-raised")?.value || null : null,
-      no_of_color: overlay.querySelector("#ed-nocolor").value || null,
-      pantones: rec.pantones || [],
+      no_of_color: isSplitColorProduct(product_type) ? null : overlay.querySelector("#ed-nocolor").value || null,
+      pantones: isSplitColorProduct(product_type) ? [] : (rec.pantones || []),
+      color_sides: isSplitColorProduct(product_type) ? {
+        front: { noOfColor: overlay.querySelector("#ed-nocolor-front")?.value || "", pantones: (rec.color_sides && rec.color_sides.front && rec.color_sides.front.pantones) || [] },
+        back: { noOfColor: overlay.querySelector("#ed-nocolor-back")?.value || "", pantones: (rec.color_sides && rec.color_sides.back && rec.color_sides.back.pantones) || [] },
+      } : null,
       image_names: editImages.map((i) => i.name),
       doc_names: editDocs.map((d) => d.name),
       material: isScreenPrintProduct(product_type) ? {
@@ -5847,6 +6142,9 @@ async function editEnquiryInEdit(id) {
   s.pantones = Array.isArray(rec.pantones)
     ? rec.pantones.map((p) => ({ value: p.value || "", color: p.color || "#000000" }))
     : [];
+  s.colorSides = isSplitColorProduct(rec.product_type) && rec.color_sides
+    ? (typeof rec.color_sides === "string" ? parseColorSidesString(rec.color_sides) : (rec.color_sides || null))
+    : null;
 
   // images — resolve each saved name to its servable URL
   s.images = (rec.image_names || []).map((n) => ({

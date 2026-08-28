@@ -184,6 +184,7 @@ _DEV_MISSING_COLUMNS = {
     "material": "TEXT",
     "special": "TEXT",
     "remake": "TEXT",
+    "color_sides": "TEXT",
 }
 
 
@@ -207,6 +208,7 @@ _ENQUIRY_MISSING_COLUMNS = {
     "no_of_color": "INTEGER",
     "pantones": "TEXT",
     "doc_names": "TEXT",
+    "color_sides": "TEXT",
 }
 
 
@@ -534,7 +536,28 @@ def dev_details_summary(d):
         parts.append(f"{(d.get('height') or '?')} × {(d.get('width') or '?')} mm")
     if d.get("raised_height"):
         parts.append(f"raised {d.get('raised_height')} mm")
-    if d.get("no_of_color"):
+    # Split-color products (screen print / printed label / hang tag) store their
+    # colors under `color_sides` (Front + Back); others use no_of_color/pantones.
+    sides = d.get("color_sides")
+    if sides and (sides.get("front") or sides.get("back")):
+        for label in ("front", "back"):
+            side = sides.get(label)
+            if not side:
+                continue
+            n = side.get("no_of_color")
+            if not n:
+                continue
+            cols = [(p.get("value") if isinstance(p, dict) else p)
+                    for p in (side.get("pantones") or []) if p]
+            try:
+                plural = int(n) > 1
+            except (TypeError, ValueError):
+                plural = False
+            parts.append(
+                f"{label.capitalize()} {n} color{'s' if plural else ''}"
+                + (f" ({', '.join(str(c) for c in cols)})" if cols else "")
+            )
+    elif d.get("no_of_color"):
         cols = [(p.get("value") if isinstance(p, dict) else p)
                 for p in (d.get("pantones") or []) if p]
         n = d.get("no_of_color")
@@ -1119,6 +1142,13 @@ def _dev_row_to_payload(row):
                 out[k] = out[k]
         else:
             out[k] = None
+    if out.get("color_sides"):
+        try:
+            out["color_sides"] = json.loads(out["color_sides"])
+        except (json.JSONDecodeError, TypeError):
+            out["color_sides"] = None
+    else:
+        out["color_sides"] = None
     return out
 
 
@@ -1166,6 +1196,9 @@ def _dev_insert_or_update(conn, did, data):
         special = json.dumps(special, ensure_ascii=False)
     if isinstance(remake, (list, dict)):
         remake = json.dumps(remake, ensure_ascii=False)
+    color_sides = data.get("color_sides")
+    if isinstance(color_sides, (list, dict)):
+        color_sides = json.dumps(color_sides, ensure_ascii=False)
     vals = (
         data.get("company_id") if did is None else (data.get("company_id") if data.get("company_id") is not None else None),
         company_name,
@@ -1185,6 +1218,7 @@ def _dev_insert_or_update(conn, did, data):
         material,
         special,
         remake,
+        color_sides,
     )
     if did is None:
         cur = conn.cursor()
@@ -1192,8 +1226,8 @@ def _dev_insert_or_update(conn, did, data):
             "INSERT INTO developments "
             "(company_id, company_name, member_id, member_name, project_id, project_name, "
             "item_name, product_type, height, width, raised_height, no_of_color, pantones, "
-            "image_names, doc_names, material, special, remake, created_at, updated_at) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "image_names, doc_names, material, special, remake, color_sides, created_at, updated_at) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             vals + (now_iso(), now_iso()),
         )
         return cur.lastrowid
@@ -1201,7 +1235,7 @@ def _dev_insert_or_update(conn, did, data):
         "UPDATE developments SET "
         "company_id=?, company_name=?, member_id=?, member_name=?, project_id=?, project_name=?, "
         "item_name=?, product_type=?, height=?, width=?, raised_height=?, no_of_color=?, "
-        "pantones=?, image_names=?, doc_names=?, material=?, special=?, remake=?, updated_at=? WHERE id=?",
+        "pantones=?, image_names=?, doc_names=?, material=?, special=?, remake=?, color_sides=?, updated_at=? WHERE id=?",
         vals + (now_iso(), did),
     )
     return did
@@ -1284,6 +1318,13 @@ def _enquiry_row_to_payload(row):
                 out[k] = out[k]
         else:
             out[k] = None
+    if out.get("color_sides"):
+        try:
+            out["color_sides"] = json.loads(out["color_sides"])
+        except (json.JSONDecodeError, TypeError):
+            out["color_sides"] = None
+    else:
+        out["color_sides"] = None
     return out
 
 
@@ -1320,6 +1361,9 @@ def _enquiry_insert_or_update(conn, eid, data):
     doc_names = data.get("doc_names")
     if isinstance(doc_names, (list, dict)):
         doc_names = json.dumps(doc_names, ensure_ascii=False)
+    color_sides = data.get("color_sides")
+    if isinstance(color_sides, (list, dict)):
+        color_sides = json.dumps(color_sides, ensure_ascii=False)
     vals = (
         data.get("company_id") if data.get("company_id") is not None else None,
         company_name,
@@ -1336,6 +1380,7 @@ def _enquiry_insert_or_update(conn, eid, data):
         pantones,
         image_names,
         doc_names,
+        color_sides,
     )
     if eid is None:
         cur = conn.cursor()
@@ -1343,8 +1388,8 @@ def _enquiry_insert_or_update(conn, eid, data):
             "INSERT INTO enquiries "
             "(company_id, company_name, member_id, member_name, project_id, project_name, "
             "item_name, product_type, height, width, raised_height, no_of_color, pantones, "
-            "image_names, doc_names, created_at, updated_at) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "image_names, doc_names, color_sides, created_at, updated_at) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             vals + (now_iso(), now_iso()),
         )
         return cur.lastrowid
@@ -1352,7 +1397,7 @@ def _enquiry_insert_or_update(conn, eid, data):
         "UPDATE enquiries SET "
         "company_id=?, company_name=?, member_id=?, member_name=?, project_id=?, project_name=?, "
         "item_name=?, product_type=?, height=?, width=?, raised_height=?, no_of_color=?, "
-        "pantones=?, image_names=?, doc_names=?, updated_at=? WHERE id=?",
+        "pantones=?, image_names=?, doc_names=?, color_sides=?, updated_at=? WHERE id=?",
         vals + (now_iso(), eid),
     )
     return eid
