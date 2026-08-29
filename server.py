@@ -149,11 +149,25 @@ def init_db():
         )
         """
     )
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS options (
+            id       INTEGER PRIMARY KEY AUTOINCREMENT,
+            level    TEXT NOT NULL,
+            name     TEXT NOT NULL,
+            value    TEXT NOT NULL,
+            position INTEGER NOT NULL DEFAULT 0,
+            UNIQUE(level, name, value)
+        )
+        """
+    )
     # Migrations: add any columns introduced after the initial schema so that
     # an existing database (already created without them) keeps working.
     _ensure_company_columns(conn)
     _ensure_dev_columns(conn)
     _ensure_enquiry_columns(conn)
+    _migrate_options_table(conn)
+    _seed_options(conn)
     conn.commit()
     conn.close()
 
@@ -218,6 +232,219 @@ def _ensure_enquiry_columns(conn):
     for col, ctype in _ENQUIRY_MISSING_COLUMNS.items():
         if col not in existing:
             cur.execute(f"ALTER TABLE enquiries ADD COLUMN {col} {ctype}")
+
+
+# Definition of every managed dropdown option set, grouped by menu level.
+# `name` is the stable key used in the DB and the frontend; `label` is shown
+# in the Settings UI. `seed` provides the initial values on a fresh database.
+_OPTION_GROUP_DEFS = {
+    "customer": [
+        {"name": "currency", "label": "Currency", "seed": ["USD", "RMB", "HKD"]},
+        {"name": "payment_term", "label": "Payment term", "seed": ["COD", "credit 30 days", "credit 45 days"]},
+        {"name": "shipment_term", "label": "Shipment term", "seed": ["Ex Work", "Door 2 Door", "FOB", "CIF"]},
+    ],
+    "development": [
+        {"name": "product_type", "label": "Product type", "seed": [
+            "woven label", "printed label", "screen print label", "hang tag",
+            "raised silicon label", "heat transfer label", "leather patch", "embroidery patch",
+        ]},
+        {"name": "fabric", "label": "Fabric", "seed": ["polyester", "nylon", "cotton"]},
+        {"name": "folding", "label": "Folding", "seed": [
+            "loop fold", "end fold", "straight cut", "mitre fold", "Manhattan Fold", "Asymmetrical Fold",
+        ]},
+    ],
+    "enquiry": [
+        {"name": "product_type", "label": "Product type", "seed": [
+            "woven label", "printed label", "screen print label", "hang tag",
+            "raised silicon label", "heat transfer label", "leather patch", "embroidery patch",
+        ]},
+        {"name": "currency", "label": "Currency", "seed": ["USD", "RMB", "HKD"]},
+        {"name": "payment_term", "label": "Payment term", "seed": ["COD", "credit 30 days", "credit 45 days"]},
+        {"name": "shipment_term", "label": "Shipment term", "seed": ["Ex Work", "Door 2 Door", "FOB", "CIF"]},
+    ],
+}
+
+
+# Migrate the `options` table from the legacy shape (category, value, seq,
+# owner_id) to the new (level, name, value, position) shape used by the
+# Settings / Options manager. Runs once and is idempotent.
+def _migrate_options_table(conn):
+    cur = conn.cursor()
+    cols = {r[1] for r in cur.execute("PRAGMA table_info(options)").fetchall()}
+    # Legacy shape: has `category` but not our new `level`/`name` pair.
+    if "category" in cols and "level" not in cols:
+        # Legacy data stored product types under a single shared list
+        # (category='product_type', one owner). Map it onto the two product_type
+        # groups (development + enquiry) so the values survive the migration.
+        cur.execute(
+            "UPDATE options SET level='development', name='product_type' WHERE category='product_type'"
+        )
+        # Re-normalise seq -> position per (level, name) group.
+        rows = cur.execute(
+            "SELECT id, seq FROM options WHERE level IS NOT NULL"
+        ).fetchall()
+        for r in rows:
+            cur.execute(
+                "UPDATE options SET position=? WHERE id=?", (r[1] or 0, r[0])
+            )
+        # Rebuild without the legacy columns; add NOT NULL defaults for level/name.
+        cur.execute("CREATE TABLE options_new ("
+                    "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+                    "level TEXT NOT NULL DEFAULT '', name TEXT NOT NULL DEFAULT '', "
+                    "value TEXT NOT NULL, position INTEGER NOT NULL DEFAULT 0, "
+                    "UNIQUE(level, name, value))")
+        cur.execute("INSERT INTO options_new (id, level, name, value, position) "
+                    "SELECT id, COALESCE(level, ''), COALESCE(name, ''), value, position FROM options")
+        cur.execute("DROP TABLE options")
+        cur.execute("ALTER TABLE options_new RENAME TO options")
+        cols = {r[1] for r in cur.execute("PRAGMA table_info(options)").fetchall()}
+    # Already in the new shape, or just migrated — ensure level/name are present.
+    if "level" not in cols or "name" not in cols:
+        cur.execute("ALTER TABLE options ADD COLUMN level TEXT NOT NULL DEFAULT ''")
+        cur.execute("ALTER TABLE options ADD COLUMN name TEXT NOT NULL DEFAULT ''")
+    if "position" not in cols:
+        cur.execute("ALTER TABLE options ADD COLUMN position INTEGER NOT NULL DEFAULT 0")
+
+
+# Seed the `options` table once, on a fresh database (empty table), so the
+# dropdown lists start with today's hardcoded values. Existing rows are kept.
+def _seed_options(conn):
+    cur = conn.cursor()
+    # Seed per (level, name) group so that only genuinely empty groups get the
+    # default values — existing data (including migrated legacy rows) is kept.
+    for level, groups in _OPTION_GROUP_DEFS.items():
+        for g in groups:
+            have = cur.execute(
+                "SELECT 1 FROM options WHERE level=? AND name=?", (level, g["name"])
+            ).fetchone()
+            if have:
+                continue
+            for p, v in enumerate(g["seed"]):
+                cur.execute(
+                    "INSERT INTO options (level, name, value, position) VALUES (?, ?, ?, ?)",
+                    (level, g["name"], v, p),
+                )
+
+
+def _options_payload():
+    """Build the full {level: [{name,label,values:[{id,value}]}]} payload."""
+    conn = db()
+    rows = conn.execute(
+        "SELECT id, level, name, value, position FROM options ORDER BY level, name, position"
+    ).fetchall()
+    conn.close()
+    by_key = {}
+    for r in rows:
+        by_key.setdefault((r["level"], r["name"]), []).append({"id": r["id"], "value": r["value"]})
+    out = {}
+    for level, groups in _OPTION_GROUP_DEFS.items():
+        out[level] = [
+            {"name": g["name"], "label": g["label"], "values": by_key.get((level, g["name"]), [])}
+            for g in groups
+        ]
+    return out
+
+
+def api_get_options(handler):
+    return json_response(handler, _options_payload())
+
+
+def api_add_option(handler):
+    data = read_json_body(handler)
+    level = (data.get("level") or "").strip()
+    name = (data.get("name") or "").strip()
+    value = (data.get("value") or "").strip()
+    if level not in _OPTION_GROUP_DEFS or not name or not value:
+        return json_response(handler, {"error": "level, name and value are required"}, 400)
+    conn = db()
+    exists = conn.execute(
+        "SELECT 1 FROM options WHERE level=? AND name=? AND value=?", (level, name, value)
+    ).fetchone()
+    if exists:
+        conn.close()
+        return json_response(handler, {"error": "option already exists"}, 409)
+    max_pos = conn.execute(
+        "SELECT COALESCE(MAX(position), -1) AS m FROM options WHERE level=? AND name=?", (level, name)
+    ).fetchone()["m"]
+    cur = conn.cursor()
+    cur.execute(
+        "INSERT INTO options (level, name, value, position) VALUES (?, ?, ?, ?)",
+        (level, name, value, max_pos + 1),
+    )
+    oid = cur.lastrowid
+    row = conn.execute(
+        "SELECT id, level, name, value, position FROM options WHERE id=?", (oid,)
+    ).fetchone()
+    conn.commit()
+    conn.close()
+    return json_response(handler, dict(row), 201)
+
+
+def api_reorder_options(handler):
+    data = read_json_body(handler)
+    level = (data.get("level") or "").strip()
+    name = (data.get("name") or "").strip()
+    ordered = data.get("orderedValues")
+    if level not in _OPTION_GROUP_DEFS or not name or not isinstance(ordered, list):
+        return json_response(handler, {"error": "level, name and orderedValues[] required"}, 400)
+    conn = db()
+    # Only move values that actually belong to this (level, name) group.
+    valid = {r["value"] for r in conn.execute(
+        "SELECT value FROM options WHERE level=? AND name=?", (level, name)).fetchall()}
+    pos = 0
+    for v in ordered:
+        if v in valid:
+            conn.execute(
+                "UPDATE options SET position=? WHERE level=? AND name=? AND value=?",
+                (pos, level, name, v),
+            )
+            pos += 1
+    conn.commit()
+    conn.close()
+    return json_response(handler, {"ok": True}, 200)
+
+
+def api_rename_option(handler, oid):
+    conn = db()
+    row = conn.execute("SELECT * FROM options WHERE id=?", (oid,)).fetchone()
+    if not row:
+        conn.close()
+        return json_response(handler, {"error": "not found"}, 404)
+    data = read_json_body(handler)
+    value = (data.get("value") or "").strip()
+    if not value:
+        conn.close()
+        return json_response(handler, {"error": "value is required"}, 400)
+    clash = conn.execute(
+        "SELECT 1 FROM options WHERE level=? AND name=? AND value=? AND id!=?",
+        (row["level"], row["name"], value, oid),
+    ).fetchone()
+    if clash:
+        conn.close()
+        return json_response(handler, {"error": "option already exists"}, 409)
+    conn.execute("UPDATE options SET value=? WHERE id=?", (value, oid))
+    conn.commit()
+    conn.close()
+    return json_response(handler, {"ok": True, "id": oid}, 200)
+
+
+def api_delete_option(handler, oid):
+    conn = db()
+    row = conn.execute("SELECT * FROM options WHERE id=?", (oid,)).fetchone()
+    if not row:
+        conn.close()
+        return json_response(handler, {"error": "not found"}, 404)
+    conn.execute("DELETE FROM options WHERE id=?", (oid,))
+    # Re-pack positions so the remaining list keeps a clean 0..n-1 order.
+    remaining = conn.execute(
+        "SELECT id FROM options WHERE level=? AND name=? ORDER BY position",
+        (row["level"], row["name"]),
+    ).fetchall()
+    for i, r in enumerate(remaining):
+        conn.execute("UPDATE options SET position=? WHERE id=?", (i, r["id"]))
+    conn.commit()
+    conn.close()
+    return json_response(handler, {"ok": True, "id": oid}, 200)
 
 
 def now_iso():
@@ -1570,6 +1797,22 @@ class Handler(SimpleHTTPRequestHandler):
             api_create_enquiry(self); return True
         if path == "/api/enquiries" and method == "GET":
             api_list_enquiries(self); return True
+        if path == "/api/options" and method == "GET":
+            api_get_options(self); return True
+        if path == "/api/options" and method == "POST":
+            api_add_option(self); return True
+        if path == "/api/options/reorder" and method == "PUT":
+            api_reorder_options(self); return True
+        if path.startswith("/api/options/"):
+            rest = path[len("/api/options/"):]
+            if rest.isdigit():
+                oid = int(rest)
+                if method == "PUT":
+                    api_rename_option(self, oid); return True
+                if method == "DELETE":
+                    api_delete_option(self, oid); return True
+            return False
+
         if path.startswith("/api/enquiries/"):
             rest = path[len("/api/enquiries/"):]
             if rest.isdigit():

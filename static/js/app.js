@@ -37,6 +37,7 @@ const labels = {
   "enquiry-create": "Enquiry / Create",
   "enquiry-view":   "Enquiry / View",
   "enquiry-edit":   "Enquiry / Edit",
+  "setting-options": "Settings / Options",
 };
 
 // Selectable product types for the Development form.
@@ -48,6 +49,7 @@ const PRODUCT_TYPES = [
   "raised silicon label",
   "heat transfer label",
   "leather patch",
+  "embroidery patch",
 ];
 
 // Fabric options for the Material dropdown.
@@ -55,6 +57,54 @@ const FABRIC_OPTIONS = ["polyester", "nylon", "cotton"];
 
 // Folding options for the Material dropdown (screen print label only).
 const FOLDING_OPTIONS = ["loop fold", "end fold", "straight cut", "mitre fold", "Manhattan Fold", "Asymmetrical Fold"];
+
+// --- Managed dropdown option sets (Settings / Options) ----------------------
+// These lists are persisted in the `options` table (data/fc.db) and editable
+// via Settings / Options. OPTION_GROUPS defines which sets exist per level and
+// their human labels; OPTION_SETS is the live cache filled by loadOptions().
+// The hardcoded arrays above remain as seed/fallback defaults.
+const OPTION_GROUPS = {
+  customer: [
+    { name: "currency", label: "Currency" },
+    { name: "payment_term", label: "Payment term" },
+    { name: "shipment_term", label: "Shipment term" },
+  ],
+  development: [
+    { name: "product_type", label: "Product type" },
+    { name: "fabric", label: "Fabric" },
+    { name: "folding", label: "Folding" },
+  ],
+  enquiry: [
+    { name: "product_type", label: "Product type" },
+    { name: "currency", label: "Currency" },
+    { name: "payment_term", label: "Payment term" },
+    { name: "shipment_term", label: "Shipment term" },
+  ],
+};
+
+// level:name -> [ "value", ... ]  (ordered by position)
+let OPTION_SETS = {};
+
+// Fetch all managed option sets from the API into the cache.
+async function loadOptions() {
+  try {
+    const data = await fetchJson(API + "/api/options");
+    OPTION_SETS = {};
+    for (const level of Object.keys(data)) {
+      for (const g of data[level]) {
+        OPTION_SETS[level + ":" + g.name] = g.values.map((v) => v.value);
+      }
+    }
+  } catch (e) {
+    // Leave OPTION_SETS empty; forms fall back to the hardcoded arrays.
+    console.warn("loadOptions failed:", e.message);
+  }
+}
+
+// Return the option values for a (level, name) set, or [] if not loaded.
+function opt(level, name) {
+  return OPTION_SETS[level + ":" + name] || [];
+}
 
 // Map each folding option to its preview image (served under static/folding/).
 // Note: the "Asymmetrical Fold" artwork file is named "Asymmetry Fold.png".
@@ -817,6 +867,10 @@ async function renderPanel() {
     await renderEnquiryEdit();
     return;
   }
+  if (activeTarget === "setting-options") {
+    await renderSettingsOptions();
+    return;
+  }
 
   panel.innerHTML =
     `<h2>${labels[activeTarget] || activeTarget}</h2>` +
@@ -827,6 +881,214 @@ function highlightNav() {
   sidebar.querySelectorAll(".nav-item").forEach((item) => {
     item.classList.toggle("active", item.dataset.target === activeTarget);
   });
+}
+
+// ---------------------------------------------------------------------------
+// Settings / Options — manage the dropdown option lists (DB-backed, shared per
+// level). Pick a level, pick which dropdown, then add / rename / delete /
+// reorder the option values. All changes persist and feed back into forms.
+// ---------------------------------------------------------------------------
+
+function renderSettingsOptions() {
+  const groupDefs = OPTION_GROUPS;
+  const levels = Object.keys(groupDefs);
+  const levelOpts = levels
+    .map((l) => `<option value="${l}">${escapeHtml(l[0].toUpperCase() + l.slice(1))}</option>`)
+    .join("");
+
+  panel.innerHTML = `
+    <h2>Settings / Options</h2>
+    <p class="muted small">Manage the dropdown lists used in the forms. Changes are saved to the database and apply to all Create/View screens.</p>
+    <div class="opt-controls">
+      <div class="field">
+        <label for="opt-level">Level</label>
+        <select id="opt-level">${levelOpts}</select>
+      </div>
+      <div class="field">
+        <label for="opt-dropdown">Dropdown</label>
+        <select id="opt-dropdown"></select>
+      </div>
+    </div>
+    <div class="opt-add-row">
+      <input id="opt-new" type="text" placeholder="New option value" autocomplete="off" />
+      <button class="btn primary" id="opt-add" type="button">Add</button>
+    </div>
+    <div id="opt-msg" class="opt-msg"></div>
+    <ul class="opt-list" id="opt-list"></ul>
+  `;
+
+  const levelEl = panel.querySelector("#opt-level");
+  const dropdownEl = panel.querySelector("#opt-dropdown");
+  const newEl = panel.querySelector("#opt-new");
+  const addBtn = panel.querySelector("#opt-add");
+  const msgEl = panel.querySelector("#opt-msg");
+  const listEl = panel.querySelector("#opt-list");
+
+  function showMsg(text, isErr) {
+    msgEl.textContent = text || "";
+    msgEl.classList.toggle("err", !!isErr);
+    msgEl.classList.toggle("ok", !isErr && !!text);
+  }
+
+  function groupsFor(level) {
+    return groupDefs[level] || [];
+  }
+
+  function fillDropdowns(level) {
+    dropdownEl.innerHTML = groupsFor(level)
+      .map((g) => `<option value="${escapeHtml(g.name)}">${escapeHtml(g.label)}</option>`)
+      .join("");
+  }
+
+  function renderList(level, name) {
+    const values = opt(level, name);
+    if (!values.length) {
+      listEl.innerHTML = `<li class="opt-empty muted small">No options yet — add one above.</li>`;
+      return;
+    }
+    listEl.innerHTML = values
+      .map((v, i) => `
+        <li class="opt-item" data-value="${escapeHtml(v)}" data-idx="${i}">
+          <button class="icon-btn opt-up" data-idx="${i}" title="Move up" ${i === 0 ? "disabled" : ""}>▲</button>
+          <button class="icon-btn opt-down" data-idx="${i}" title="Move down" ${i === values.length - 1 ? "disabled" : ""}>▼</button>
+          <span class="opt-value" data-idx="${i}" title="Click to rename">${escapeHtml(v)}</span>
+          <button class="icon-btn danger opt-del" data-idx="${i}" title="Delete">✕</button>
+        </li>`).join("");
+
+    listEl.querySelectorAll(".opt-up").forEach((b) =>
+      b.addEventListener("click", () => moveItem(level, name, Number(b.dataset.idx), -1)));
+    listEl.querySelectorAll(".opt-down").forEach((b) =>
+      b.addEventListener("click", () => moveItem(level, name, Number(b.dataset.idx), +1)));
+    listEl.querySelectorAll(".opt-del").forEach((b) =>
+      b.addEventListener("click", () => deleteItem(level, name, Number(b.dataset.idx))));
+    listEl.querySelectorAll(".opt-value").forEach((s) =>
+      s.addEventListener("click", () => startRename(level, name, Number(s.dataset.idx), s)));
+  }
+
+  async function moveItem(level, name, idx, dir) {
+    const values = opt(level, name).slice();
+    const j = idx + dir;
+    if (j < 0 || j >= values.length) return;
+    [values[idx], values[j]] = [values[j], values[idx]];
+    try {
+      await fetchJson(API + "/api/options/reorder", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ level, name, orderedValues: values }),
+      });
+      await loadOptions();
+      renderList(level, name);
+    } catch (e) {
+      showMsg("Reorder failed: " + e.message, true);
+    }
+  }
+
+  async function deleteItem(level, name, idx) {
+    const values = opt(level, name);
+    const value = values[idx];
+    try {
+      const data = await fetchJson(API + "/api/options");
+      let oid = null;
+      for (const lvl of Object.keys(data)) {
+        for (const g of data[lvl]) {
+          for (const v of g.values) {
+            if (lvl === level && g.name === name && v.value === value) oid = v.id;
+          }
+        }
+      }
+      if (oid == null) { showMsg("Option not found.", true); return; }
+      await fetchJson(API + "/api/options/" + oid, { method: "DELETE" });
+      await loadOptions();
+      renderList(level, name);
+      showMsg("Deleted.");
+    } catch (e) {
+      showMsg("Delete failed: " + e.message, true);
+    }
+  }
+
+  function startRename(level, name, idx, spanEl) {
+    const values = opt(level, name);
+    const oldVal = values[idx];
+    const input = document.createElement("input");
+    input.type = "text";
+    input.className = "opt-rename-input";
+    input.value = oldVal;
+    spanEl.replaceWith(input);
+    input.focus();
+    input.select();
+    function commit() {
+      const newVal = input.value.trim();
+      if (newVal && newVal !== oldVal) renameItem(level, name, oldVal, newVal);
+      else renderList(level, name);
+    }
+    input.addEventListener("blur", commit);
+    input.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") { input.blur(); }
+      else if (e.key === "Escape") { renderList(level, name); }
+    });
+  }
+
+  async function renameItem(level, name, oldVal, newVal) {
+    try {
+      const data = await fetchJson(API + "/api/options");
+      let oid = null;
+      for (const lvl of Object.keys(data)) {
+        for (const g of data[lvl]) {
+          for (const v of g.values) {
+            if (lvl === level && g.name === name && v.value === oldVal) oid = v.id;
+          }
+        }
+      }
+      if (oid == null) { showMsg("Option not found.", true); return; }
+      await fetchJson(API + "/api/options/" + oid, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ value: newVal }),
+      });
+      await loadOptions();
+      renderList(level, name);
+      showMsg("Renamed.");
+    } catch (e) {
+      showMsg("Rename failed: " + (e.message || "value may already exist"), true);
+      renderList(level, name);
+    }
+  }
+
+  async function addItem(level, name, value) {
+    try {
+      await fetchJson(API + "/api/options", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ level, name, value }),
+      });
+      await loadOptions();
+      renderList(level, name);
+      newEl.value = "";
+      showMsg("Added.");
+    } catch (e) {
+      showMsg("Add failed: " + (e.message || "value may already exist"), true);
+    }
+  }
+
+  function onLevelChange() {
+    const level = levelEl.value;
+    fillDropdowns(level);
+    renderList(level, dropdownEl.value);
+  }
+
+  levelEl.addEventListener("change", onLevelChange);
+  dropdownEl.addEventListener("change", () => renderList(levelEl.value, dropdownEl.value));
+  addBtn.addEventListener("click", () => {
+    const value = newEl.value.trim();
+    if (!value) { showMsg("Enter a value first.", true); return; }
+    addItem(levelEl.value, dropdownEl.value, value);
+  });
+  newEl.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") addBtn.click();
+  });
+
+  fillDropdowns(levelEl.value);
+  renderList(levelEl.value, dropdownEl.value);
 }
 
 // ---------------------------------------------------------------------------
@@ -860,21 +1122,21 @@ function renderCustomerCreate() {
         <label for="cmp-currency">Currency</label>
         <select id="cmp-currency">
           <option value="">— select —</option>
-          ${CURRENCIES.map((c) => `<option value="${escapeHtml(c)}">${escapeHtml(c)}</option>`).join("")}
+          ${opt("customer","currency").map((c) => `<option value="${escapeHtml(c)}">${escapeHtml(c)}</option>`).join("")}
         </select>
       </div>
       <div class="field">
         <label for="cmp-payment">Payment term</label>
         <select id="cmp-payment">
           <option value="">— select —</option>
-          ${PAYMENT_TERMS.map((p) => `<option value="${escapeHtml(p)}">${escapeHtml(p)}</option>`).join("")}
+          ${opt("customer","payment_term").map((p) => `<option value="${escapeHtml(p)}">${escapeHtml(p)}</option>`).join("")}
         </select>
       </div>
       <div class="field">
         <label for="cmp-shipment">Shipment term</label>
         <select id="cmp-shipment">
           <option value="">— select —</option>
-          ${SHIPMENT_TERMS.map((s) => `<option value="${escapeHtml(s)}">${escapeHtml(s)}</option>`).join("")}
+          ${opt("customer","shipment_term").map((s) => `<option value="${escapeHtml(s)}">${escapeHtml(s)}</option>`).join("")}
         </select>
       </div>
       <div class="actions">
@@ -1711,7 +1973,7 @@ async function fillDummyDevelopment(ctx) {
                    "Silicone Grip", "Heat Transfer", "Glitter Transfer", "Reflective Tape"];
     itemEl.value = rnd(ITEMS) + " " + (Math.floor(Math.random() * 900) + 100);
     devState.item = itemEl.value;
-    const pt = rnd(PRODUCT_TYPES);
+    const pt = rnd(opt("development","product_type"));
     productEl.value = pt;
     devState.product = pt;
 
@@ -1809,7 +2071,7 @@ async function fillDummyEnquiry(ctx) {
                      "Silicone Grip", "Heat Transfer", "Glitter Transfer", "Reflective Tape"];
       itemEl.value = rnd(ITEMS) + " " + (Math.floor(Math.random() * 900) + 100);
       devState.item = itemEl.value;
-      const pt = rnd(PRODUCT_TYPES);
+      const pt = rnd(opt("development","product_type"));
       productEl.value = pt;
       devState.product = pt;
 
@@ -1892,7 +2154,7 @@ function wireExtraParts(root, state, updateSaveState) {
           <label for="mat-fabric">Fabric</label>
           <select id="mat-fabric">
             <option value="">— select —</option>
-            ${FABRIC_OPTIONS.map((f) => `<option value="${escapeHtml(f)}" ${cur.fabric === f ? "selected" : ""}>${escapeHtml(f)}</option>`).join("")}
+            ${opt("development","fabric").map((f) => `<option value="${escapeHtml(f)}" ${cur.fabric === f ? "selected" : ""}>${escapeHtml(f)}</option>`).join("")}
           </select>
         </div>
 
@@ -1909,7 +2171,7 @@ function wireExtraParts(root, state, updateSaveState) {
           <div class="folding-row">
             <select id="mat-folding">
               <option value="">— select —</option>
-              ${FOLDING_OPTIONS.map((f) => `<option value="${escapeHtml(f)}" ${cur.folding === f ? "selected" : ""}>${escapeHtml(f)}</option>`).join("")}
+              ${opt("development","folding").map((f) => `<option value="${escapeHtml(f)}" ${cur.folding === f ? "selected" : ""}>${escapeHtml(f)}</option>`).join("")}
             </select>
             <img id="mat-folding-img" class="folding-preview" alt="" ${cur.folding && FOLDING_IMAGES[cur.folding] ? `src="${FOLDING_IMAGES[cur.folding]}"` : ""} style="${cur.folding && FOLDING_IMAGES[cur.folding] ? "" : "display:none;"}"/>
           </div>
@@ -2914,7 +3176,7 @@ async function renderEnquiryEdit() {
             <label for="enq-product">Product type</label>
             <select id="enq-product" disabled>
               <option value="">— select —</option>
-              ${PRODUCT_TYPES.map((p) => `<option value="${escapeHtml(p)}">${escapeHtml(p)}</option>`).join("")}
+              ${opt("enquiry","product_type").map((p) => `<option value="${escapeHtml(p)}">${escapeHtml(p)}</option>`).join("")}
             </select>
           </div>
         </div>
@@ -3785,7 +4047,7 @@ async function renderDevelopmentCreate() {
             <label for="dev-product">Product type</label>
             <select id="dev-product" disabled>
               <option value="">— select —</option>
-              ${PRODUCT_TYPES.map((p) => `<option value="${escapeHtml(p)}">${escapeHtml(p)}</option>`).join("")}
+              ${opt("development","product_type").map((p) => `<option value="${escapeHtml(p)}">${escapeHtml(p)}</option>`).join("")}
             </select>
           </div>
         </div>
@@ -4543,7 +4805,7 @@ async function renderDevelopmentEdit() {
             <label for="dev-product">Product type</label>
             <select id="dev-product" disabled>
               <option value="">— select —</option>
-              ${PRODUCT_TYPES.map((p) => `<option value="${escapeHtml(p)}">${escapeHtml(p)}</option>`).join("")}
+              ${opt("development","product_type").map((p) => `<option value="${escapeHtml(p)}">${escapeHtml(p)}</option>`).join("")}
             </select>
           </div>
         </div>
@@ -5665,7 +5927,7 @@ async function openDevEditModal(id) {
         <div class="field">
           <label for="ed-product">Product type</label>
           <select id="ed-product">
-            ${PRODUCT_TYPES.map((p) =>
+            ${opt("development","product_type").map((p) =>
               `<option value="${escapeHtml(p)}" ${p === rec.product_type ? "selected" : ""}>${escapeHtml(p)}</option>`).join("")}
           </select>
         </div>
@@ -5733,7 +5995,7 @@ async function openDevEditModal(id) {
         <label for="ed-mat-fabric">Fabric</label>
         <select id="ed-mat-fabric">
           <option value="">— select —</option>
-          ${FABRIC_OPTIONS.map((f) => `<option value="${escapeHtml(f)}" ${rec.material && rec.material.fabric === f ? "selected" : ""}>${escapeHtml(f)}</option>`).join("")}
+          ${opt("development","fabric").map((f) => `<option value="${escapeHtml(f)}" ${rec.material && rec.material.fabric === f ? "selected" : ""}>${escapeHtml(f)}</option>`).join("")}
         </select>
       </div>
       <div class="field">
@@ -5748,7 +6010,7 @@ async function openDevEditModal(id) {
         <div class="folding-row">
           <select id="ed-mat-folding">
             <option value="">— select —</option>
-            ${FOLDING_OPTIONS.map((f) => `<option value="${escapeHtml(f)}" ${rec.material && rec.material.folding === f ? "selected" : ""}>${escapeHtml(f)}</option>`).join("")}
+            ${opt("development","folding").map((f) => `<option value="${escapeHtml(f)}" ${rec.material && rec.material.folding === f ? "selected" : ""}>${escapeHtml(f)}</option>`).join("")}
           </select>
           <img id="ed-mat-folding-img" class="folding-preview" alt="" ${rec.material && rec.material.folding && FOLDING_IMAGES[rec.material.folding] ? `src="${FOLDING_IMAGES[rec.material.folding]}"` : ""} style="${rec.material && rec.material.folding && FOLDING_IMAGES[rec.material.folding] ? "" : "display:none;"}"/>
         </div>
@@ -6753,21 +7015,21 @@ function renderCustCompanySection(companyId) {
       <label for="ce-currency">Currency</label>
       <select id="ce-currency">
         <option value="">— select —</option>
-        ${CURRENCIES.map((c) => `<option value="${escapeHtml(c)}" ${c === custEdit.currency ? "selected" : ""}>${escapeHtml(c)}</option>`).join("")}
+        ${opt("customer","currency").map((c) => `<option value="${escapeHtml(c)}" ${c === custEdit.currency ? "selected" : ""}>${escapeHtml(c)}</option>`).join("")}
       </select>
     </div>
     <div class="field">
       <label for="ce-payment">Payment term</label>
       <select id="ce-payment">
         <option value="">— select —</option>
-        ${PAYMENT_TERMS.map((p) => `<option value="${escapeHtml(p)}" ${p === custEdit.payment ? "selected" : ""}>${escapeHtml(p)}</option>`).join("")}
+        ${opt("customer","payment_term").map((p) => `<option value="${escapeHtml(p)}" ${p === custEdit.payment ? "selected" : ""}>${escapeHtml(p)}</option>`).join("")}
       </select>
     </div>
     <div class="field">
       <label for="ce-shipment">Shipment term</label>
       <select id="ce-shipment">
         <option value="">— select —</option>
-        ${SHIPMENT_TERMS.map((s) => `<option value="${escapeHtml(s)}" ${s === custEdit.shipment ? "selected" : ""}>${escapeHtml(s)}</option>`).join("")}
+        ${opt("customer","shipment_term").map((s) => `<option value="${escapeHtml(s)}" ${s === custEdit.shipment ? "selected" : ""}>${escapeHtml(s)}</option>`).join("")}
       </select>
     </div>
     <div class="actions create-final">
@@ -7393,9 +7655,9 @@ function dummyCompany() {
   return {
     name,
     suffix: rnd(SUFFIX),
-    currency: rnd(CURRENCIES),
-    payment: rnd(PAYMENT_TERMS),
-    shipment: rnd(SHIPMENT_TERMS),
+    currency: rnd(opt("customer","currency")),
+    payment: rnd(opt("customer","payment_term")),
+    shipment: rnd(opt("customer","shipment_term")),
   };
 }
 
@@ -7490,4 +7752,9 @@ function startAutoRefresh() {
 // auto-open a View tab — the user lands on whichever View they click, and that
 // View always reloads fresh with the latest record on top.
 startAutoRefresh();
+
+// Populate the managed dropdown-option cache once at startup so every form
+// renders from the DB-backed sets. If the fetch fails, forms fall back to the
+// hardcoded seed arrays declared near the top of this file.
+loadOptions();
 
