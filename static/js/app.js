@@ -122,14 +122,21 @@ function opt(level, name) {
 }
 
 // Map each folding option to its preview image (served under static/folding/).
-// Note: the "Asymmetrical Fold" artwork file is named "Asymmetry Fold.png".
+// The filename is derived directly from the folding value ("<value>.png"), so
+// any folding option added in Settings / Options that has a matching artwork
+// file shows its preview automatically. If no file exists the preview simply
+// hides itself (see foldingImage + onerror handlers below).
+function foldingImage(value) {
+  if (!value) return null;
+  return "folding/" + encodeURIComponent(value) + ".png";
+}
 const FOLDING_IMAGES = {
   "loop fold": "folding/loop fold.png",
   "end fold": "folding/end fold.png",
   "straight cut": "folding/straight cut.png",
   "mitre fold": "folding/mitre fold.png",
   "Manhattan Fold": "folding/Manhattan Fold.png",
-  "Asymmetrical Fold": "folding/Asymmetry Fold.png",
+  "Asymmetrical Fold": "folding/Asymmetrical Fold.png",
 };
 
 // Build a short summary of a screen-print material spec for badges / view cells.
@@ -251,15 +258,21 @@ function resetProductParts() {
 // falling back to the full development list. Used to seed sensible Material
 // defaults when a product type is selected (and product-specific defaults are
 // applied). Returns null when the product has no factory entry.
+// Pick the first valid fabric / folding for a product per PRODUCT_TYPE_FACTORY,
+// falling back to the full development list. Returns a plain string (the value),
+// or null when the product has no factory entry. Used to seed sensible Material
+// defaults when a product type is selected.
 function firstFactoryFabric(product) {
-  const f = PRODUCT_TYPE_FACTORY[product];
-  if (f && f.fabric && f.fabric.length) return f.fabric[0];
+  const f = (PRODUCT_TYPE_FACTORY && PRODUCT_TYPE_FACTORY[product]) || PRODUCT_TYPE_FACTORY_SEED[product];
+  const list = (f && f.fabric && f.fabric.length) ? ptfStringList(f.fabric) : [];
+  if (list.length) return list[0];
   const all = opt("development", "fabric");
   return all.length ? all[0] : null;
 }
 function firstFactoryFolding(product) {
-  const f = PRODUCT_TYPE_FACTORY[product];
-  if (f && f.folding && f.folding.length) return f.folding[0];
+  const f = (PRODUCT_TYPE_FACTORY && PRODUCT_TYPE_FACTORY[product]) || PRODUCT_TYPE_FACTORY_SEED[product];
+  const list = (f && f.folding && f.folding.length) ? ptfStringList(f.folding) : [];
+  if (list.length) return list[0];
   const all = opt("development", "folding");
   return all.length ? all[0] : null;
 }
@@ -273,7 +286,6 @@ function seedScreenPrintDefaults() {
   // as TBA unless they have a factory set, in which case we seed the first valid
   // fabric / folding so the popup opens pre-scoped.
   const product = devState.product;
-  const factory = PRODUCT_TYPE_FACTORY[product];
   if (isScreenPrintProduct(product)) {
     if (!devState.material || typeof devState.material !== "object" || !devState.material.recycle) {
       devState.material = { recycle: "recycle", fabric: "polyester", edge: "slit", folding: "loop fold" };
@@ -281,7 +293,7 @@ function seedScreenPrintDefaults() {
     if (!devState.special || typeof devState.special !== "object" || !devState.special.variable) {
       devState.special = { variable: "variable" };
     }
-  } else if (factory) {
+  } else if (hasProductTypeFactory(product)) {
     const fb = firstFactoryFabric(product);
     const ff = firstFactoryFolding(product);
     if (fb || ff) {
@@ -702,9 +714,18 @@ function openColorsViewPopup(rec) {
 }
 
 // "screen print label" and "printed label" share the full Material popup
-// (recycle / fabric / edge / folding). Other product types keep the generic
-// "TBA" material stub.
+// (recycle / fabric / edge / folding). A product type that has a per-type
+// Fabric/Folding override in the Product type factory also opens the full
+// Material popup (so its factory options are editable there). Everything else
+// keeps the generic "TBA" material stub.
 const isScreenPrintProduct = (p) => p === "screen print label" || p === "printed label";
+
+// True when the product type has a Fabric or Folding override in the Product
+// type factory (live map, then the seed fallback).
+const hasProductTypeFactory = (p) => {
+  const f = (PRODUCT_TYPE_FACTORY && PRODUCT_TYPE_FACTORY[p]) || PRODUCT_TYPE_FACTORY_SEED[p];
+  return !!(f && ((f.fabric && f.fabric.length) || (f.folding && f.folding.length)));
+};
 // All product types show the "No. of color" + Pantone-row layout (same as
 // "raised silicon label"). "heat transfer label" behaves like "raised silicon
 // label" for color but has no "Raised height" field — see needsRaisedHeight().
@@ -747,15 +768,27 @@ const PRODUCT_TYPE_FACTORY_SEED = {
 };
 let PRODUCT_TYPE_FACTORY = {};
 
+// The live DB map (PRODUCT_TYPE_FACTORY, from loadProductTypeFactory) stores
+// each kind as [{id, value}], while PRODUCT_TYPE_FACTORY_SEED stores plain
+// strings. Normalize either shape to an array of strings for the dropdowns.
+function ptfStringList(arr) {
+  if (!Array.isArray(arr)) return [];
+  return arr.map((x) => (typeof x === "string" ? x : (x && x.value) || "")).filter(Boolean);
+}
+
 // Fabric options valid for a given product type. `current` (optional) is the
 // value already chosen — if it isn't in the factory set (e.g. an older record)
 // it's prepended so the saved selection stays visible. Resolution order:
 //   1. live PTF map (DB-backed, loaded by loadProductTypeFactory)
 //   2. PRODUCT_TYPE_FACTORY_SEED fallback
 //   3. global Development -> Fabric list (from Settings / Options)
+// An explicitly-empty factory list (a product type with a row but no values for
+// that kind) counts as "no override" and falls back to the global list.
 function fabricOptionsFor(product, current) {
   const f = (PRODUCT_TYPE_FACTORY && PRODUCT_TYPE_FACTORY[product]) || PRODUCT_TYPE_FACTORY_SEED[product];
-  const list = (f && Array.isArray(f.fabric)) ? f.fabric.slice() : opt("development", "fabric").slice();
+  const list = (f && Array.isArray(f.fabric) && f.fabric.length)
+    ? ptfStringList(f.fabric)
+    : opt("development", "fabric").slice();
   if (current && !list.includes(current)) list.unshift(current);
   return list;
 }
@@ -763,7 +796,9 @@ function fabricOptionsFor(product, current) {
 // Folding options valid for a given product type — same contract as above.
 function foldingOptionsFor(product, current) {
   const f = (PRODUCT_TYPE_FACTORY && PRODUCT_TYPE_FACTORY[product]) || PRODUCT_TYPE_FACTORY_SEED[product];
-  const list = (f && Array.isArray(f.folding)) ? f.folding.slice() : opt("development", "folding").slice();
+  const list = (f && Array.isArray(f.folding) && f.folding.length)
+    ? ptfStringList(f.folding)
+    : opt("development", "folding").slice();
   if (current && !list.includes(current)) list.unshift(current);
   return list;
 }
@@ -2583,7 +2618,10 @@ async function fillDummyEnquiry(ctx) {
 // `updateSaveState` re-evaluates Save/Update gating after a remark change.
 function wireExtraParts(root, state, updateSaveState) {
   // --- Material & Special popups ---
-  const openMaterialPopup = () => {
+  const openMaterialPopup = async () => {
+    // Always re-pull the factory map so Part 4 reflects the latest Settings /
+    // Options edits (the in-memory map is only loaded at startup otherwise).
+    await loadProductTypeFactory();
     // Pre-fill with sensible defaults the first time (screen print label).
     const cur = devState.material && typeof devState.material === "object" ? devState.material : {
       recycle: "recycle",
@@ -2629,7 +2667,7 @@ function wireExtraParts(root, state, updateSaveState) {
               <option value="">— select —</option>
               ${foldingOptionsFor(devState.product, cur.folding).map((f) => `<option value="${escapeHtml(f)}" ${cur.folding === f ? "selected" : ""}>${escapeHtml(f)}</option>`).join("")}
             </select>
-            <img id="mat-folding-img" class="folding-preview" alt="" ${cur.folding && FOLDING_IMAGES[cur.folding] ? `src="${FOLDING_IMAGES[cur.folding]}"` : ""} style="${cur.folding && FOLDING_IMAGES[cur.folding] ? "" : "display:none;"}"/>
+            <img id="mat-folding-img" class="folding-preview" alt="" ${cur.folding && foldingImage(cur.folding) ? `src="${foldingImage(cur.folding)}" onerror="this.style.display='none'"` : ""} style="${cur.folding && foldingImage(cur.folding) ? "" : "display:none;"}"/>
           </div>
           <span class="hint" id="mat-folding-hint"></span>
         </div>
@@ -2687,9 +2725,9 @@ function wireExtraParts(root, state, updateSaveState) {
     });
 
     foldingSelect.addEventListener("change", () => {
-      const img = FOLDING_IMAGES[foldingSelect.value];
-      if (img) {
-        foldingImg.src = img;
+      const imgSrc = foldingImage(foldingSelect.value);
+      if (imgSrc) {
+        foldingImg.src = imgSrc;
         foldingImg.style.display = "";
       } else {
         foldingImg.removeAttribute("src");
@@ -2761,10 +2799,12 @@ function wireExtraParts(root, state, updateSaveState) {
   // level, document-scoped). Wire the buttons + product-change hook to it.
   if (matBtn) {
     // Bind once; decide at CLICK time because devState.product is empty when the
-    // panel first mounts (Create tab). Screen print label opens the full Material
-    // popup; every other product type opens the generic "TBA" popup.
+    // panel first mounts (Create tab). Screen print label / printed label, and any
+    // product type that has a Product type factory override, open the full Material
+    // popup (so their factory Fabric/Folding options are editable there). Every
+    // other product type opens the generic "TBA" popup.
     matBtn.addEventListener("click", () => {
-      if (isScreenPrintProduct(devState.product)) openMaterialPopup();
+      if (isScreenPrintProduct(devState.product) || hasProductTypeFactory(devState.product)) openMaterialPopup();
       else openTbaPopup("Material");
     });
   }
@@ -6379,6 +6419,10 @@ async function openDevEditModal(id) {
     return;
   }
 
+  // Re-pull the factory map so Part 4 (Material) reflects the latest Settings /
+  // Options edits before we render the Fabric/Folding dropdowns.
+  await loadProductTypeFactory();
+
   // local editable image list (seeded from saved names -> pool urls)
   const pool = await ensureImagePool();
   const findInPool = (name) => pool.find((p) => p.name === name);
@@ -6464,7 +6508,7 @@ async function openDevEditModal(id) {
       </div>
 
       <h4 class="subhead">Material</h4>
-      ${isScreenPrintProduct(rec.product_type) ? `
+      ${(isScreenPrintProduct(rec.product_type) || hasProductTypeFactory(rec.product_type)) ? `
       <div class="field">
         <label class="radio-label">Recycle</label>
         <div class="radio-row" id="ed-mat-recycle-row">
@@ -6478,7 +6522,7 @@ async function openDevEditModal(id) {
           <option value="">— select —</option>
           ${fabricOptionsFor(rec.product_type, rec.material && rec.material.fabric).map((f) => `<option value="${escapeHtml(f)}" ${rec.material && rec.material.fabric === f ? "selected" : ""}>${escapeHtml(f)}</option>`).join("")}
         </select>
-        <span class="hint">${PRODUCT_TYPE_FACTORY[rec.product_type] ? `Options for ${escapeHtml(rec.product_type)}` : ""}</span>
+        <span class="hint">${hasProductTypeFactory(rec.product_type) ? `Options for ${escapeHtml(rec.product_type)}` : ""}</span>
       </div>
       <div class="field">
         <label class="radio-label">Edge</label>
@@ -6494,9 +6538,9 @@ async function openDevEditModal(id) {
             <option value="">— select —</option>
             ${foldingOptionsFor(rec.product_type, rec.material && rec.material.folding).map((f) => `<option value="${escapeHtml(f)}" ${rec.material && rec.material.folding === f ? "selected" : ""}>${escapeHtml(f)}</option>`).join("")}
           </select>
-          <img id="ed-mat-folding-img" class="folding-preview" alt="" ${rec.material && rec.material.folding && FOLDING_IMAGES[rec.material.folding] ? `src="${FOLDING_IMAGES[rec.material.folding]}"` : ""} style="${rec.material && rec.material.folding && FOLDING_IMAGES[rec.material.folding] ? "" : "display:none;"}"/>
+          <img id="ed-mat-folding-img" class="folding-preview" alt="" ${rec.material && rec.material.folding && foldingImage(rec.material.folding) ? `src="${foldingImage(rec.material.folding)}" onerror="this.style.display='none'"` : ""} style="${rec.material && rec.material.folding && foldingImage(rec.material.folding) ? "" : "display:none;"}"/>
         </div>
-        <span class="hint">${PRODUCT_TYPE_FACTORY[rec.product_type] ? `Options for ${escapeHtml(rec.product_type)}` : ""}</span>
+        <span class="hint">${hasProductTypeFactory(rec.product_type) ? `Options for ${escapeHtml(rec.product_type)}` : ""}</span>
       </div>
       ` : `
       <div class="field">
@@ -6707,9 +6751,9 @@ async function openDevEditModal(id) {
   const edFabricSelect = overlay.querySelector("#ed-mat-fabric");
   if (edFoldingSelect && edFoldingImg) {
     edFoldingSelect.addEventListener("change", () => {
-      const img = FOLDING_IMAGES[edFoldingSelect.value];
-      if (img) {
-        edFoldingImg.src = img;
+      const imgSrc = foldingImage(edFoldingSelect.value);
+      if (imgSrc) {
+        edFoldingImg.src = imgSrc;
         edFoldingImg.style.display = "";
       } else {
         edFoldingImg.removeAttribute("src");
@@ -6735,8 +6779,9 @@ async function openDevEditModal(id) {
       edFabricSelect.value = validFabric.includes(curFabric) ? curFabric : "";
       const keepFolding = validFolding.includes(curFolding) ? curFolding : "";
       edFoldingSelect.value = keepFolding;
-      if (keepFolding && FOLDING_IMAGES[keepFolding]) {
-        edFoldingImg.src = FOLDING_IMAGES[keepFolding];
+      const imgSrc = foldingImage(keepFolding);
+      if (imgSrc) {
+        edFoldingImg.src = imgSrc;
         edFoldingImg.style.display = "";
       } else {
         edFoldingImg.removeAttribute("src");
@@ -6774,7 +6819,7 @@ async function openDevEditModal(id) {
       } : null,
       image_names: editImages.map((i) => i.name),
       doc_names: editDocs.map((d) => d.name),
-      material: isScreenPrintProduct(product_type) ? {
+      material: (isScreenPrintProduct(product_type) || hasProductTypeFactory(product_type)) ? {
         recycle: overlay.querySelector('input[name="ed-mat-recycle"]:checked')?.value || null,
         fabric: overlay.querySelector("#ed-mat-fabric").value || null,
         edge: overlay.querySelector('input[name="ed-mat-edge"]:checked')?.value || null,
