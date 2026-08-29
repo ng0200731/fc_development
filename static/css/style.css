@@ -1182,3 +1182,30 @@ select:focus-visible,
   background: var(--bg); }
 .opt-rename-input { flex: 1; font: inherit; padding: 6px 8px; border: 1px solid var(--accent);
   border-radius: 6px; outline: none; }
+
+/* Settings / Options — scan (refresh) section */
+.opt-card { border: 1px solid var(--border); border-radius: var(--radius); padding: 16px;
+  background: var(--surface); margin-bottom: 18px; }
+.opt-card .subhead { margin: 0 0 12px; font-size: 15px; }
+.opt-card .muted.small code { background: var(--bg); padding: 1px 4px; border-radius: 4px;
+  font-size: 12px; }
+.opt-scan-controls { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 14px; margin-bottom: 12px; }
+.opt-scan-controls > .field { display: flex; flex-direction: column; gap: 6px; min-width: 150px; }
+.opt-scan-controls label { font-size: 12px; font-weight: 600; color: var(--muted); }
+.opt-scan-controls #opt-scan-search-input { min-width: 200px; }
+.opt-scan-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.opt-scan-table th { text-align: left; font-size: 11px; text-transform: uppercase; letter-spacing: .04em;
+  color: var(--muted); padding: 6px 8px; border-bottom: 1px solid var(--border-strong); }
+.opt-scan-table td { padding: 8px; border-bottom: 1px solid var(--border); vertical-align: middle; }
+.opt-lvl { font-weight: 600; color: var(--accent); text-transform: capitalize; }
+.opt-tag { display: inline-block; font-size: 11px; font-weight: 700; padding: 1px 7px; border-radius: 999px; }
+.opt-tag.ok { background: var(--success-weak); color: var(--success); }
+.opt-tag.new { background: var(--accent-weak); color: var(--accent); }
+.btn.small { font-size: 12px; padding: 4px 10px; border-radius: 7px; }
+
+/* Product type factory (Settings / Options) */
+.ptf-kinds { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-top: 8px; }
+.ptf-kind { border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 12px; }
+.ptf-kind .subhead.sm { font-size: 14px; margin: 0 0 10px; }
+.opt-factory-hint { margin: 4px 0 10px; font-size: 12px; color: var(--muted); }
+@media (max-width: 640px) { .ptf-kinds { grid-template-columns: 1fr; } }

@@ -161,13 +161,30 @@ def init_db():
         )
         """
     )
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS product_type_factory (
+            id            INTEGER PRIMARY KEY AUTOINCREMENT,
+            product_type TEXT NOT NULL,
+            kind         TEXT NOT NULL,
+            value        TEXT NOT NULL,
+            position     INTEGER NOT NULL DEFAULT 0,
+            UNIQUE(product_type, kind, value)
+        )
+        """
+    )
     # Migrations: add any columns introduced after the initial schema so that
     # an existing database (already created without them) keeps working.
     _ensure_company_columns(conn)
     _ensure_dev_columns(conn)
     _ensure_enquiry_columns(conn)
+    _ensure_option_groups_table(conn)
+    _seed_option_groups(conn)
+    _load_option_group_defs(conn)
     _migrate_options_table(conn)
     _seed_options(conn)
+    _ensure_product_type_factory_table(conn)
+    _seed_product_type_factory(conn)
     conn.commit()
     conn.close()
 
@@ -234,10 +251,15 @@ def _ensure_enquiry_columns(conn):
             cur.execute(f"ALTER TABLE enquiries ADD COLUMN {col} {ctype}")
 
 
-# Definition of every managed dropdown option set, grouped by menu level.
+# Canonical SEED of every managed dropdown option set, grouped by menu level.
 # `name` is the stable key used in the DB and the frontend; `label` is shown
 # in the Settings UI. `seed` provides the initial values on a fresh database.
-_OPTION_GROUP_DEFS = {
+#
+# At startup these are loaded into the live `_OPTION_GROUP_DEFS` dict AND
+# persisted in the `option_groups` table, so new groups discovered by the
+# Settings / Options "Refresh" scan and registered at runtime survive a server
+# restart. The live dict is the single source of truth for validation/seed.
+_OPTION_GROUP_SEED = {
     "customer": [
         {"name": "currency", "label": "Currency", "seed": ["USD", "RMB", "HKD"]},
         {"name": "payment_term", "label": "Payment term", "seed": ["COD", "credit 30 days", "credit 45 days"]},
@@ -254,15 +276,58 @@ _OPTION_GROUP_DEFS = {
         ]},
     ],
     "enquiry": [
-        {"name": "product_type", "label": "Product type", "seed": [
-            "woven label", "printed label", "screen print label", "hang tag",
-            "raised silicon label", "heat transfer label", "leather patch", "embroidery patch",
-        ]},
-        {"name": "currency", "label": "Currency", "seed": ["USD", "RMB", "HKD"]},
-        {"name": "payment_term", "label": "Payment term", "seed": ["COD", "credit 30 days", "credit 45 days"]},
-        {"name": "shipment_term", "label": "Shipment term", "seed": ["Ex Work", "Door 2 Door", "FOB", "CIF"]},
+        # Enquiry / Create has no dropdowns (only Company & Member + Images).
+        # Enquiry / Edit still shows a Product type select, but per the user's
+        # instruction the managed sets must reflect the Create form, which has none.
     ],
 }
+
+# Live, mutable map of managed groups. Seeded from `_OPTION_GROUP_SEED` and the
+# `option_groups` table at init; new groups registered via the API are appended
+# here (and persisted in `option_groups`) so they survive restarts. Read it
+# through `_option_group_defs()` rather than touching the dict directly.
+_OPTION_GROUP_DEFS = {}
+
+
+def _option_group_defs():
+    return _OPTION_GROUP_DEFS
+
+
+def _ensure_option_groups_table(conn):
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS option_groups (
+            id     INTEGER PRIMARY KEY AUTOINCREMENT,
+            level  TEXT NOT NULL,
+            name   TEXT NOT NULL,
+            label  TEXT NOT NULL DEFAULT '',
+            UNIQUE(level, name)
+        )
+        """
+    )
+
+
+def _seed_option_groups(conn):
+    cur = conn.cursor()
+    have = cur.execute("SELECT 1 FROM option_groups LIMIT 1").fetchone()
+    if have:
+        return
+    for level, groups in _OPTION_GROUP_SEED.items():
+        for g in groups:
+            cur.execute(
+                "INSERT INTO option_groups (level, name, label) VALUES (?, ?, ?)",
+                (level, g["name"], g.get("label", g["name"])),
+            )
+
+
+def _load_option_group_defs(conn):
+    global _OPTION_GROUP_DEFS
+    # init_db()'s connection may not have row_factory set, so read by position.
+    defs = {lvl: [] for lvl in _OPTION_GROUP_SEED}
+    for r in conn.execute("SELECT level, name, label FROM option_groups ORDER BY id").fetchall():
+        level, name, label = r[0], r[1], r[2]
+        defs.setdefault(level, []).append({"name": name, "label": label})
+    _OPTION_GROUP_DEFS = defs
 
 
 # Migrate the `options` table from the legacy shape (category, value, seq,
@@ -308,6 +373,25 @@ def _migrate_options_table(conn):
 
 # Seed the `options` table once, on a fresh database (empty table), so the
 # dropdown lists start with today's hardcoded values. Existing rows are kept.
+def _register_option_group(conn, level, name, label):
+    """Persist a newly-discovered managed group so it survives restarts and is
+    visible to the Settings UI. No-op if the (level, name) group already exists.
+    `label` falls back to the provided name when omitted."""
+    cur = conn.cursor()
+    exists = cur.execute(
+        "SELECT 1 FROM option_groups WHERE level=? AND name=?", (level, name)
+    ).fetchone()
+    if exists:
+        return False
+    cur.execute(
+        "INSERT INTO option_groups (level, name, label) VALUES (?, ?, ?)",
+        (level, name, label or name),
+    )
+    # Surface it in the live dict immediately so subsequent requests see it.
+    _OPTION_GROUP_DEFS.setdefault(level, []).append({"name": name, "label": label or name})
+    return True
+
+
 def _seed_options(conn):
     cur = conn.cursor()
     # Seed per (level, name) group so that only genuinely empty groups get the
@@ -442,6 +526,195 @@ def api_delete_option(handler, oid):
     ).fetchall()
     for i, r in enumerate(remaining):
         conn.execute("UPDATE options SET position=? WHERE id=?", (i, r["id"]))
+    conn.commit()
+    conn.close()
+    return json_response(handler, {"ok": True, "id": oid}, 200)
+
+
+# Return every currently-managed (level, name) group as a flat list of
+# {level, name, label}. Used by the Settings / Options "Refresh" scan to diff
+# against the dropdowns the forms actually render.
+def api_list_groups(handler):
+    conn = db()
+    rows = conn.execute(
+        "SELECT level, name, label FROM option_groups ORDER BY level, id"
+    ).fetchall()
+    conn.close()
+    return json_response(handler, [
+        {"level": r["level"], "name": r["name"], "label": r["label"]} for r in rows
+    ])
+
+
+# Register a newly-discovered dropdown group. The scan in the Settings UI calls
+# this after it finds a <select> whose (level, name) is not yet managed. The
+# group is persisted so it survives a restart and shows in the Settings dropdowns.
+def api_register_group(handler):
+    data = read_json_body(handler)
+    level = (data.get("level") or "").strip()
+    name = (data.get("name") or "").strip()
+    label = (data.get("label") or "").strip()
+    if not level or not name:
+        return json_response(handler, {"error": "level and name are required"}, 400)
+    conn = db()
+    is_new = _register_option_group(conn, level, name, label)
+    conn.commit()
+    conn.close()
+    return json_response(handler, {"level": level, "name": name, "label": label, "isNew": is_new}, 200)
+
+
+# ---------------------------------------------------------------------------
+# Product type "factory": per (product_type, kind) overrides for the Fabric and
+# Folding dropdowns. Product types not present here fall back to the global
+# Development -> Fabric / Folding lists. Persisted so edits survive restarts.
+# ---------------------------------------------------------------------------
+
+def _ensure_product_type_factory_table(conn):
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS product_type_factory (
+            id            INTEGER PRIMARY KEY AUTOINCREMENT,
+            product_type TEXT NOT NULL,
+            kind         TEXT NOT NULL,
+            value        TEXT NOT NULL,
+            position     INTEGER NOT NULL DEFAULT 0,
+            UNIQUE(product_type, kind, value)
+        )
+        """
+    )
+
+
+# Seed the factory with today's hardcoded relationships (idempotent: only empty
+# (product_type, kind) groups get values).
+def _seed_product_type_factory(conn):
+    cur = conn.cursor()
+    seed = [
+        ("screen print label", "fabric", ["polyester", "nylon"]),
+        ("screen print label", "folding", ["loop fold", "end fold", "straight cut"]),
+        ("printed label", "fabric", ["cotton"]),
+        ("printed label", "folding", ["mitre fold", "Manhattan Fold"]),
+    ]
+    for product_type, kind, values in seed:
+        have = cur.execute(
+            "SELECT 1 FROM product_type_factory WHERE product_type=? AND kind=?",
+            (product_type, kind),
+        ).fetchone()
+        if have:
+            continue
+        for p, v in enumerate(values):
+            cur.execute(
+                "INSERT INTO product_type_factory (product_type, kind, value, position) VALUES (?, ?, ?, ?)",
+                (product_type, kind, v, p),
+            )
+
+
+def api_get_product_type_factory(handler):
+    conn = db()
+    rows = conn.execute(
+        "SELECT id, product_type, kind, value, position FROM product_type_factory "
+        "ORDER BY product_type, kind, position"
+    ).fetchall()
+    conn.close()
+    out = {}
+    for r in rows:
+        out.setdefault(r["product_type"], {"fabric": [], "folding": []})
+        out[r["product_type"]][r["kind"]].append({"id": r["id"], "value": r["value"]})
+    return json_response(handler, out)
+
+
+def api_add_ptf(handler):
+    data = read_json_body(handler)
+    product_type = (data.get("product_type") or "").strip()
+    kind = (data.get("kind") or "").strip()
+    value = (data.get("value") or "").strip()
+    if not product_type or kind not in ("fabric", "folding") or not value:
+        return json_response(handler, {"error": "product_type, kind (fabric|folding) and value are required"}, 400)
+    conn = db()
+    exists = conn.execute(
+        "SELECT 1 FROM product_type_factory WHERE product_type=? AND kind=? AND value=?",
+        (product_type, kind, value),
+    ).fetchone()
+    if exists:
+        conn.close()
+        return json_response(handler, {"error": "value already exists"}, 409)
+    max_pos = conn.execute(
+        "SELECT COALESCE(MAX(position), -1) AS m FROM product_type_factory WHERE product_type=? AND kind=?",
+        (product_type, kind),
+    ).fetchone()["m"]
+    cur = conn.cursor()
+    cur.execute(
+        "INSERT INTO product_type_factory (product_type, kind, value, position) VALUES (?, ?, ?, ?)",
+        (product_type, kind, value, max_pos + 1),
+    )
+    oid = cur.lastrowid
+    row = conn.execute(
+        "SELECT id, product_type, kind, value, position FROM product_type_factory WHERE id=?", (oid,)
+    ).fetchone()
+    conn.commit()
+    conn.close()
+    return json_response(handler, dict(row), 201)
+
+
+def api_reorder_ptf(handler):
+    data = read_json_body(handler)
+    product_type = (data.get("product_type") or "").strip()
+    kind = (data.get("kind") or "").strip()
+    ordered = data.get("orderedValues")
+    if not product_type or kind not in ("fabric", "folding") or not isinstance(ordered, list):
+        return json_response(handler, {"error": "product_type, kind (fabric|folding) and orderedValues[] required"}, 400)
+    conn = db()
+    valid = {r["value"] for r in conn.execute(
+        "SELECT value FROM product_type_factory WHERE product_type=? AND kind=?",
+        (product_type, kind)).fetchall()}
+    pos = 0
+    for v in ordered:
+        if v in valid:
+            conn.execute(
+                "UPDATE product_type_factory SET position=? WHERE product_type=? AND kind=? AND value=?",
+                (pos, product_type, kind, v),
+            )
+            pos += 1
+    conn.commit()
+    conn.close()
+    return json_response(handler, {"ok": True}, 200)
+
+
+def api_rename_ptf(handler, oid):
+    conn = db()
+    row = conn.execute("SELECT * FROM product_type_factory WHERE id=?", (oid,)).fetchone()
+    if not row:
+        conn.close()
+        return json_response(handler, {"error": "not found"}, 404)
+    data = read_json_body(handler)
+    value = (data.get("value") or "").strip()
+    if not value:
+        conn.close()
+        return json_response(handler, {"error": "value is required"}, 400)
+    clash = conn.execute(
+        "SELECT 1 FROM product_type_factory WHERE product_type=? AND kind=? AND value=? AND id!=?",
+        (row["product_type"], row["kind"], value, oid),
+    ).fetchone()
+    if clash:
+        conn.close()
+        return json_response(handler, {"error": "value already exists"}, 409)
+    conn.execute("UPDATE product_type_factory SET value=? WHERE id=?", (value, oid))
+    conn.commit()
+    conn.close()
+    return json_response(handler, {"ok": True, "id": oid}, 200)
+
+
+def api_delete_ptf(handler, oid):
+    conn = db()
+    row = conn.execute("SELECT * FROM product_type_factory WHERE id=?", (oid,)).fetchone()
+    if not row:
+        conn.close()
+        return json_response(handler, {"error": "not found"}, 404)
+    conn.execute("DELETE FROM product_type_factory WHERE id=?", (oid,))
+    remaining = conn.execute(
+        "SELECT id FROM product_type_factory WHERE product_type=? AND kind=? ORDER BY position",
+        (row["product_type"], row["kind"]),
+    ).fetchall()
+    for i, r in enumerate(remaining):
+        conn.execute("UPDATE product_type_factory SET position=? WHERE id=?", (i, r["id"]))
     conn.commit()
     conn.close()
     return json_response(handler, {"ok": True, "id": oid}, 200)
@@ -1801,6 +2074,10 @@ class Handler(SimpleHTTPRequestHandler):
             api_get_options(self); return True
         if path == "/api/options" and method == "POST":
             api_add_option(self); return True
+        if path == "/api/options/groups" and method == "GET":
+            api_list_groups(self); return True
+        if path == "/api/options/groups" and method == "POST":
+            api_register_group(self); return True
         if path == "/api/options/reorder" and method == "PUT":
             api_reorder_options(self); return True
         if path.startswith("/api/options/"):
@@ -1811,6 +2088,21 @@ class Handler(SimpleHTTPRequestHandler):
                     api_rename_option(self, oid); return True
                 if method == "DELETE":
                     api_delete_option(self, oid); return True
+            return False
+        if path == "/api/product-type-factory" and method == "GET":
+            api_get_product_type_factory(self); return True
+        if path == "/api/product-type-factory" and method == "POST":
+            api_add_ptf(self); return True
+        if path == "/api/product-type-factory/reorder" and method == "PUT":
+            api_reorder_ptf(self); return True
+        if path.startswith("/api/product-type-factory/"):
+            rest = path[len("/api/product-type-factory/"):]
+            if rest.isdigit():
+                oid = int(rest)
+                if method == "PUT":
+                    api_rename_ptf(self, oid); return True
+                if method == "DELETE":
+                    api_delete_ptf(self, oid); return True
             return False
 
         if path.startswith("/api/enquiries/"):

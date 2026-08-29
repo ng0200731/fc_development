@@ -59,45 +59,60 @@ const FABRIC_OPTIONS = ["polyester", "nylon", "cotton"];
 const FOLDING_OPTIONS = ["loop fold", "end fold", "straight cut", "mitre fold", "Manhattan Fold", "Asymmetrical Fold"];
 
 // --- Managed dropdown option sets (Settings / Options) ----------------------
-// These lists are persisted in the `options` table (data/fc.db) and editable
-// via Settings / Options. OPTION_GROUPS defines which sets exist per level and
-// their human labels; OPTION_SETS is the live cache filled by loadOptions().
-// The hardcoded arrays above remain as seed/fallback defaults.
-const OPTION_GROUPS = {
-  customer: [
-    { name: "currency", label: "Currency" },
-    { name: "payment_term", label: "Payment term" },
-    { name: "shipment_term", label: "Shipment term" },
-  ],
-  development: [
-    { name: "product_type", label: "Product type" },
-    { name: "fabric", label: "Fabric" },
-    { name: "folding", label: "Folding" },
-  ],
-  enquiry: [
-    { name: "product_type", label: "Product type" },
-    { name: "currency", label: "Currency" },
-    { name: "payment_term", label: "Payment term" },
-    { name: "shipment_term", label: "Shipment term" },
-  ],
-};
+// OPTION_GROUPS (the registry of which sets exist per level and their human
+// labels) and OPTION_SETS (the live value cache) are BOTH populated by
+// loadOptions() from the API, so they always agree with the server — including
+// any group discovered by a Refresh scan and registered at runtime. The
+// hardcoded arrays near the top of this file remain as seed/fallback defaults.
 
 // level:name -> [ "value", ... ]  (ordered by position)
 let OPTION_SETS = {};
 
-// Fetch all managed option sets from the API into the cache.
+// Mirror of the backend's _OPTION_GROUP_DEFS: which groups exist per level and
+// their human labels. Rebuilt by loadOptions() from /api/options so the
+// Settings UI and the Refresh scan always agree with the server.
+let OPTION_GROUPS = {};
+
+// Fetch all managed option sets from the API into the cache. Also refreshes
+// OPTION_GROUPS (the groups registry) so newly-registered groups show up.
 async function loadOptions() {
   try {
     const data = await fetchJson(API + "/api/options");
     OPTION_SETS = {};
+    OPTION_GROUPS = {};
     for (const level of Object.keys(data)) {
+      OPTION_GROUPS[level] = [];
       for (const g of data[level]) {
         OPTION_SETS[level + ":" + g.name] = g.values.map((v) => v.value);
+        OPTION_GROUPS[level].push({ name: g.name, label: g.label });
       }
     }
   } catch (e) {
-    // Leave OPTION_SETS empty; forms fall back to the hardcoded arrays.
+    // Leave caches empty; forms fall back to the hardcoded arrays.
     console.warn("loadOptions failed:", e.message);
+  }
+}
+
+// Load the product-type factory map (Development -> Fabric/Folding per product
+// type) from the DB-backed API. Empty until the fetch completes; forms then
+// fall back to PRODUCT_TYPE_FACTORY_SEED, then to the global Development lists.
+async function loadProductTypeFactory() {
+  try {
+    const data = await fetchJson(API + "/api/product-type-factory");
+    PRODUCT_TYPE_FACTORY = data || {};
+  } catch (e) {
+    console.warn("loadProductTypeFactory failed:", e.message);
+    PRODUCT_TYPE_FACTORY = {};
+  }
+}
+
+// Manually register a group in the frontend registry (e.g. after a scan finds a
+// new dropdown and the API confirms it). Kept in sync with the backend so the
+// Settings dropdowns switch to the new group immediately.
+function registerOptionGroup(level, name, label) {
+  const groups = (OPTION_GROUPS[level] = OPTION_GROUPS[level] || []);
+  if (!groups.some((g) => g.name === name)) {
+    groups.push({ name, label: label || name });
   }
 }
 
@@ -232,16 +247,50 @@ function resetProductParts() {
   }
 }
 
+// Pick the first valid fabric / folding for a product per PRODUCT_TYPE_FACTORY,
+// falling back to the full development list. Used to seed sensible Material
+// defaults when a product type is selected (and product-specific defaults are
+// applied). Returns null when the product has no factory entry.
+function firstFactoryFabric(product) {
+  const f = PRODUCT_TYPE_FACTORY[product];
+  if (f && f.fabric && f.fabric.length) return f.fabric[0];
+  const all = opt("development", "fabric");
+  return all.length ? all[0] : null;
+}
+function firstFactoryFolding(product) {
+  const f = PRODUCT_TYPE_FACTORY[product];
+  if (f && f.folding && f.folding.length) return f.folding[0];
+  const all = opt("development", "folding");
+  return all.length ? all[0] : null;
+}
+
 // For screen print label / printed label, seed Material + Special with dummy
 // defaults so the green summary words appear immediately (no need to open the
 // popup first). Other product types keep Material as TBA.
 function seedScreenPrintDefaults() {
-  if (isScreenPrintProduct(devState.product)) {
+  // Screen print / printed label get fixed Material defaults (incl. the factory
+  // fabric + folding for that product type). Other product types leave Material
+  // as TBA unless they have a factory set, in which case we seed the first valid
+  // fabric / folding so the popup opens pre-scoped.
+  const product = devState.product;
+  const factory = PRODUCT_TYPE_FACTORY[product];
+  if (isScreenPrintProduct(product)) {
     if (!devState.material || typeof devState.material !== "object" || !devState.material.recycle) {
       devState.material = { recycle: "recycle", fabric: "polyester", edge: "slit", folding: "loop fold" };
     }
     if (!devState.special || typeof devState.special !== "object" || !devState.special.variable) {
       devState.special = { variable: "variable" };
+    }
+  } else if (factory) {
+    const fb = firstFactoryFabric(product);
+    const ff = firstFactoryFolding(product);
+    if (fb || ff) {
+      devState.material = {
+        recycle: null,
+        fabric: fb || null,
+        edge: null,
+        folding: ff || null,
+      };
     }
   }
   refreshDevExtras();
@@ -269,6 +318,9 @@ function onProductTypeChanged(prodEl) {
     prodEl.value = newProduct;        // reflect the new choice in the dropdown
     devState.product = newProduct;
     resetProductParts();              // clears Parts 3–6 AND re-renders badges/remarks
+    // Re-seed product-specific Material defaults (incl. the factory fabric /
+    // folding for the newly-selected product) so the green summary reflects it.
+    seedScreenPrintDefaults();
     // `updateNextState`/`updateSaveState` are render-local closures (Create/Edit)
     // and are NOT in scope here — calling them would be a no-op. Re-run the
     // current render's gating via the module-level alias so Save re-evaluates
@@ -669,6 +721,53 @@ const needsRaisedHeight = (p) => p === "raised silicon label";
 const SPLIT_COLOR_PRODUCTS = ["screen print label", "printed label", "hang tag"];
 const isSplitColorProduct = (p) => SPLIT_COLOR_PRODUCTS.includes(p);
 
+// ---------------------------------------------------------------------------
+// Product type "factory": defines which fabric / folding options are valid for
+// each product type. Development / Create's Material popup filters its Fabric and
+// Folding <select>s by the currently-selected product type using this map. Only
+// product types listed here get a narrowed set; everything else falls back to the
+// full development fabric / folding lists (from Settings / Options).
+//
+// Example: "screen print label" and "printed label" each have their own unique
+// fabric + folding combo, so choosing one restricts the Material dropdowns to
+// just those values.
+// ---------------------------------------------------------------------------
+// Live, DB-backed product-type factory map. Loaded from /api/product-type-factory
+// by loadProductTypeFactory(); the const below is only the seed/fallback used
+// before the first fetch. Shape: { "<product_type>": { fabric:[...], folding:[...] } }.
+const PRODUCT_TYPE_FACTORY_SEED = {
+  "screen print label": {
+    fabric: ["polyester", "nylon"],
+    folding: ["loop fold", "end fold", "straight cut"],
+  },
+  "printed label": {
+    fabric: ["cotton"],
+    folding: ["mitre fold", "Manhattan Fold"],
+  },
+};
+let PRODUCT_TYPE_FACTORY = {};
+
+// Fabric options valid for a given product type. `current` (optional) is the
+// value already chosen — if it isn't in the factory set (e.g. an older record)
+// it's prepended so the saved selection stays visible. Resolution order:
+//   1. live PTF map (DB-backed, loaded by loadProductTypeFactory)
+//   2. PRODUCT_TYPE_FACTORY_SEED fallback
+//   3. global Development -> Fabric list (from Settings / Options)
+function fabricOptionsFor(product, current) {
+  const f = (PRODUCT_TYPE_FACTORY && PRODUCT_TYPE_FACTORY[product]) || PRODUCT_TYPE_FACTORY_SEED[product];
+  const list = (f && Array.isArray(f.fabric)) ? f.fabric.slice() : opt("development", "fabric").slice();
+  if (current && !list.includes(current)) list.unshift(current);
+  return list;
+}
+
+// Folding options valid for a given product type — same contract as above.
+function foldingOptionsFor(product, current) {
+  const f = (PRODUCT_TYPE_FACTORY && PRODUCT_TYPE_FACTORY[product]) || PRODUCT_TYPE_FACTORY_SEED[product];
+  const list = (f && Array.isArray(f.folding)) ? f.folding.slice() : opt("development", "folding").slice();
+  if (current && !list.includes(current)) list.unshift(current);
+  return list;
+}
+
 // For a split color spec (Front + Back) the gating rule is: the TOTAL number of
 // colors across both sides must be > 1 (i.e. at least 2), and every Pantone row
 // that has been entered must carry a non-trivial code (length > 1). We do NOT
@@ -889,7 +988,10 @@ function highlightNav() {
 // reorder the option values. All changes persist and feed back into forms.
 // ---------------------------------------------------------------------------
 
-function renderSettingsOptions() {
+async function renderSettingsOptions() {
+  // Make sure the cache + group registry are current before we build the UI.
+  await loadOptions();
+
   const groupDefs = OPTION_GROUPS;
   const levels = Object.keys(groupDefs);
   const levelOpts = levels
@@ -899,22 +1001,85 @@ function renderSettingsOptions() {
   panel.innerHTML = `
     <h2>Settings / Options</h2>
     <p class="muted small">Manage the dropdown lists used in the forms. Changes are saved to the database and apply to all Create/View screens.</p>
-    <div class="opt-controls">
-      <div class="field">
-        <label for="opt-level">Level</label>
-        <select id="opt-level">${levelOpts}</select>
+
+    <div class="opt-card">
+      <h3 class="subhead">Manage a dropdown</h3>
+      <div class="opt-controls">
+        <div class="field">
+          <label for="opt-level">Level</label>
+          <select id="opt-level">${levelOpts}</select>
+        </div>
+        <div class="field">
+          <label for="opt-dropdown">Dropdown</label>
+          <select id="opt-dropdown"></select>
+        </div>
       </div>
-      <div class="field">
-        <label for="opt-dropdown">Dropdown</label>
-        <select id="opt-dropdown"></select>
+      <div class="opt-add-row">
+        <input id="opt-new" type="text" placeholder="New option value" autocomplete="off" />
+        <button class="btn primary" id="opt-add" type="button">Add</button>
+      </div>
+      <div id="opt-msg" class="opt-msg"></div>
+      <ul class="opt-list" id="opt-list"></ul>
+    </div>
+
+    <div class="opt-card">
+      <h3 class="subhead">Scan forms for dropdowns</h3>
+      <p class="muted small">Scans every Create / Edit / View form for <code>opt(level, name)</code> dropdowns. Any dropdown the forms use but that is not yet managed is listed below with an "Add" button.</p>
+      <div class="opt-scan-controls">
+        <button class="btn" id="opt-scan" type="button">↻ Refresh — scan all levels</button>
+        <div class="field">
+          <label for="opt-scan-level">Level</label>
+          <select id="opt-scan-level">
+            <option value="">All levels</option>
+            ${levels.map((l) => `<option value="${l}">${escapeHtml(l[0].toUpperCase() + l.slice(1))}</option>`).join("")}
+          </select>
+        </div>
+        <div class="field opt-scan-search">
+          <label for="opt-scan-search-input">Search</label>
+          <input id="opt-scan-search-input" type="text" placeholder="Filter dropdowns…" autocomplete="off" />
+        </div>
+      </div>
+      <div id="opt-scan-msg" class="opt-msg"></div>
+      <table class="opt-scan-table">
+        <thead>
+          <tr><th>Level</th><th>Dropdown</th><th>Status</th><th></th></tr>
+        </thead>
+        <tbody id="opt-scan-body"></tbody>
+      </table>
+    </div>
+
+    <div class="opt-card">
+      <h3 class="subhead">Product type factory (Development)</h3>
+      <p class="muted small">Override the Fabric / Folding lists <em>per product type</em>. Product types with no override fall back to the global Development lists above.</p>
+      <div class="opt-controls">
+        <div class="field">
+          <label for="ptf-product">Product type</label>
+          <select id="ptf-product"></select>
+        </div>
+      </div>
+      <div class="ptf-kinds">
+        <div class="ptf-kind" data-kind="fabric">
+          <h4 class="subhead sm">Fabric</h4>
+          <div class="opt-add-row">
+            <input type="text" placeholder="New fabric option" autocomplete="off" data-ptf-new="fabric" />
+            <button class="btn primary" type="button" data-ptf-add="fabric">Add</button>
+          </div>
+          <div class="opt-msg" data-ptf-msg="fabric"></div>
+          <p class="hint opt-factory-hint" data-ptf-hint="fabric"></p>
+          <ul class="opt-list" data-ptf-list="fabric"></ul>
+        </div>
+        <div class="ptf-kind" data-kind="folding">
+          <h4 class="subhead sm">Folding</h4>
+          <div class="opt-add-row">
+            <input type="text" placeholder="New folding option" autocomplete="off" data-ptf-new="folding" />
+            <button class="btn primary" type="button" data-ptf-add="folding">Add</button>
+          </div>
+          <div class="opt-msg" data-ptf-msg="folding"></div>
+          <p class="hint opt-factory-hint" data-ptf-hint="folding"></p>
+          <ul class="opt-list" data-ptf-list="folding"></ul>
+        </div>
       </div>
     </div>
-    <div class="opt-add-row">
-      <input id="opt-new" type="text" placeholder="New option value" autocomplete="off" />
-      <button class="btn primary" id="opt-add" type="button">Add</button>
-    </div>
-    <div id="opt-msg" class="opt-msg"></div>
-    <ul class="opt-list" id="opt-list"></ul>
   `;
 
   const levelEl = panel.querySelector("#opt-level");
@@ -924,6 +1089,16 @@ function renderSettingsOptions() {
   const msgEl = panel.querySelector("#opt-msg");
   const listEl = panel.querySelector("#opt-list");
 
+  const scanBtn = panel.querySelector("#opt-scan");
+  const scanLevelEl = panel.querySelector("#opt-scan-level");
+  const scanSearchEl = panel.querySelector("#opt-scan-search-input");
+  const scanMsgEl = panel.querySelector("#opt-scan-msg");
+  const scanBody = panel.querySelector("#opt-scan-body");
+
+  // The most recent scan result, retained so the level filter / search can
+  // re-render without re-fetching the source file.
+  let scanItems = [];
+
   function showMsg(text, isErr) {
     msgEl.textContent = text || "";
     msgEl.classList.toggle("err", !!isErr);
@@ -931,7 +1106,7 @@ function renderSettingsOptions() {
   }
 
   function groupsFor(level) {
-    return groupDefs[level] || [];
+    return OPTION_GROUPS[level] || [];
   }
 
   function fillDropdowns(level) {
@@ -1087,8 +1262,288 @@ function renderSettingsOptions() {
     if (e.key === "Enter") addBtn.click();
   });
 
+  // --- Scan: discover every dropdown the forms actually render ----------------
+
+  // Humanise an opt() name like "product_type" -> "Product type".
+  function humanize(name) {
+    return name.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+  }
+
+  // Parse the actual app.js source for OPTION call sites. This is a genuine scan
+  // of the live form code — it reflects what the forms render, not a hardcoded
+  // mirror, so it can never drift into inventing dropdowns.
+  async function discoverFormDropdowns() {
+    const src = await (await fetch("js/app.js", { cache: "no-store" })).text();
+    const re = /opt\(\s*["']([a-z]+)["']\s*,\s*["']([a-z0-9_]+)["']\s*\)/g;
+    const found = new Map(); // "level:name" -> {level, name}
+    let m;
+    while ((m = re.exec(src)) !== null) {
+      const level = m[1];
+      const name = m[2];
+      found.set(level + ":" + name, { level, name });
+    }
+    return [...found.values()];
+  }
+
+  function renderScan() {
+    const lvlFilter = (scanLevelEl.value || "").toLowerCase();
+    const q = (scanSearchEl.value || "").trim().toLowerCase();
+    const rows = scanItems.filter((it) => {
+      if (lvlFilter && it.level !== lvlFilter) return false;
+      if (q) {
+        const hay = (it.level + " " + it.name + " " + humanize(it.name)).toLowerCase();
+        if (!hay.includes(q)) return false;
+      }
+      return true;
+    });
+
+    if (!scanItems.length) {
+      scanBody.innerHTML = `<tr><td colspan="4" class="opt-empty muted small">Click "Refresh — scan all levels" to discover the dropdowns used by the forms.</td></tr>`;
+      return;
+    }
+    if (!rows.length) {
+      scanBody.innerHTML = `<tr><td colspan="4" class="opt-empty muted small">No dropdowns match the current filter.</td></tr>`;
+      return;
+    }
+
+    scanBody.innerHTML = rows
+      .map((it) => {
+        const label = humanize(it.name);
+        if (it.managed) {
+          return `<tr data-level="${escapeHtml(it.level)}" data-name="${escapeHtml(it.name)}">
+            <td><span class="opt-lvl">${escapeHtml(it.level)}</span></td>
+            <td>${escapeHtml(label)} <span class="muted small">(${escapeHtml(it.name)})</span></td>
+            <td><span class="opt-tag ok">managed</span></td>
+            <td></td>
+          </tr>`;
+        }
+        return `<tr data-level="${escapeHtml(it.level)}" data-name="${escapeHtml(it.name)}">
+          <td><span class="opt-lvl">${escapeHtml(it.level)}</span></td>
+          <td>${escapeHtml(label)} <span class="muted small">(${escapeHtml(it.name)})</span></td>
+          <td><span class="opt-tag new">new</span></td>
+          <td><button class="btn small opt-add-group" type="button" data-level="${escapeHtml(it.level)}" data-name="${escapeHtml(it.name)}">Add</button></td>
+        </tr>`;
+      })
+      .join("");
+
+    scanBody.querySelectorAll(".opt-add-group").forEach((b) =>
+      b.addEventListener("click", () => registerFound(b.dataset.level, b.dataset.name)));
+  }
+
+  async function registerFound(level, name) {
+    try {
+      await fetchJson(API + "/api/options/groups", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ level, name, label: humanize(name) }),
+      });
+      registerOptionGroup(level, name, humanize(name));
+      await loadOptions();
+      fillDropdowns(levelEl.value);
+      scanMsgEl.textContent = `Added ${humanize(name)} (${level}) to managed dropdowns.`;
+      scanMsgEl.classList.remove("err");
+      scanMsgEl.classList.add("ok");
+      await runScan();
+    } catch (e) {
+      scanMsgEl.textContent = "Add failed: " + e.message;
+      scanMsgEl.classList.add("err");
+      scanMsgEl.classList.remove("ok");
+    }
+  }
+
+  async function runScan() {
+    scanMsgEl.textContent = "Scanning forms…";
+    scanMsgEl.classList.remove("err", "ok");
+    try {
+      const [forms, managed] = await Promise.all([
+        discoverFormDropdowns(),
+        fetchJson(API + "/api/options/groups"),
+      ]);
+      const managedKeys = new Set(managed.map((g) => g.level + ":" + g.name));
+      scanItems = forms.map((f) => ({
+        level: f.level,
+        name: f.name,
+        managed: managedKeys.has(f.level + ":" + f.name),
+      }));
+      scanItems.sort((a, b) => (a.level + a.name).localeCompare(b.level + b.name));
+      const newCount = scanItems.filter((i) => !i.managed).length;
+      renderScan();
+      scanMsgEl.textContent = newCount
+        ? `Scan complete — ${scanItems.length} dropdown(s) found, ${newCount} new.`
+        : `Scan complete — ${scanItems.length} dropdown(s) found, all managed.`;
+      scanMsgEl.classList.add("ok");
+      scanMsgEl.classList.remove("err");
+    } catch (e) {
+      scanMsgEl.textContent = "Scan failed: " + e.message;
+      scanMsgEl.classList.add("err");
+      scanMsgEl.classList.remove("ok");
+    }
+  }
+
+  scanBtn.addEventListener("click", runScan);
+  scanLevelEl.addEventListener("change", renderScan);
+  scanSearchEl.addEventListener("input", renderScan);
+
   fillDropdowns(levelEl.value);
   renderList(levelEl.value, dropdownEl.value);
+  renderScan();
+
+  // --- Product type factory: per-type Fabric/Folding overrides ----------------
+  const ptfProductEl = panel.querySelector("#ptf-product");
+  const ptfProductTypes = opt("development", "product_type");
+  ptfProductEl.innerHTML = ptfProductTypes
+    .map((p) => `<option value="${escapeHtml(p)}">${escapeHtml(p)}</option>`)
+    .join("");
+
+  // Message helper scoped to a kind.
+  function ptfShowMsg(kind, text, isErr) {
+    const el = panel.querySelector(`[data-ptf-msg="${kind}"]`);
+    el.textContent = text || "";
+    el.classList.toggle("err", !!isErr);
+    el.classList.toggle("ok", !isErr && !!text);
+  }
+
+  // Resolve the live PTF map for a product + kind as an array of {id,value}.
+  function ptfValues(product, kind) {
+    const f = (PRODUCT_TYPE_FACTORY && PRODUCT_TYPE_FACTORY[product]) || {};
+    return (f[kind] || []).slice();
+  }
+
+  function ptfRenderList(kind) {
+    const product = ptfProductEl.value;
+    const listEl = panel.querySelector(`[data-ptf-list="${kind}"]`);
+    const hintEl = panel.querySelector(`[data-ptf-hint="${kind}"]`);
+    const values = ptfValues(product, kind);
+    const globalVals = opt("development", kind);
+
+    if (!values.length) {
+      listEl.innerHTML = `<li class="opt-empty muted small">No override — uses global Development → ${escapeHtml(kind[0].toUpperCase() + kind.slice(1))}: ${escapeHtml(globalVals.join(", "))}</li>`;
+    } else {
+      listEl.innerHTML = values
+        .map((v, i) => `
+          <li class="opt-item" data-ptf-id="${v.id}" data-idx="${i}">
+            <button class="icon-btn opt-up" data-idx="${i}" title="Move up" ${i === 0 ? "disabled" : ""}>▲</button>
+            <button class="icon-btn opt-down" data-idx="${i}" title="Move down" ${i === values.length - 1 ? "disabled" : ""}>▼</button>
+            <span class="opt-value" data-idx="${i}" title="Click to rename">${escapeHtml(v.value)}</span>
+            <button class="icon-btn danger opt-del" data-idx="${i}" title="Delete">✕</button>
+          </li>`).join("");
+    }
+    hintEl.textContent = `Global default: ${escapeHtml(globalVals.join(", "))}`;
+
+    listEl.querySelectorAll(".opt-up").forEach((b) =>
+      b.addEventListener("click", () => ptfMoveItem(kind, Number(b.dataset.idx), -1)));
+    listEl.querySelectorAll(".opt-down").forEach((b) =>
+      b.addEventListener("click", () => ptfMoveItem(kind, Number(b.dataset.idx), +1)));
+    listEl.querySelectorAll(".opt-del").forEach((b) =>
+      b.addEventListener("click", () => ptfDeleteItem(kind, Number(b.dataset.idx))));
+    listEl.querySelectorAll(".opt-value").forEach((s) =>
+      s.addEventListener("click", () => ptfStartRename(kind, Number(s.dataset.idx), s)));
+  }
+
+  function ptfOrderedValues(kind) {
+    return ptfValues(ptfProductEl.value, kind).map((v) => v.value);
+  }
+
+  async function ptfAddItem(kind) {
+    const product = ptfProductEl.value;
+    const input = panel.querySelector(`[data-ptf-new="${kind}"]`);
+    const value = input.value.trim();
+    if (!value) { ptfShowMsg(kind, "Enter a value first.", true); return; }
+    try {
+      await fetchJson(API + "/api/product-type-factory", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ product_type: product, kind, value }),
+      });
+      await loadProductTypeFactory();
+      input.value = "";
+      ptfRenderList(kind);
+      ptfShowMsg(kind, "Added.");
+    } catch (e) {
+      ptfShowMsg(kind, "Add failed: " + (e.message || "value may already exist"), true);
+    }
+  }
+
+  async function ptfMoveItem(kind, idx, dir) {
+    const values = ptfOrderedValues(kind);
+    const j = idx + dir;
+    if (j < 0 || j >= values.length) return;
+    [values[idx], values[j]] = [values[j], values[idx]];
+    try {
+      await fetchJson(API + "/api/product-type-factory/reorder", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ product_type: ptfProductEl.value, kind, orderedValues: values }),
+      });
+      await loadProductTypeFactory();
+      ptfRenderList(kind);
+    } catch (e) {
+      ptfShowMsg(kind, "Reorder failed: " + e.message, true);
+    }
+  }
+
+  async function ptfDeleteItem(kind, idx) {
+    const values = ptfValues(ptfProductEl.value, kind);
+    const target = values[idx];
+    if (!target) return;
+    try {
+      await fetchJson(API + "/api/product-type-factory/" + target.id, { method: "DELETE" });
+      await loadProductTypeFactory();
+      ptfRenderList(kind);
+      ptfShowMsg(kind, "Deleted.");
+    } catch (e) {
+      ptfShowMsg(kind, "Delete failed: " + e.message, true);
+    }
+  }
+
+  function ptfStartRename(kind, idx, spanEl) {
+    const values = ptfValues(ptfProductEl.value, kind);
+    const oldVal = values[idx] ? values[idx].value : "";
+    const input = document.createElement("input");
+    input.type = "text";
+    input.className = "opt-rename-input";
+    input.value = oldVal;
+    spanEl.replaceWith(input);
+    input.focus();
+    input.select();
+    function commit() {
+      const newVal = input.value.trim();
+      if (newVal && newVal !== oldVal) ptfRenameItem(kind, values[idx].id, newVal);
+      else ptfRenderList(kind);
+    }
+    input.addEventListener("blur", commit);
+    input.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") input.blur();
+      else if (e.key === "Escape") ptfRenderList(kind);
+    });
+  }
+
+  async function ptfRenameItem(kind, id, newVal) {
+    try {
+      await fetchJson(API + "/api/product-type-factory/" + id, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ value: newVal }),
+      });
+      await loadProductTypeFactory();
+      ptfRenderList(kind);
+      ptfShowMsg(kind, "Renamed.");
+    } catch (e) {
+      ptfShowMsg(kind, "Rename failed: " + (e.message || "value may already exist"), true);
+      ptfRenderList(kind);
+    }
+  }
+
+  panel.querySelectorAll("[data-ptf-add]").forEach((b) =>
+    b.addEventListener("click", () => ptfAddItem(b.dataset.ptfAdd)));
+  panel.querySelectorAll("[data-ptf-new]").forEach((i) =>
+    i.addEventListener("keydown", (e) => { if (e.key === "Enter") ptfAddItem(i.dataset.ptfNew); }));
+  ptfProductEl.addEventListener("change", () => {
+    ptfRenderList("fabric");
+    ptfRenderList("folding");
+  });
+  ptfRenderList("fabric");
+  ptfRenderList("folding");
 }
 
 // ---------------------------------------------------------------------------
@@ -2154,8 +2609,9 @@ function wireExtraParts(root, state, updateSaveState) {
           <label for="mat-fabric">Fabric</label>
           <select id="mat-fabric">
             <option value="">— select —</option>
-            ${opt("development","fabric").map((f) => `<option value="${escapeHtml(f)}" ${cur.fabric === f ? "selected" : ""}>${escapeHtml(f)}</option>`).join("")}
+            ${fabricOptionsFor(devState.product, cur.fabric).map((f) => `<option value="${escapeHtml(f)}" ${cur.fabric === f ? "selected" : ""}>${escapeHtml(f)}</option>`).join("")}
           </select>
+          <span class="hint" id="mat-fabric-hint"></span>
         </div>
 
         <div class="field">
@@ -2171,10 +2627,11 @@ function wireExtraParts(root, state, updateSaveState) {
           <div class="folding-row">
             <select id="mat-folding">
               <option value="">— select —</option>
-              ${opt("development","folding").map((f) => `<option value="${escapeHtml(f)}" ${cur.folding === f ? "selected" : ""}>${escapeHtml(f)}</option>`).join("")}
+              ${foldingOptionsFor(devState.product, cur.folding).map((f) => `<option value="${escapeHtml(f)}" ${cur.folding === f ? "selected" : ""}>${escapeHtml(f)}</option>`).join("")}
             </select>
             <img id="mat-folding-img" class="folding-preview" alt="" ${cur.folding && FOLDING_IMAGES[cur.folding] ? `src="${FOLDING_IMAGES[cur.folding]}"` : ""} style="${cur.folding && FOLDING_IMAGES[cur.folding] ? "" : "display:none;"}"/>
           </div>
+          <span class="hint" id="mat-folding-hint"></span>
         </div>
 
         <div class="actions modal-actions">
@@ -2185,12 +2642,38 @@ function wireExtraParts(root, state, updateSaveState) {
     document.body.appendChild(overlay);
     overlay.addEventListener("click", (e) => { if (e.target === overlay) overlay.remove(); });
 
+    const fabricSelect = overlay.querySelector("#mat-fabric");
+    const foldingSelect = overlay.querySelector("#mat-folding");
+    const foldingImg = overlay.querySelector("#mat-folding-img");
+    const fabricHint = overlay.querySelector("#mat-fabric-hint");
+    const foldingHint = overlay.querySelector("#mat-folding-hint");
+
+    // Keep the Fabric / Folding dropdowns narrowed to the chosen product type.
+    // If the currently-saved value is no longer valid for the product, show a
+    // hint and reset that field to "— select —" so the user picks a valid one.
+    const syncMaterialForProduct = (product) => {
+      const validFabric = fabricOptionsFor(product, null);
+      fabricSelect.innerHTML = `<option value="">— select —</option>` +
+        validFabric.map((f) => `<option value="${escapeHtml(f)}">${escapeHtml(f)}</option>`).join("");
+      const validFolding = foldingOptionsFor(product, null);
+      foldingSelect.innerHTML = `<option value="">— select —</option>` +
+        validFolding.map((f) => `<option value="${escapeHtml(f)}">${escapeHtml(f)}</option>`).join("");
+      // Preserve a previously-saved value only if it's still valid here.
+      const keepFabric = cur.fabric && validFabric.includes(cur.fabric) ? cur.fabric : "";
+      const keepFolding = cur.folding && validFolding.includes(cur.folding) ? cur.folding : "";
+      fabricSelect.value = keepFabric;
+      foldingSelect.value = keepFolding;
+      fabricHint.textContent = validFabric.length ? `Options for ${escapeHtml(product)}` : "";
+      foldingHint.textContent = validFolding.length ? `Options for ${escapeHtml(product)}` : "";
+    };
+    syncMaterialForProduct(devState.product);
+
     const close = () => overlay.remove();
     overlay.querySelector("#mat-save").addEventListener("click", () => {
       const recycle = overlay.querySelector('input[name="mat-recycle"]:checked')?.value || null;
-      const fabric = overlay.querySelector("#mat-fabric").value || null;
+      const fabric = fabricSelect.value || null;
       const edge = overlay.querySelector('input[name="mat-edge"]:checked')?.value || null;
-      const folding = overlay.querySelector("#mat-folding").value || null;
+      const folding = foldingSelect.value || null;
       devState.material = { recycle, fabric, edge, folding };
       refreshDevExtras();
       if (typeof updateSaveState === "function") updateSaveState();
@@ -2203,8 +2686,6 @@ function wireExtraParts(root, state, updateSaveState) {
       close();
     });
 
-    const foldingSelect = overlay.querySelector("#mat-folding");
-    const foldingImg = overlay.querySelector("#mat-folding-img");
     foldingSelect.addEventListener("change", () => {
       const img = FOLDING_IMAGES[foldingSelect.value];
       if (img) {
@@ -3176,7 +3657,7 @@ async function renderEnquiryEdit() {
             <label for="enq-product">Product type</label>
             <select id="enq-product" disabled>
               <option value="">— select —</option>
-              ${opt("enquiry","product_type").map((p) => `<option value="${escapeHtml(p)}">${escapeHtml(p)}</option>`).join("")}
+              ${opt("development","product_type").map((p) => `<option value="${escapeHtml(p)}">${escapeHtml(p)}</option>`).join("")}
             </select>
           </div>
         </div>
@@ -5995,8 +6476,9 @@ async function openDevEditModal(id) {
         <label for="ed-mat-fabric">Fabric</label>
         <select id="ed-mat-fabric">
           <option value="">— select —</option>
-          ${opt("development","fabric").map((f) => `<option value="${escapeHtml(f)}" ${rec.material && rec.material.fabric === f ? "selected" : ""}>${escapeHtml(f)}</option>`).join("")}
+          ${fabricOptionsFor(rec.product_type, rec.material && rec.material.fabric).map((f) => `<option value="${escapeHtml(f)}" ${rec.material && rec.material.fabric === f ? "selected" : ""}>${escapeHtml(f)}</option>`).join("")}
         </select>
+        <span class="hint">${PRODUCT_TYPE_FACTORY[rec.product_type] ? `Options for ${escapeHtml(rec.product_type)}` : ""}</span>
       </div>
       <div class="field">
         <label class="radio-label">Edge</label>
@@ -6010,10 +6492,11 @@ async function openDevEditModal(id) {
         <div class="folding-row">
           <select id="ed-mat-folding">
             <option value="">— select —</option>
-            ${opt("development","folding").map((f) => `<option value="${escapeHtml(f)}" ${rec.material && rec.material.folding === f ? "selected" : ""}>${escapeHtml(f)}</option>`).join("")}
+            ${foldingOptionsFor(rec.product_type, rec.material && rec.material.folding).map((f) => `<option value="${escapeHtml(f)}" ${rec.material && rec.material.folding === f ? "selected" : ""}>${escapeHtml(f)}</option>`).join("")}
           </select>
           <img id="ed-mat-folding-img" class="folding-preview" alt="" ${rec.material && rec.material.folding && FOLDING_IMAGES[rec.material.folding] ? `src="${FOLDING_IMAGES[rec.material.folding]}"` : ""} style="${rec.material && rec.material.folding && FOLDING_IMAGES[rec.material.folding] ? "" : "display:none;"}"/>
         </div>
+        <span class="hint">${PRODUCT_TYPE_FACTORY[rec.product_type] ? `Options for ${escapeHtml(rec.product_type)}` : ""}</span>
       </div>
       ` : `
       <div class="field">
@@ -6221,11 +6704,39 @@ async function openDevEditModal(id) {
 
   const edFoldingSelect = overlay.querySelector("#ed-mat-folding");
   const edFoldingImg = overlay.querySelector("#ed-mat-folding-img");
+  const edFabricSelect = overlay.querySelector("#ed-mat-fabric");
   if (edFoldingSelect && edFoldingImg) {
     edFoldingSelect.addEventListener("change", () => {
       const img = FOLDING_IMAGES[edFoldingSelect.value];
       if (img) {
         edFoldingImg.src = img;
+        edFoldingImg.style.display = "";
+      } else {
+        edFoldingImg.removeAttribute("src");
+        edFoldingImg.style.display = "none";
+      }
+    });
+  }
+  // When the product type changes in the Edit modal, re-scope the Fabric /
+  // Folding dropdowns to that product's factory set. A previously-saved value
+  // that's no longer valid for the new product is reset to "— select —".
+  const edProductSelect = overlay.querySelector("#ed-product");
+  if (edProductSelect && edFabricSelect && edFoldingSelect) {
+    edProductSelect.addEventListener("change", () => {
+      const product = edProductSelect.value;
+      const validFabric = fabricOptionsFor(product, null);
+      const validFolding = foldingOptionsFor(product, null);
+      const curFabric = edFabricSelect.value;
+      const curFolding = edFoldingSelect.value;
+      edFabricSelect.innerHTML = `<option value="">— select —</option>` +
+        validFabric.map((f) => `<option value="${escapeHtml(f)}">${escapeHtml(f)}</option>`).join("");
+      edFoldingSelect.innerHTML = `<option value="">— select —</option>` +
+        validFolding.map((f) => `<option value="${escapeHtml(f)}">${escapeHtml(f)}</option>`).join("");
+      edFabricSelect.value = validFabric.includes(curFabric) ? curFabric : "";
+      const keepFolding = validFolding.includes(curFolding) ? curFolding : "";
+      edFoldingSelect.value = keepFolding;
+      if (keepFolding && FOLDING_IMAGES[keepFolding]) {
+        edFoldingImg.src = FOLDING_IMAGES[keepFolding];
         edFoldingImg.style.display = "";
       } else {
         edFoldingImg.removeAttribute("src");
@@ -7757,4 +8268,5 @@ startAutoRefresh();
 // renders from the DB-backed sets. If the fetch fails, forms fall back to the
 // hardcoded seed arrays declared near the top of this file.
 loadOptions();
-
+// Load the per-product-type Fabric/Folding factory map (Settings / Options).
+loadProductTypeFactory();
