@@ -370,7 +370,6 @@ function onProductTypeChanged(prodEl) {
       </div>
     </div>`;
   document.body.appendChild(overlay);
-  overlay.addEventListener("click", (e) => { if (e.target === overlay) overlay.remove(); });
   overlay.querySelector("#pt-cancel").addEventListener("click", () => overlay.remove());
   overlay.querySelector("#pt-ok").addEventListener("click", () => { overlay.remove(); apply(); });
 }
@@ -585,7 +584,6 @@ async function openColorsPopup(getState, setState, onChange) {
       </div>
     </div>`;
   document.body.appendChild(overlay);
-  overlay.addEventListener("click", (e) => { if (e.target === overlay) overlay.remove(); });
 
   if (split) {
     overlay.querySelector('[data-side="front"]')._side = work.front;
@@ -643,6 +641,26 @@ async function openColorsPopup(getState, setState, onChange) {
     if (typeof onChange === "function") onChange();
     overlay.remove();
   });
+}
+
+// Centered image lightbox. Opens a single image in a modal that only closes via
+// the (✕) button — clicking the dark overlay does NOT dismiss it (matches the
+// project rule that development popups only close on the explicit close button).
+function openImageLightbox(url, name) {
+  if (!url) return;
+  const overlay = document.createElement("div");
+  overlay.className = "modal-overlay image-lightbox";
+  overlay.innerHTML = `
+    <div class="image-lightbox-inner" role="dialog" aria-modal="true" aria-label="${escapeHtml(name || "Image preview")}">
+      <button class="image-lightbox-close" type="button" title="Close" aria-label="Close">✕</button>
+      <img class="image-lightbox-img" src="${escapeHtml(url)}" alt="${escapeHtml(name || "")}" />
+      ${name ? `<div class="image-lightbox-caption">${escapeHtml(name)}</div>` : ""}
+    </div>`;
+  document.body.appendChild(overlay);
+  overlay.querySelector(".image-lightbox-close").addEventListener("click", () => overlay.remove());
+  // Close on Escape for keyboard users (still NOT on outside click).
+  const onKey = (e) => { if (e.key === "Escape") { overlay.remove(); document.removeEventListener("keydown", onKey); } };
+  document.addEventListener("keydown", onKey);
 }
 
 // Open a read-only "Colors / Pantone" popup from a saved Development/Enquiry
@@ -715,7 +733,6 @@ function openColorsViewPopup(rec) {
       </div>
     </div>`;
   document.body.appendChild(overlay);
-  overlay.addEventListener("click", (e) => { if (e.target === overlay) overlay.remove(); });
   overlay.querySelector("#cpv-close").addEventListener("click", () => overlay.remove());
 }
 
@@ -2546,7 +2563,6 @@ function openConfirmModal(title, message, onConfirm) {
     </div>`;
   document.body.appendChild(overlay);
   overlay.querySelector("#cf-cancel").addEventListener("click", () => overlay.remove());
-  overlay.addEventListener("click", (e) => { if (e.target === overlay) overlay.remove(); });
   overlay.querySelector("#cf-ok").addEventListener("click", () => {
     overlay.remove();
     onConfirm();
@@ -2886,7 +2902,6 @@ function wireExtraParts(root, state, updateSaveState) {
         </div>
       </div>`;
     document.body.appendChild(overlay);
-    overlay.addEventListener("click", (e) => { if (e.target === overlay) overlay.remove(); });
 
     const fabricSelect = overlay.querySelector("#mat-fabric");
     const foldingSelect = overlay.querySelector("#mat-folding");
@@ -2959,7 +2974,6 @@ function wireExtraParts(root, state, updateSaveState) {
       </div>`;
     document.body.appendChild(overlay);
     overlay.querySelector("#tba-close").addEventListener("click", () => overlay.remove());
-    overlay.addEventListener("click", (e) => { if (e.target === overlay) overlay.remove(); });
   };
 
   const openSpecialPopup = () => {
@@ -2984,7 +2998,6 @@ function wireExtraParts(root, state, updateSaveState) {
         </div>
       </div>`;
     document.body.appendChild(overlay);
-    overlay.addEventListener("click", (e) => { if (e.target === overlay) overlay.remove(); });
 
     const close = () => overlay.remove();
     overlay.querySelector("#spec-save").addEventListener("click", () => {
@@ -5301,11 +5314,14 @@ async function renderDevelopmentCreate() {
     imageDrop.classList.add("has-items");
     imageThumbs.innerHTML = images.map((img) => `
       <div class="thumb" data-id="${img.id}">
-        <img src="${img.url}" alt="${escapeHtml(img.name)}" />
+        <img class="create-thumb-img" src="${img.url}" alt="${escapeHtml(img.name)}" data-full="${escapeHtml(img.url)}" data-name="${escapeHtml(img.name)}" />
         <div class="thumb-name">${escapeHtml(img.name)}</div>
         ${img.uploading ? '<span class="thumb-badge uploading">uploading…</span>' : ''}
         <button class="icon-btn danger thumb-rm" data-rm="${img.id}" title="Remove">✕</button>
       </div>`).join("");
+    imageThumbs.querySelectorAll(".create-thumb-img").forEach((im) => {
+      im.addEventListener("click", () => openImageLightbox(im.dataset.full, im.dataset.name));
+    });
     imageThumbs.querySelectorAll("[data-rm]").forEach((b) => {
       b.addEventListener("click", () => {
         const id = b.dataset.rm;
@@ -6069,11 +6085,14 @@ async function renderDevelopmentEdit() {
     imageDrop.classList.add("has-items");
     imageThumbs.innerHTML = images.map((img) => `
       <div class="thumb" data-id="${img.id}">
-        <img src="${img.url}" alt="${escapeHtml(img.name)}" />
+        <img class="create-thumb-img" src="${img.url}" alt="${escapeHtml(img.name)}" data-full="${escapeHtml(img.url)}" data-name="${escapeHtml(img.name)}" />
         <div class="thumb-name">${escapeHtml(img.name)}</div>
         ${img.uploading ? '<span class="thumb-badge uploading">uploading…</span>' : ''}
         <button class="icon-btn danger thumb-rm" data-rm="${img.id}" title="Remove">✕</button>
       </div>`).join("");
+    imageThumbs.querySelectorAll(".create-thumb-img").forEach((im) => {
+      im.addEventListener("click", () => openImageLightbox(im.dataset.full, im.dataset.name));
+    });
     imageThumbs.querySelectorAll("[data-rm]").forEach((b) => {
       b.addEventListener("click", () => {
         const id = b.dataset.rm;
@@ -6431,7 +6450,7 @@ function paintDevelopmentView() {
     const imgs = (r.image_names || []).slice(0, 3);
     const thumbs = imgs.length
       ? `<div class="dev-thumbs">` + imgs.map((n) =>
-          `<img class="dev-thumb-sm" src="${assetUrl(n)}" alt="${escapeHtml(n)}" title="${escapeHtml(n)}" />`).join("") + `</div>`
+          `<img class="dev-thumb-sm dev-view-thumb" src="${assetUrl(n)}" alt="${escapeHtml(n)}" title="${escapeHtml(n)}" data-full="${escapeHtml(assetUrl(n))}" data-name="${escapeHtml(n)}" />`).join("") + `</div>`
       : `<span class="muted">—</span>`;
     const docs = (r.doc_names || []).map((n) =>
       `<a class="doc-tag" href="${docUrl(n)}" target="_blank" rel="noopener" download title="${escapeHtml(n)}">📄 ${escapeHtml(displayName(n))}</a>`).join("");
@@ -6521,9 +6540,24 @@ function paintDevelopmentView() {
   });
 
   panel.querySelector("#dev-export").addEventListener("click", async () => {
+    // Only export the checked rows. If nothing is ticked, do nothing and tell
+    // the user — keeps the file deterministic instead of silently exporting
+    // every record.
+    const ids = [...devViewSelected]
+      .filter((k) => k.startsWith("d:"))
+      .map((k) => Number(k.slice(2)))
+      .filter((n) => Number.isFinite(n));
+    if (!ids.length) {
+      openConfirmModal(
+        "Nothing selected",
+        "Tick the rows you want to export, then click Export Excel again.",
+        () => {}
+      );
+      return;
+    }
     try {
       const a = document.createElement("a");
-      a.href = API + "/api/export/developments";
+      a.href = API + "/api/export/developments?ids=" + encodeURIComponent(ids.join(","));
       a.download = "developments.xlsx";
       document.body.appendChild(a);
       a.click();
@@ -6577,6 +6611,16 @@ function paintDevelopmentView() {
         if (tr) tr.classList.toggle("selected", cb.checked);
       });
       syncBatchUI();
+    });
+  });
+
+  // Click any thumbnail in the Image column to open it in the centered lightbox.
+  // (Only the thumbnail itself triggers the popup — its parent cell still
+  // contains the row-select checkbox, which must keep working on click.)
+  panel.querySelectorAll(".dev-view-thumb").forEach((img) => {
+    img.addEventListener("click", (e) => {
+      e.stopPropagation();
+      openImageLightbox(img.dataset.full, img.dataset.name);
     });
   });
 
@@ -6890,10 +6934,13 @@ async function openDevEditModal(id) {
     else drop.classList.remove("has-items");
     wrap.innerHTML = editImages.map((img) => `
       <div class="thumb" data-id="${img.id}">
-        ${img.url ? `<img src="${img.url}" alt="${escapeHtml(img.name)}" />` : `<div class="thumb-name">${escapeHtml(img.name)}</div>`}
+        ${img.url ? `<img class="edit-thumb-img" src="${img.url}" alt="${escapeHtml(img.name)}" data-full="${escapeHtml(img.url)}" data-name="${escapeHtml(img.name)}" />` : `<div class="thumb-name">${escapeHtml(img.name)}</div>`}
         <div class="thumb-name">${escapeHtml(img.name)}</div>
         <button class="icon-btn danger thumb-rm" data-rm="${img.id}" title="Remove">✕</button>
       </div>`).join("");
+    wrap.querySelectorAll(".edit-thumb-img").forEach((im) => {
+      im.addEventListener("click", () => openImageLightbox(im.dataset.full, im.dataset.name));
+    });
     wrap.querySelectorAll("[data-rm]").forEach((b) => {
       b.addEventListener("click", () => {
         const id = b.dataset.rm;
@@ -7092,7 +7139,6 @@ async function openDevEditModal(id) {
   }
 
   overlay.querySelector("#ed-cancel").addEventListener("click", () => overlay.remove());
-  overlay.addEventListener("click", (e) => { if (e.target === overlay) overlay.remove(); });
 
   overlay.querySelector("#ed-save").addEventListener("click", async () => {
     const company_name = overlay.querySelector("#ed-company").value.trim();

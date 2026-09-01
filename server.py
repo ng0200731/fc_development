@@ -1133,13 +1133,30 @@ def _dev_record_to_xlsx(d):
     """Flat (headers, cells, image_names) for one development/enquiry row.
 
     Column order mirrors the Development / View grid exactly:
-    Company, Member, Item, Product Type, Image, Documents, Created, Updated, Details.
+    Company, Member, Item, Product Type, Image, Documents, Material, Special,
+    Height (mm), Width (mm), Remark, Created, Updated, Details.
     `cells` has exactly one entry per header, in order.
     """
     images = d.get("image_names") or []
     docs = d.get("doc_names") or []
     headers = ["Company", "Member", "Item", "Product Type", "Image",
-               "Documents", "Created", "Updated", "Details"]
+               "Documents", "Material", "Special",
+               "Height (mm)", "Width (mm)", "Remark",
+               "Created", "Updated", "Details"]
+    material = d.get("material")
+    special = d.get("special")
+    height = d.get("height")
+    width = d.get("width")
+    # `remake` may already be a list (JSON-decoded) or a JSON string; normalize.
+    remake = d.get("remake")
+    if isinstance(remake, str):
+        try:
+            import json as _json
+            remake = _json.loads(remake)
+        except Exception:
+            remake = [remake]
+    if not isinstance(remake, list):
+        remake = []
     cells = [
         d.get("company_name") or "",
         d.get("member_name") or "",
@@ -1147,11 +1164,46 @@ def _dev_record_to_xlsx(d):
         d.get("product_type") or "",
         "",                              # Image column: holds the embedded thumbnail
         _docs_summary(docs),
+        _material_summary(material),
+        _special_summary(special),
+        "" if height is None else str(height),
+        "" if width is None else str(width),
+        "\n".join(remake),
         d.get("created_at") or "",
         d.get("updated_at") or "",
         dev_details_summary(d),          # Details: size / colors summary
     ]
     return headers, cells, images
+
+
+def _material_summary(mat):
+    """Match the JS `materialSummary()`: short text for the Material column."""
+    if not mat or not isinstance(mat, dict):
+        return ""
+    parts = []
+    if mat.get("recycle"):
+        parts.append("recycle" if mat["recycle"] == "recycle" else "non-recycle")
+    if mat.get("fabric"):
+        parts.append(mat["fabric"])
+    if mat.get("edge"):
+        parts.append("slit edge" if mat["edge"] == "slit" else "woven edge")
+    if mat.get("folding"):
+        parts.append(mat["folding"])
+    lists = mat.get("lists")
+    if lists and isinstance(lists, dict):
+        for k in lists.keys():
+            if lists[k]:
+                parts.append(f"{k}: {lists[k]}")
+    return " · ".join(parts)
+
+
+def _special_summary(spec):
+    """Match the JS `specialSummary()`: short text for the Special column."""
+    if not spec or not isinstance(spec, dict):
+        return ""
+    if spec.get("variable"):
+        return "variable" if spec["variable"] == "variable" else "non variable"
+    return ""
 
 
 def _docs_summary(doc_names):
@@ -1191,7 +1243,24 @@ def _customer_record_to_xlsx(c):
 
 def api_export_developments(handler):
     conn = db()
-    rows = conn.execute("SELECT * FROM developments ORDER BY id DESC").fetchall()
+    # `?ids=1,2,3` filters the export to only the checked rows from the View grid.
+    qs = parse_qs(urlparse(handler.path).query)
+    ids_raw = (qs.get("ids") or [""])[0]
+    if ids_raw:
+        try:
+            ids = [int(x) for x in ids_raw.split(",") if x.strip()]
+        except ValueError:
+            ids = []
+        if not ids:
+            rows = []
+        else:
+            placeholders = ",".join("?" * len(ids))
+            rows = conn.execute(
+                f"SELECT * FROM developments WHERE id IN ({placeholders}) ORDER BY id DESC",
+                ids,
+            ).fetchall()
+    else:
+        rows = conn.execute("SELECT * FROM developments ORDER BY id DESC").fetchall()
     conn.close()
     records = [_dev_record_to_xlsx(_dev_row_to_payload(r)) for r in rows]
     wb = _build_workbook(records, "Developments")
