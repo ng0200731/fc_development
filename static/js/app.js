@@ -4670,7 +4670,7 @@ async function renderEnquiryEdit() {
     if (saveBtn.disabled) return;
     const payload = buildEnquiryPayload();
     if (!payload) {
-      openConfirmModal("Cannot save", "Please fill company, member, item, and product type.", () => {});
+      openConfirmModal("Cannot save", "Please fill company, member, item, product type, Height (mm), and Width (mm).", () => {});
       return;
     }
     saveBtn.disabled = true;
@@ -4801,11 +4801,11 @@ async function renderDevelopmentCreate() {
         </div>
         <div class="dim-row">
           <div class="field">
-            <label for="dev-height">Height (mm)</label>
+            <label for="dev-height">Height (mm) <span class="req-mark">required</span></label>
             <input id="dev-height" type="number" min="0" step="0.1" placeholder="0.0" autocomplete="off" />
           </div>
           <div class="field">
-            <label for="dev-width">Width (mm)</label>
+            <label for="dev-width">Width (mm) <span class="req-mark">required</span></label>
             <input id="dev-width" type="number" min="0" step="0.1" placeholder="0.0" autocomplete="off" />
           </div>
         </div>
@@ -5258,9 +5258,14 @@ async function renderDevelopmentCreate() {
   const updateSaveState = () => {
     // Image is a required field: at least one attachment must be present to
     // save or update. Documents are optional and never gate Save/Update.
+    // Height + Width are REQUIRED — both must be filled in (any non-empty
+    // numeric value, treated as mm) before Save / Update becomes active.
     const hasImage = devState.images.length >= 1;
+    const heightOk = !!(devState.height && !Number.isNaN(Number(devState.height)) && Number(devState.height) >= 0);
+    const widthOk  = !!(devState.width  && !Number.isNaN(Number(devState.width))  && Number(devState.width)  >= 0);
     const allFilled = hiddenEl.value !== "" && memberEl.value !== "" &&
                       devState.item && devState.product &&
+                      heightOk && widthOk &&
                       part3Valid() && hasImage;
     const canSave = allFilled;
     saveBtn.disabled = !canSave;
@@ -5492,7 +5497,7 @@ async function renderDevelopmentCreate() {
     if (saveBtn.disabled) return;
     const payload = buildDevelopmentPayload();
     if (!payload) {
-      openConfirmModal("Cannot save", "Please fill company, member, item, and product type.", () => {});
+      openConfirmModal("Cannot save", "Please fill company, member, item, product type, Height (mm), and Width (mm).", () => {});
       return;
     }
     saveBtn.disabled = true;
@@ -5588,11 +5593,11 @@ async function renderDevelopmentEdit() {
         </div>
         <div class="dim-row">
           <div class="field">
-            <label for="dev-height">Height (mm)</label>
+            <label for="dev-height">Height (mm) <span class="req-mark">required</span></label>
             <input id="dev-height" type="number" min="0" step="0.1" placeholder="0.0" autocomplete="off" />
           </div>
           <div class="field">
-            <label for="dev-width">Width (mm)</label>
+            <label for="dev-width">Width (mm) <span class="req-mark">required</span></label>
             <input id="dev-width" type="number" min="0" step="0.1" placeholder="0.0" autocomplete="off" />
           </div>
         </div>
@@ -6020,8 +6025,14 @@ async function renderDevelopmentEdit() {
   // detected (an existing image alone does NOT enable Update).
   const updateSaveState = () => {
     const hasImage = devState.images.length >= 1;
+    // Height + Width are REQUIRED — both must be filled in before Update is
+    // active. The dirty check (below) already detects changes vs. the loaded
+    // record, so changing either field naturally enables the Update button.
+    const heightOk = !!(devState.height && !Number.isNaN(Number(devState.height)) && Number(devState.height) >= 0);
+    const widthOk  = !!(devState.width  && !Number.isNaN(Number(devState.width))  && Number(devState.width)  >= 0);
     const allFilled = hiddenEl.value !== "" && memberEl.value !== "" &&
                       devState.item && devState.product &&
+                      heightOk && widthOk &&
                       part3Valid() && hasImage;
     const dirty = isDirty();
     const canSave = allFilled && dirty;
@@ -6291,7 +6302,7 @@ async function renderDevelopmentEdit() {
     if (saveBtn.disabled) return;
     const payload = buildDevelopmentPayload();
     if (!payload) {
-      openConfirmModal("Cannot save", "Please fill company, member, item, and product type.", () => {});
+      openConfirmModal("Cannot save", "Please fill company, member, item, product type, Height (mm), and Width (mm).", () => {});
       return;
     }
     saveBtn.disabled = true;
