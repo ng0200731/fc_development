@@ -13,6 +13,15 @@
   <div class="layout">
     <!-- LEFT MENU — 10% -->
     <nav class="sidebar" id="sidebar" aria-label="Sidebar">
+      <div class="group" data-group="setting">
+        <button class="group-toggle" aria-expanded="true">
+          <span class="caret">▾</span> Settings
+        </button>
+        <ul class="group-items">
+          <li><a class="nav-item" data-target="setting-options" href="#">Options</a></li>
+        </ul>
+      </div>
+
       <div class="group" data-group="customer">
         <button class="group-toggle" aria-expanded="true">
           <span class="caret">▾</span> Customer
@@ -40,15 +49,6 @@
         <ul class="group-items">
           <li><a class="nav-item" data-target="enquiry-create" href="#">Create</a></li>
           <li><a class="nav-item" data-target="enquiry-view" href="#">View</a></li>
-        </ul>
-      </div>
-
-      <div class="group" data-group="setting">
-        <button class="group-toggle" aria-expanded="true">
-          <span class="caret">▾</span> Setting
-        </button>
-        <ul class="group-items">
-          <li><a class="nav-item" data-target="setting-options" href="#">Options</a></li>
         </ul>
       </div>
     </nav>

@@ -566,6 +566,12 @@ def api_register_group(handler):
 # Product type "factory": per (product_type, kind) overrides for the Fabric and
 # Folding dropdowns. Product types not present here fall back to the global
 # Development -> Fabric / Folding lists. Persisted so edits survive restarts.
+#
+# GENERALIZED MODEL: each product type owns an ordered set of *named lists*
+# (the `kind` column). "fabric" and "folding" are the two default list names
+# but any name is allowed (e.g. "Material", "Finish", "GSM") — see Part 4 of
+# the spec. `list_seq` orders the lists *within* a product type; `position`
+# orders the options *within* a single list.
 # ---------------------------------------------------------------------------
 
 def _ensure_product_type_factory_table(conn):
@@ -577,47 +583,121 @@ def _ensure_product_type_factory_table(conn):
             kind         TEXT NOT NULL,
             value        TEXT NOT NULL,
             position     INTEGER NOT NULL DEFAULT 0,
+            list_seq     INTEGER NOT NULL DEFAULT 0,
             UNIQUE(product_type, kind, value)
         )
         """
     )
+    # Migration: the original schema had no list_seq column. Add it in place so
+    # an existing database (created before this feature) keeps working without a
+    # rebuild.
+    existing = {r[1] for r in conn.execute("PRAGMA table_info(product_type_factory)").fetchall()}
+    if "list_seq" not in existing:
+        conn.execute("ALTER TABLE product_type_factory ADD COLUMN list_seq INTEGER NOT NULL DEFAULT 0")
 
 
-# Seed the factory with today's hardcoded relationships (idempotent: only empty
-# (product_type, kind) groups get values).
+# Seed the factory with sensible defaults (idempotent, per product type).
+#
+# A product type is seeded with fabric / folding ONLY when it currently has NO
+# factory rows at all. Once a product type owns any rows, seeding leaves it
+# entirely alone — so a user who deletes Fabric (but keeps Folding) or deletes a
+# list entirely keeps that state across server restarts; the seed never
+# recreates a list the user removed.
+#
+# The screen print label / printed label-specific combos override the generic
+# fabric / folding values where a product type is still unseeded.
+#
+# The live Development -> fabric / folding option values are read from the
+# `options` table; if unavailable we fall back to the hardcoded seeds.
 def _seed_product_type_factory(conn):
     cur = conn.cursor()
-    seed = [
-        ("screen print label", "fabric", ["polyester", "nylon"]),
-        ("screen print label", "folding", ["loop fold", "end fold", "straight cut"]),
-        ("printed label", "fabric", ["cotton"]),
-        ("printed label", "folding", ["mitre fold", "Manhattan Fold"]),
+
+    # Resolve the global fabric / folding defaults from the options table.
+    # `conn` here is the init_db() connection which may not have row_factory
+    # set, so index rows positionally (value is column 0).
+    def _global_values(name, fallback):
+        rows = cur.execute(
+            "SELECT value FROM options WHERE level=? AND name=? ORDER BY position",
+            ("development", name),
+        ).fetchall()
+        vals = [r[0] for r in rows]
+        return vals if vals else list(fallback)
+
+    fb_fabric = _global_values("fabric", ["polyester", "nylon", "cotton"])
+    fb_folding = _global_values("folding", [
+        "loop fold", "end fold", "straight cut", "mitre fold", "Manhattan Fold", "Asymmetrical Fold",
+    ])
+
+    # Product types that already have their own dedicated combos — these win
+    # over the generic fabric/folding seeding values where present.
+    dedicated = {
+        "screen print label": {
+            "fabric": ["polyester", "nylon"],
+            "folding": ["loop fold", "end fold", "straight cut"],
+        },
+        "printed label": {
+            "fabric": ["cotton"],
+            "folding": ["mitre fold", "Manhattan Fold"],
+        },
+    }
+
+    # Stable product type list (drives default seeding order).
+    product_types = [
+        "woven label", "printed label", "screen print label", "hang tag",
+        "raised silicon label", "heat transfer label", "leather patch", "embroidery patch",
     ]
-    for product_type, kind, values in seed:
-        have = cur.execute(
-            "SELECT 1 FROM product_type_factory WHERE product_type=? AND kind=?",
-            (product_type, kind),
-        ).fetchone()
-        if have:
-            continue
-        for p, v in enumerate(values):
-            cur.execute(
-                "INSERT INTO product_type_factory (product_type, kind, value, position) VALUES (?, ?, ?, ?)",
-                (product_type, kind, v, p),
-            )
+
+    for product_type in product_types:
+        # Seed per-kind, idempotently. For each kind we only insert if that
+        # specific (product_type, kind) combo has no rows yet. This makes
+        # deletions stick (a removed list is never resurrected) while still
+        # back-filling kinds that were never seeded for a product type.
+        combo = dedicated.get(product_type, {"fabric": fb_fabric, "folding": fb_folding})
+        for seq, (kind, values) in enumerate(combo.items()):
+            has_kind = cur.execute(
+                "SELECT 1 FROM product_type_factory WHERE product_type=? AND kind=?",
+                (product_type, kind),
+            ).fetchone()
+            if has_kind:
+                continue
+            for p, v in enumerate(values):
+                cur.execute(
+                    "INSERT INTO product_type_factory (product_type, kind, value, position, list_seq) "
+                    "VALUES (?, ?, ?, ?, ?)",
+                    (product_type, kind, v, p, seq),
+                )
+
+
+def _next_list_seq(conn, product_type):
+    row = conn.execute(
+        "SELECT COALESCE(MAX(list_seq), -1) AS m FROM product_type_factory WHERE product_type=?",
+        (product_type,),
+    ).fetchone()
+    return row["m"] + 1
 
 
 def api_get_product_type_factory(handler):
     conn = db()
     rows = conn.execute(
-        "SELECT id, product_type, kind, value, position FROM product_type_factory "
-        "ORDER BY product_type, kind, position"
+        "SELECT id, product_type, kind, value, position, list_seq FROM product_type_factory "
+        "ORDER BY product_type, list_seq, position"
     ).fetchall()
     conn.close()
     out = {}
+    # Pre-seed every known product type as an empty object so the frontend can
+    # tell "this product type exists but has no lists yet" (initialized, empty)
+    # apart from "this product type was never loaded" (uninitialized). This
+    # keeps a deleted list from resurrecting phantom Fabric/Folding blocks.
+    for pt in (
+        "woven label", "printed label", "screen print label", "hang tag",
+        "raised silicon label", "heat transfer label", "leather patch", "embroidery patch",
+    ):
+        out.setdefault(pt, {})
     for r in rows:
-        out.setdefault(r["product_type"], {"fabric": [], "folding": []})
-        out[r["product_type"]][r["kind"]].append({"id": r["id"], "value": r["value"]})
+        prod = out.setdefault(r["product_type"], {})
+        prod.setdefault(r["kind"], []).append({
+            "id": r["id"], "value": r["value"], "position": r["position"],
+        })
     return json_response(handler, out)
 
 
@@ -626,8 +706,8 @@ def api_add_ptf(handler):
     product_type = (data.get("product_type") or "").strip()
     kind = (data.get("kind") or "").strip()
     value = (data.get("value") or "").strip()
-    if not product_type or kind not in ("fabric", "folding") or not value:
-        return json_response(handler, {"error": "product_type, kind (fabric|folding) and value are required"}, 400)
+    if not product_type or not kind or not value:
+        return json_response(handler, {"error": "product_type, kind and value are required"}, 400)
     conn = db()
     exists = conn.execute(
         "SELECT 1 FROM product_type_factory WHERE product_type=? AND kind=? AND value=?",
@@ -641,13 +721,20 @@ def api_add_ptf(handler):
         (product_type, kind),
     ).fetchone()["m"]
     cur = conn.cursor()
+    # A brand-new list (no rows yet) gets the next list_seq so it renders last.
+    has_any = cur.execute(
+        "SELECT 1 FROM product_type_factory WHERE product_type=? AND kind=?",
+        (product_type, kind),
+    ).fetchone()
+    list_seq = 0 if has_any else _next_list_seq(conn, product_type)
     cur.execute(
-        "INSERT INTO product_type_factory (product_type, kind, value, position) VALUES (?, ?, ?, ?)",
-        (product_type, kind, value, max_pos + 1),
+        "INSERT INTO product_type_factory (product_type, kind, value, position, list_seq) "
+        "VALUES (?, ?, ?, ?, ?)",
+        (product_type, kind, value, max_pos + 1, list_seq),
     )
     oid = cur.lastrowid
     row = conn.execute(
-        "SELECT id, product_type, kind, value, position FROM product_type_factory WHERE id=?", (oid,)
+        "SELECT id, product_type, kind, value, position, list_seq FROM product_type_factory WHERE id=?", (oid,)
     ).fetchone()
     conn.commit()
     conn.close()
@@ -659,8 +746,8 @@ def api_reorder_ptf(handler):
     product_type = (data.get("product_type") or "").strip()
     kind = (data.get("kind") or "").strip()
     ordered = data.get("orderedValues")
-    if not product_type or kind not in ("fabric", "folding") or not isinstance(ordered, list):
-        return json_response(handler, {"error": "product_type, kind (fabric|folding) and orderedValues[] required"}, 400)
+    if not product_type or not kind or not isinstance(ordered, list):
+        return json_response(handler, {"error": "product_type, kind and orderedValues[] required"}, 400)
     conn = db()
     valid = {r["value"] for r in conn.execute(
         "SELECT value FROM product_type_factory WHERE product_type=? AND kind=?",
@@ -673,6 +760,116 @@ def api_reorder_ptf(handler):
                 (pos, product_type, kind, v),
             )
             pos += 1
+    conn.commit()
+    conn.close()
+    return json_response(handler, {"ok": True}, 200)
+
+
+# --- List-level operations (create / rename / delete / reorder a whole list) --
+
+def api_add_ptf_list(handler):
+    """Create an empty list (no options yet) for a product type."""
+    data = read_json_body(handler)
+    product_type = (data.get("product_type") or "").strip()
+    kind = (data.get("kind") or "").strip()
+    if not product_type or not kind:
+        return json_response(handler, {"error": "product_type and kind are required"}, 400)
+    conn = db()
+    clash = conn.execute(
+        "SELECT 1 FROM product_type_factory WHERE product_type=? AND kind=?",
+        (product_type, kind),
+    ).fetchone()
+    if clash:
+        conn.close()
+        return json_response(handler, {"error": "list already exists"}, 409)
+    list_seq = _next_list_seq(conn, product_type)
+    conn.execute(
+        "INSERT INTO product_type_factory (product_type, kind, value, position, list_seq) "
+        "VALUES (?, ?, ?, ?, ?)",
+        (product_type, kind, "__placeholder__", 0, list_seq),
+    )
+    oid = conn.execute(
+        "SELECT id FROM product_type_factory WHERE product_type=? AND kind=? AND value=?",
+        (product_type, kind, "__placeholder__"),
+    ).fetchone()["id"]
+    conn.commit()
+    conn.close()
+    return json_response(handler, {"ok": True, "product_type": product_type, "kind": kind}, 201)
+
+
+def api_rename_ptf_list(handler):
+    """Rename a whole list (every option row for (product_type, oldKind))."""
+    data = read_json_body(handler)
+    product_type = (data.get("product_type") or "").strip()
+    old_kind = (data.get("oldKind") or "").strip()
+    new_kind = (data.get("newKind") or "").strip()
+    if not product_type or not old_kind or not new_kind:
+        return json_response(handler, {"error": "product_type, oldKind and newKind are required"}, 400)
+    if old_kind == new_kind:
+        return json_response(handler, {"ok": True})
+    conn = db()
+    existing = conn.execute(
+        "SELECT 1 FROM product_type_factory WHERE product_type=? AND kind=?",
+        (product_type, new_kind),
+    ).fetchone()
+    if existing:
+        conn.close()
+        return json_response(handler, {"error": "a list named '%s' already exists" % new_kind}, 409)
+    conn.execute(
+        "UPDATE product_type_factory SET kind=? WHERE product_type=? AND kind=?",
+        (new_kind, product_type, old_kind),
+    )
+    conn.commit()
+    conn.close()
+    return json_response(handler, {"ok": True, "product_type": product_type, "kind": new_kind}, 200)
+
+
+def api_delete_ptf_list(handler):
+    """Delete an entire list (all option rows) for a product type."""
+    data = read_json_body(handler)
+    product_type = (data.get("product_type") or "").strip()
+    kind = (data.get("kind") or "").strip()
+    if not product_type or not kind:
+        return json_response(handler, {"error": "product_type and kind are required"}, 400)
+    conn = db()
+    conn.execute(
+        "DELETE FROM product_type_factory WHERE product_type=? AND kind=?",
+        (product_type, kind),
+    )
+    # Re-pack list_seq so the remaining lists stay contiguous / ordered.
+    remaining = conn.execute(
+        "SELECT DISTINCT kind FROM product_type_factory WHERE product_type=? ORDER BY list_seq",
+        (product_type,),
+    ).fetchall()
+    for i, r in enumerate(remaining):
+        conn.execute(
+            "UPDATE product_type_factory SET list_seq=? WHERE product_type=? AND kind=?",
+            (i, product_type, r["kind"]),
+        )
+    conn.commit()
+    conn.close()
+    return json_response(handler, {"ok": True, "product_type": product_type, "kind": kind}, 200)
+
+
+def api_reorder_ptf_lists(handler):
+    """Reorder the lists of a product type. Body: {product_type, orderedKinds:[...]}."""
+    data = read_json_body(handler)
+    product_type = (data.get("product_type") or "").strip()
+    ordered = data.get("orderedKinds")
+    if not product_type or not isinstance(ordered, list):
+        return json_response(handler, {"error": "product_type and orderedKinds[] required"}, 400)
+    conn = db()
+    valid = {r["kind"] for r in conn.execute(
+        "SELECT DISTINCT kind FROM product_type_factory WHERE product_type=?",
+        (product_type,)).fetchall()}
+    seq = 0
+    for k in ordered:
+        if k in valid:
+            conn.execute(
+                "UPDATE product_type_factory SET list_seq=? WHERE product_type=? AND kind=?",
+                (seq, product_type, k),
+            )
+            seq += 1
     conn.commit()
     conn.close()
     return json_response(handler, {"ok": True}, 200)
@@ -715,6 +912,22 @@ def api_delete_ptf(handler, oid):
     ).fetchall()
     for i, r in enumerate(remaining):
         conn.execute("UPDATE product_type_factory SET position=? WHERE id=?", (i, r["id"]))
+    # Keep the list alive even when its last option is removed (so an empty list
+    # still shows up in the UI). Re-insert a placeholder if the list is now empty.
+    still = conn.execute(
+        "SELECT 1 FROM product_type_factory WHERE product_type=? AND kind=?",
+        (row["product_type"], row["kind"]),
+    ).fetchone()
+    if not still:
+        list_seq = conn.execute(
+            "SELECT COALESCE(MIN(list_seq),0) FROM product_type_factory WHERE product_type=?",
+            (row["product_type"],),
+        ).fetchone()[0]
+        conn.execute(
+            "INSERT INTO product_type_factory (product_type, kind, value, position, list_seq) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (row["product_type"], row["kind"], "__placeholder__", 0, list_seq),
+        )
     conn.commit()
     conn.close()
     return json_response(handler, {"ok": True, "id": oid}, 200)
@@ -2093,8 +2306,16 @@ class Handler(SimpleHTTPRequestHandler):
             api_get_product_type_factory(self); return True
         if path == "/api/product-type-factory" and method == "POST":
             api_add_ptf(self); return True
+        if path == "/api/product-type-factory/list" and method == "POST":
+            api_add_ptf_list(self); return True
+        if path == "/api/product-type-factory/list" and method == "PUT":
+            api_rename_ptf_list(self); return True
+        if path == "/api/product-type-factory/list" and method == "DELETE":
+            api_delete_ptf_list(self); return True
         if path == "/api/product-type-factory/reorder" and method == "PUT":
             api_reorder_ptf(self); return True
+        if path == "/api/product-type-factory/reorder-lists" and method == "PUT":
+            api_reorder_ptf_lists(self); return True
         if path.startswith("/api/product-type-factory/"):
             rest = path[len("/api/product-type-factory/"):]
             if rest.isdigit():

@@ -147,6 +147,12 @@ function materialSummary(mat) {
   if (mat.fabric) parts.push(mat.fabric);
   if (mat.edge) parts.push(mat.edge === "slit" ? "slit edge" : "woven edge");
   if (mat.folding) parts.push(mat.folding);
+  // Any extra per-product-type lists stored under mat.lists.
+  if (mat.lists && typeof mat.lists === "object") {
+    for (const k of Object.keys(mat.lists)) {
+      if (mat.lists[k]) parts.push(`${k}: ${mat.lists[k]}`);
+    }
+  }
   return parts.join(" · ");
 }
 
@@ -329,10 +335,10 @@ function onProductTypeChanged(prodEl) {
   const apply = () => {
     prodEl.value = newProduct;        // reflect the new choice in the dropdown
     devState.product = newProduct;
-    resetProductParts();              // clears Parts 3–6 AND re-renders badges/remarks
-    // Re-seed product-specific Material defaults (incl. the factory fabric /
-    // folding for the newly-selected product) so the green summary reflects it.
-    seedScreenPrintDefaults();
+    // Reset Parts 3–6 to nothing. The user explicitly agreed to discard them, so
+    // we do NOT re-seed any Material/Special defaults — everything stays blank
+    // until the new product type is configured from scratch.
+    resetProductParts();
     // `updateNextState`/`updateSaveState` are render-local closures (Create/Edit)
     // and are NOT in scope here — calling them would be a no-op. Re-run the
     // current render's gating via the module-level alias so Save re-evaluates
@@ -776,6 +782,35 @@ function ptfStringList(arr) {
   return arr.map((x) => (typeof x === "string" ? x : (x && x.value) || "")).filter(Boolean);
 }
 
+// Ordered list of the list-names that apply to a product type. Uses the live
+// PTF map when the product has any factory lists, otherwise the global
+// Development list names (defaulting to fabric/folding). Excludes the
+// "__placeholder__" empty-list marker.
+// Ordered list of list-names for a product type. Only Fabric/Folding (and any
+// user-added lists stored in PRODUCT_TYPE_FACTORY) are factory lists; global
+// development options like product_type / recycle / edge are never included.
+function listsForProduct(product) {
+  const f = PRODUCT_TYPE_FACTORY && PRODUCT_TYPE_FACTORY[product];
+  if (f === undefined) return ["fabric", "folding"];
+  const names = Object.keys(f);
+  // Exclude the internal placeholder-only marker; if a list has only a
+  // placeholder it's treated as empty and falls back at the option level.
+  return names;
+}
+
+// Options valid for an arbitrary list name of a product type, with fallback to
+// the global Development list of the same name. `current` (already-chosen value)
+// is prepended if it isn't in the set so a saved selection stays visible.
+function listOptionsFor(product, kind, current) {
+  const f = (PRODUCT_TYPE_FACTORY && PRODUCT_TYPE_FACTORY[product]) || {};
+  const raw = (f[kind] || []).filter((v) => v.value !== "__placeholder__");
+  const list = raw.length
+    ? ptfStringList(raw)
+    : opt("development", kind).slice();
+  if (current && !list.includes(current)) list.unshift(current);
+  return list;
+}
+
 // Fabric options valid for a given product type. `current` (optional) is the
 // value already chosen — if it isn't in the factory set (e.g. an older record)
 // it's prepended so the saved selection stays visible. Resolution order:
@@ -1085,34 +1120,17 @@ async function renderSettingsOptions() {
 
     <div class="opt-card">
       <h3 class="subhead">Product type factory (Development)</h3>
-      <p class="muted small">Override the Fabric / Folding lists <em>per product type</em>. Product types with no override fall back to the global Development lists above.</p>
+      <p class="muted small">Override the dropdown lists <em>per product type</em>. Each product type starts with <strong>Fabric</strong> and <strong>Folding</strong> (seeded from the global Development lists above) — you can rename, delete, or add more named lists. Each list can hold its own options. Product types with no override fall back to the global Development lists.</p>
       <div class="opt-controls">
         <div class="field">
           <label for="ptf-product">Product type</label>
           <select id="ptf-product"></select>
         </div>
       </div>
-      <div class="ptf-kinds">
-        <div class="ptf-kind" data-kind="fabric">
-          <h4 class="subhead sm">Fabric</h4>
-          <div class="opt-add-row">
-            <input type="text" placeholder="New fabric option" autocomplete="off" data-ptf-new="fabric" />
-            <button class="btn primary" type="button" data-ptf-add="fabric">Add</button>
-          </div>
-          <div class="opt-msg" data-ptf-msg="fabric"></div>
-          <p class="hint opt-factory-hint" data-ptf-hint="fabric"></p>
-          <ul class="opt-list" data-ptf-list="fabric"></ul>
-        </div>
-        <div class="ptf-kind" data-kind="folding">
-          <h4 class="subhead sm">Folding</h4>
-          <div class="opt-add-row">
-            <input type="text" placeholder="New folding option" autocomplete="off" data-ptf-new="folding" />
-            <button class="btn primary" type="button" data-ptf-add="folding">Add</button>
-          </div>
-          <div class="opt-msg" data-ptf-msg="folding"></div>
-          <p class="hint opt-factory-hint" data-ptf-hint="folding"></p>
-          <ul class="opt-list" data-ptf-list="folding"></ul>
-        </div>
+      <div class="ptf-lists" id="ptf-lists"><!-- list blocks injected here --></div>
+      <div class="ptf-add-list-row">
+        <input type="text" id="ptf-new-list" placeholder="New list name (e.g. Material, Finish, GSM)" autocomplete="off" />
+        <button class="btn primary" type="button" id="ptf-add-list">Add list</button>
       </div>
     </div>
   `;
@@ -1439,15 +1457,73 @@ async function renderSettingsOptions() {
   }
 
   // Resolve the live PTF map for a product + kind as an array of {id,value}.
+  // A list row carrying the placeholder value means "empty list" — normalize
+  // it to an empty array so the UI shows the fallback hint instead.
   function ptfValues(product, kind) {
     const f = (PRODUCT_TYPE_FACTORY && PRODUCT_TYPE_FACTORY[product]) || {};
-    return (f[kind] || []).slice();
+    const vals = (f[kind] || []).slice();
+    return vals.filter((v) => v.value !== "__placeholder__");
+  }
+
+  // The ordered list of list-names for a product type (factory kinds if any,
+  // otherwise the default fabric/folding pair). Only Fabric/Folding (and
+  // user-added lists) are managed per product type — global development options
+  // like product_type / recycle / edge are NOT factory lists and must never
+  // appear here as deletable blocks.
+  function ptfListNames(product) {
+    const f = PRODUCT_TYPE_FACTORY && PRODUCT_TYPE_FACTORY[product];
+    // Only fall back to Fabric/Folding when the product type is entirely
+    // absent from the factory map. Once a product type has been seeded (even
+    // with an empty {} object), its real list names drive rendering — so
+    // deleting the last list leaves it empty instead of resurrecting Fabric/Folding.
+    if (f === undefined) return ["fabric", "folding"];
+    return Object.keys(f);
+  }
+
+  // Render the whole set of list blocks for the currently-selected product.
+  function ptfRenderAll() {
+    const product = ptfProductEl.value;
+    const container = panel.querySelector("#ptf-lists");
+    const names = ptfListNames(product);
+    container.innerHTML = names.map((kind, li) => `
+      <div class="ptf-kind" data-kind="${escapeHtml(kind)}">
+        <div class="ptf-kind-head">
+          <button class="icon-btn opt-up" data-list-idx="${li}" title="Move list up" ${li === 0 ? "disabled" : ""}>▲</button>
+          <button class="icon-btn opt-down" data-list-idx="${li}" title="Move list down" ${li === names.length - 1 ? "disabled" : ""}>▼</button>
+          <span class="ptf-kind-name" data-list-name="${escapeHtml(kind)}" title="Click to rename list">${escapeHtml(kind)}</span>
+          <button class="icon-btn danger ptf-del-list" data-list-name="${escapeHtml(kind)}" title="Delete list">✕</button>
+        </div>
+        <div class="opt-add-row">
+          <input type="text" placeholder="New ${escapeHtml(kind)} option" autocomplete="off" data-ptf-new="${escapeHtml(kind)}" />
+          <button class="btn primary" type="button" data-ptf-add="${escapeHtml(kind)}">Add</button>
+        </div>
+        <div class="opt-msg" data-ptf-msg="${escapeHtml(kind)}"></div>
+        <p class="hint opt-factory-hint" data-ptf-hint="${escapeHtml(kind)}"></p>
+        <ul class="opt-list" data-ptf-list="${escapeHtml(kind)}"></ul>
+      </div>`).join("");
+    names.forEach((kind) => ptfRenderList(kind));
+
+    // Per-list Add buttons + Enter-to-add.
+    container.querySelectorAll("[data-ptf-add]").forEach((b) =>
+      b.addEventListener("click", () => ptfAddItem(b.dataset.ptfAdd)));
+    container.querySelectorAll("[data-ptf-new]").forEach((i) =>
+      i.addEventListener("keydown", (e) => { if (e.key === "Enter") ptfAddItem(i.dataset.ptfNew); }));
+    // List reorder (▲▼ on the list header).
+    container.querySelectorAll("[data-list-idx]").forEach((b) =>
+      b.addEventListener("click", () => ptfMoveList(Number(b.dataset.listIdx), b.classList.contains("opt-up") ? -1 : +1)));
+    // List delete.
+    container.querySelectorAll(".ptf-del-list").forEach((b) =>
+      b.addEventListener("click", () => ptfDeleteList(b.dataset.listName)));
+    // List rename (click the name).
+    container.querySelectorAll(".ptf-kind-name").forEach((s) =>
+      s.addEventListener("click", () => ptfStartRenameList(s.dataset.listName, s)));
   }
 
   function ptfRenderList(kind) {
     const product = ptfProductEl.value;
-    const listEl = panel.querySelector(`[data-ptf-list="${kind}"]`);
-    const hintEl = panel.querySelector(`[data-ptf-hint="${kind}"]`);
+    const listEl = panel.querySelector(`[data-ptf-list="${cssEscape(kind)}"]`);
+    if (!listEl) return;
+    const hintEl = panel.querySelector(`[data-ptf-hint="${cssEscape(kind)}"]`);
     const values = ptfValues(product, kind);
     const globalVals = opt("development", kind);
 
@@ -1463,7 +1539,7 @@ async function renderSettingsOptions() {
             <button class="icon-btn danger opt-del" data-idx="${i}" title="Delete">✕</button>
           </li>`).join("");
     }
-    hintEl.textContent = `Global default: ${escapeHtml(globalVals.join(", "))}`;
+    if (hintEl) hintEl.textContent = `Global default: ${escapeHtml(globalVals.join(", "))}`;
 
     listEl.querySelectorAll(".opt-up").forEach((b) =>
       b.addEventListener("click", () => ptfMoveItem(kind, Number(b.dataset.idx), -1)));
@@ -1481,7 +1557,7 @@ async function renderSettingsOptions() {
 
   async function ptfAddItem(kind) {
     const product = ptfProductEl.value;
-    const input = panel.querySelector(`[data-ptf-new="${kind}"]`);
+    const input = panel.querySelector(`[data-ptf-new="${cssEscape(kind)}"]`);
     const value = input.value.trim();
     if (!value) { ptfShowMsg(kind, "Enter a value first.", true); return; }
     try {
@@ -1492,7 +1568,7 @@ async function renderSettingsOptions() {
       });
       await loadProductTypeFactory();
       input.value = "";
-      ptfRenderList(kind);
+      ptfRenderAll();
       ptfShowMsg(kind, "Added.");
     } catch (e) {
       ptfShowMsg(kind, "Add failed: " + (e.message || "value may already exist"), true);
@@ -1524,7 +1600,7 @@ async function renderSettingsOptions() {
     try {
       await fetchJson(API + "/api/product-type-factory/" + target.id, { method: "DELETE" });
       await loadProductTypeFactory();
-      ptfRenderList(kind);
+      ptfRenderAll();
       ptfShowMsg(kind, "Deleted.");
     } catch (e) {
       ptfShowMsg(kind, "Delete failed: " + e.message, true);
@@ -1569,16 +1645,113 @@ async function renderSettingsOptions() {
     }
   }
 
-  panel.querySelectorAll("[data-ptf-add]").forEach((b) =>
-    b.addEventListener("click", () => ptfAddItem(b.dataset.ptfAdd)));
-  panel.querySelectorAll("[data-ptf-new]").forEach((i) =>
-    i.addEventListener("keydown", (e) => { if (e.key === "Enter") ptfAddItem(i.dataset.ptfNew); }));
-  ptfProductEl.addEventListener("change", () => {
-    ptfRenderList("fabric");
-    ptfRenderList("folding");
+  // --- List-level operations: add / rename / delete / reorder a whole list ---
+
+  async function ptfAddList() {
+    const product = ptfProductEl.value;
+    const input = panel.querySelector("#ptf-new-list");
+    const kind = input.value.trim();
+    if (!kind) { ptfShowMsg(kind, "Enter a list name first.", true); return; }
+    try {
+      await fetchJson(API + "/api/product-type-factory/list", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ product_type: product, kind }),
+      });
+      await loadProductTypeFactory();
+      input.value = "";
+      ptfRenderAll();
+    } catch (e) {
+      ptfShowMsg(kind, "Add list failed: " + (e.message || "name may already exist"), true);
+    }
+  }
+
+  async function ptfDeleteList(kind) {
+    const product = ptfProductEl.value;
+    const count = ptfValues(product, kind).length;
+    openConfirmModal(
+      "Delete list?",
+      `Delete the "${kind}" list${count ? ` and its ${count} option(s)` : ""} for "${product}"?`,
+      async () => {
+        try {
+          await fetchJson(API + "/api/product-type-factory/list", {
+            method: "DELETE",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ product_type: product, kind }),
+          });
+          await loadProductTypeFactory();
+          ptfRenderAll();
+        } catch (e) {
+          ptfShowMsg(kind, "Delete list failed: " + e.message, true);
+        }
+      }
+    );
+  }
+
+  async function ptfMoveList(idx, dir) {
+    const product = ptfProductEl.value;
+    const names = ptfListNames(product);
+    const j = idx + dir;
+    if (j < 0 || j >= names.length) return;
+    [names[idx], names[j]] = [names[j], names[idx]];
+    try {
+      await fetchJson(API + "/api/product-type-factory/reorder-lists", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ product_type: product, orderedKinds: names }),
+      });
+      await loadProductTypeFactory();
+      ptfRenderAll();
+    } catch (e) {
+      ptfShowMsg(names[idx], "Reorder lists failed: " + e.message, true);
+    }
+  }
+
+  function ptfStartRenameList(oldKind, spanEl) {
+    const input = document.createElement("input");
+    input.type = "text";
+    input.className = "opt-rename-input";
+    input.value = oldKind;
+    spanEl.replaceWith(input);
+    input.focus();
+    input.select();
+    function commit() {
+      const newKind = input.value.trim();
+      if (newKind && newKind !== oldKind) {
+        ptfRenameList(oldKind, newKind);
+      } else {
+        ptfRenderAll();
+      }
+    }
+    input.addEventListener("blur", commit);
+    input.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") input.blur();
+      else if (e.key === "Escape") ptfRenderAll();
+    });
+  }
+
+  async function ptfRenameList(oldKind, newKind) {
+    const product = ptfProductEl.value;
+    try {
+      await fetchJson(API + "/api/product-type-factory/list", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ product_type: product, oldKind, newKind }),
+      });
+      await loadProductTypeFactory();
+      ptfRenderAll();
+    } catch (e) {
+      ptfShowMsg(oldKind, "Rename list failed: " + (e.message || "name may already exist"), true);
+      ptfRenderAll();
+    }
+  }
+
+  panel.querySelector("#ptf-add-list").addEventListener("click", ptfAddList);
+  panel.querySelector("#ptf-new-list").addEventListener("keydown", (e) => {
+    if (e.key === "Enter") ptfAddList();
   });
-  ptfRenderList("fabric");
-  ptfRenderList("folding");
+  ptfProductEl.addEventListener("change", () => ptfRenderAll());
+  ptfRenderAll();
 }
 
 // ---------------------------------------------------------------------------
@@ -2431,7 +2604,7 @@ function openPostSaveModal() {
 // Fill every field with random data + 4 random images. `ctx` carries the
 // element references + helpers from renderDevelopmentCreate().
 async function fillDummyDevelopment(ctx) {
-  const { searchEl, hiddenEl, memberEl, projectEl, productEl, itemEl, companies,
+  const { searchEl, hiddenEl, memberEl, projectEl, productEl, itemEl, heightEl, widthEl, companies,
           selectCompany, loadMembers, updateNextState, updateSaveState, updateUnlock } = ctx;
   try {
     // 1) random company
@@ -2474,6 +2647,8 @@ async function fillDummyDevelopment(ctx) {
     // Front + Back sides instead of a single No. of color set.
     devState.height = (Math.random() * 40 + 10).toFixed(1);
     devState.width = (Math.random() * 40 + 10).toFixed(1);
+    if (heightEl) heightEl.value = devState.height;
+    if (widthEl) widthEl.value = devState.width;
     devState.raisedHeight = needsRaisedHeight(pt) ? (Math.random() * 3 + 0.5).toFixed(1) : "";
     if (isSplitColorProduct(pt)) {
       const mkSide = () => {
@@ -2617,6 +2792,37 @@ async function fillDummyEnquiry(ctx) {
 // (Remark) list editor. `state` is the active devState (Create or Edit);
 // `updateSaveState` re-evaluates Save/Update gating after a remark change.
 function wireExtraParts(root, state, updateSaveState) {
+  // Build the extra-list (non fabric/folding) <select> blocks for a product type.
+  // `cur` is the saved material object; `cur.lists` holds selections by list name.
+  function materialExtraListFields(product, cur) {
+    const extra = listsForProduct(product).filter((k) => k !== "fabric" && k !== "folding");
+    if (!extra.length) return "";
+    const lists = (cur && cur.lists) || {};
+    return extra.map((kind) => {
+      const value = lists[kind] || "";
+      return `
+        <div class="field">
+          <label for="mat-${cssEscape(kind)}">${escapeHtml(kind[0].toUpperCase() + kind.slice(1))}</label>
+          <select id="mat-${cssEscape(kind)}">
+            <option value="">— select —</option>
+            ${listOptionsFor(product, kind, value).map((f) => `<option value="${escapeHtml(f)}" ${value === f ? "selected" : ""}>${escapeHtml(f)}</option>`).join("")}
+          </select>
+        </div>`;
+    }).join("");
+  }
+
+  function materialExtraListValues(overlay, product, cur) {
+    const extra = listsForProduct(product).filter((k) => k !== "fabric" && k !== "folding");
+    if (!extra.length) return undefined;
+    const lists = {};
+    for (const kind of extra) {
+      const sel = overlay.querySelector("#mat-" + cssEscape(kind));
+      const v = sel ? (sel.value || null) : (cur && cur.lists ? cur.lists[kind] || null : null);
+      if (v) lists[kind] = v;
+    }
+    return lists;
+  }
+
   // --- Material & Special popups ---
   const openMaterialPopup = async () => {
     // Always re-pull the factory map so Part 4 reflects the latest Settings /
@@ -2672,6 +2878,8 @@ function wireExtraParts(root, state, updateSaveState) {
           <span class="hint" id="mat-folding-hint"></span>
         </div>
 
+        ${materialExtraListFields(devState.product, cur)}
+
         <div class="actions modal-actions">
           <button class="btn ghost" id="mat-clear" type="button">Clear</button>
           <button class="btn primary" id="mat-save" type="button">Save</button>
@@ -2712,7 +2920,9 @@ function wireExtraParts(root, state, updateSaveState) {
       const fabric = fabricSelect.value || null;
       const edge = overlay.querySelector('input[name="mat-edge"]:checked')?.value || null;
       const folding = foldingSelect.value || null;
+      const lists = materialExtraListValues(overlay, devState.product, cur);
       devState.material = { recycle, fabric, edge, folding };
+      if (lists) devState.material.lists = lists;
       refreshDevExtras();
       if (typeof updateSaveState === "function") updateSaveState();
       close();
@@ -3768,6 +3978,8 @@ async function renderEnquiryEdit() {
 
   if (devState.product) productEl.value = devState.product;
   if (devState.item) itemEl.value = devState.item;
+  if (heightEl && devState.height) heightEl.value = devState.height;
+  if (widthEl && devState.width) widthEl.value = devState.width;
 
   // The record is already fully valid: seed company/member/project dropdowns
   // synchronously so Part 1 stays filled and Update unlocks without waiting on
@@ -3823,6 +4035,21 @@ async function renderEnquiryEdit() {
     devState.item = itemEl.value.trim();
     updateSaveState();
   });
+
+  // Part 2 dimensions: bind Height/Width inputs to devState so the value is
+  // captured by the payload (no gating change — these remain optional).
+  if (heightEl) {
+    heightEl.addEventListener("input", () => {
+      devState.height = heightEl.value;
+      updateSaveState();
+    });
+  }
+  if (widthEl) {
+    widthEl.addEventListener("input", () => {
+      devState.width = widthEl.value;
+      updateSaveState();
+    });
+  }
 
   // ---- Part 3 dynamic body (depends on product type) ----
   const renderPart3 = () => {
@@ -4572,6 +4799,16 @@ async function renderDevelopmentCreate() {
             </select>
           </div>
         </div>
+        <div class="dim-row">
+          <div class="field">
+            <label for="dev-height">Height (mm)</label>
+            <input id="dev-height" type="number" min="0" step="0.1" placeholder="0.0" autocomplete="off" />
+          </div>
+          <div class="field">
+            <label for="dev-width">Width (mm)</label>
+            <input id="dev-width" type="number" min="0" step="0.1" placeholder="0.0" autocomplete="off" />
+          </div>
+        </div>
 
       </div>
 
@@ -4647,6 +4884,8 @@ async function renderDevelopmentCreate() {
   const projectEl = panel.querySelector("#dev-project");
   const productEl = panel.querySelector("#dev-product");
   const itemEl = panel.querySelector("#dev-item");
+  const heightEl = panel.querySelector("#dev-height");
+  const widthEl = panel.querySelector("#dev-width");
   const saveBtn = panel.querySelector("#dev-save");
   const dummyBtn = panel.querySelector("#dev-dummy");
 
@@ -4682,6 +4921,8 @@ async function renderDevelopmentCreate() {
   if (devState.product) productEl.value = devState.product;
   // restore item name
   if (devState.item) itemEl.value = devState.item;
+  if (heightEl && devState.height) heightEl.value = devState.height;
+  if (widthEl && devState.width) widthEl.value = devState.width;
 
   // refresh the Colors badge from restored state (runs after the panel mounts)
   refreshDevColorsBadge();
@@ -4749,6 +4990,21 @@ async function renderDevelopmentCreate() {
     devState.item = itemEl.value.trim();
     updateSaveState();
   });
+
+  // Part 2 dimensions: bind Height/Width inputs to devState so the value is
+  // captured by the Create payload (no gating change — these remain optional).
+  if (heightEl) {
+    heightEl.addEventListener("input", () => {
+      devState.height = heightEl.value;
+      updateSaveState();
+    });
+  }
+  if (widthEl) {
+    widthEl.addEventListener("input", () => {
+      devState.width = widthEl.value;
+      updateSaveState();
+    });
+  }
 
   // ---- Part 3 dynamic body (depends on product type) ----
   // The inline Height/Width/No.of.color/Pantone rows were moved into the
@@ -5228,7 +5484,7 @@ async function renderDevelopmentCreate() {
   // ===== Action buttons: Dummy / Save =====
 
   dummyBtn.addEventListener("click", () => fillDummyDevelopment({
-    searchEl, hiddenEl, memberEl, projectEl, productEl, itemEl, listEl, companies,
+    searchEl, hiddenEl, memberEl, projectEl, productEl, itemEl, heightEl, widthEl, listEl, companies,
     selectCompany, loadMembers, updateNextState, updateSaveState, updateUnlock,
   }));
 
@@ -5330,6 +5586,16 @@ async function renderDevelopmentEdit() {
             </select>
           </div>
         </div>
+        <div class="dim-row">
+          <div class="field">
+            <label for="dev-height">Height (mm)</label>
+            <input id="dev-height" type="number" min="0" step="0.1" placeholder="0.0" autocomplete="off" />
+          </div>
+          <div class="field">
+            <label for="dev-width">Width (mm)</label>
+            <input id="dev-width" type="number" min="0" step="0.1" placeholder="0.0" autocomplete="off" />
+          </div>
+        </div>
 
       </div>
 
@@ -5405,6 +5671,8 @@ async function renderDevelopmentEdit() {
   const projectEl = panel.querySelector("#dev-project");
   const productEl = panel.querySelector("#dev-product");
   const itemEl = panel.querySelector("#dev-item");
+  const heightEl = panel.querySelector("#dev-height");
+  const widthEl = panel.querySelector("#dev-width");
   const saveBtn = panel.querySelector("#dev-save");
   const dummyBtn = panel.querySelector("#dev-dummy");
   const resetBtn = panel.querySelector("#dev-reset");
@@ -5435,6 +5703,8 @@ async function renderDevelopmentEdit() {
 
   if (devState.product) productEl.value = devState.product;
   if (devState.item) itemEl.value = devState.item;
+  if (heightEl && devState.height) heightEl.value = devState.height;
+  if (widthEl && devState.width) widthEl.value = devState.width;
 
   // refresh the Colors badge from the loaded record (runs after the panel mounts)
   refreshDevColorsBadge();
@@ -5493,6 +5763,21 @@ async function renderDevelopmentEdit() {
     devState.item = itemEl.value.trim();
     updateSaveState();
   });
+
+  // Part 2 dimensions: bind Height/Width inputs to devState so the value is
+  // captured by the payload (no gating change — these remain optional).
+  if (heightEl) {
+    heightEl.addEventListener("input", () => {
+      devState.height = heightEl.value;
+      updateSaveState();
+    });
+  }
+  if (widthEl) {
+    widthEl.addEventListener("input", () => {
+      devState.width = widthEl.value;
+      updateSaveState();
+    });
+  }
 
   // ---- Part 3 dynamic body (depends on product type) ----
   // The inline Height/Width/No.of.color/Pantone rows were moved into the
@@ -5946,7 +6231,7 @@ async function renderDevelopmentEdit() {
   // ===== Action buttons: Dummy / Update / Reset / Back =====
 
   dummyBtn.addEventListener("click", () => fillDummyDevelopment({
-    searchEl, hiddenEl, memberEl, projectEl, productEl, itemEl, listEl, companies,
+    searchEl, hiddenEl, memberEl, projectEl, productEl, itemEl, heightEl, widthEl, listEl, companies,
     selectCompany, loadMembers, updateNextState, updateSaveState, updateUnlock,
   }));
 
@@ -6542,6 +6827,7 @@ async function openDevEditModal(id) {
         </div>
         <span class="hint">${hasProductTypeFactory(rec.product_type) ? `Options for ${escapeHtml(rec.product_type)}` : ""}</span>
       </div>
+      ${materialExtraListFields(rec.product_type, rec.material)}
       ` : `
       <div class="field">
         <p class="muted small">Material details to be confirmed (TBA).</p>
@@ -6824,6 +7110,10 @@ async function openDevEditModal(id) {
         fabric: overlay.querySelector("#ed-mat-fabric").value || null,
         edge: overlay.querySelector('input[name="ed-mat-edge"]:checked')?.value || null,
         folding: overlay.querySelector("#ed-mat-folding").value || null,
+        ...(() => {
+          const lists = materialExtraListValues(overlay, product_type, rec.material);
+          return lists ? { lists } : {};
+        })(),
       } : (rec.material != null ? rec.material : null),
       special: {
         variable: overlay.querySelector('input[name="ed-spec-variable"]:checked')?.value || null,
@@ -8234,6 +8524,14 @@ function escapeHtml(s) {
   return String(s).replace(/[&<>"']/g, (c) => ({
     "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
   }[c]));
+}
+
+// Escape a value for use inside a CSS attribute selector (list names may hold
+// spaces or special characters). Global so it can be used by both the Settings
+// factory card and the Material popup builders.
+function cssEscape(s) {
+  if (window.CSS && CSS.escape) return CSS.escape(s);
+  return String(s).replace(/["\\]/g, "\\$&");
 }
 
 function csvCell(v) {
