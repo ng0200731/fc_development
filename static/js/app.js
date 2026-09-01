@@ -6396,6 +6396,8 @@ function paintDevelopmentView() {
     { key: "documents", label: "Documents" },
     { key: "material", label: "Material" },
     { key: "special", label: "Special" },
+    { key: "height", label: "Height (mm)" },
+    { key: "width", label: "Width (mm)" },
     { key: "remark", label: "Remark" },
     { key: "created_at", label: "Created" },
     { key: "updated_at", label: "Updated" },
@@ -6463,6 +6465,8 @@ function paintDevelopmentView() {
         <td class="cell-docs">${docLinks}</td>
         <td>${materialCell}</td>
         <td>${specialCell}</td>
+        <td>${r.height != null && r.height !== "" ? escapeHtml(String(r.height)) : `<span class="muted">—</span>`}</td>
+        <td>${r.width != null && r.width !== "" ? escapeHtml(String(r.width)) : `<span class="muted">—</span>`}</td>
         <td>${remarkCell}</td>
         <td>${escapeHtml(r.created_at)}</td>
         <td>${escapeHtml(r.updated_at)}</td>
@@ -6472,7 +6476,7 @@ function paintDevelopmentView() {
           <button class="icon-btn danger" data-del="${r.id}" title="Delete">🗑</button>
         </td>
       </tr>`;
-  }).join("") || `<tr><td colspan="14" class="muted">No matches.</td></tr>`;
+  }).join("") || `<tr><td colspan="16" class="muted">No matches.</td></tr>`;
 
   panel.innerHTML = `
     <div class="view-head">
