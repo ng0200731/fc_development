@@ -3039,15 +3039,13 @@ function wireExtraParts(root, state, updateSaveState) {
     await loadProductTypeFactory();
     // A product with configured factory lists defines its complete Material
     // form. For example, Jacron with only a `thickness` list must show only
-    // Thickness — not the legacy Recycle/Fabric/Edge/Folding fields. Products
-    // without an override continue to use the standard Material form.
-    const configuredLists = listsForProduct(devState.product);
-    // A product is "factory-only" when it defines at least one custom list
-    // (non fabric/folding). Its Material form is then exactly those lists.
-    // Products with no custom lists (including ones that only set fabric/
-    // folding, e.g. screen print label) keep the standard form.
-    const hasCustomLists = configuredLists.some((k) => k !== "fabric" && k !== "folding");
-    const factoryOnly = hasCustomLists && !isScreenPrintProduct(devState.product);
+    // Thickness — not the legacy Recycle/Fabric/Edge/Folding fields. Every
+    // product except printed / screen print label uses the product-type
+    // factory as its complete Material form. An unconfigured product renders an
+    // intentionally blank popup; each list added in Settings → Options → Product
+    // type factory becomes a dynamic Material field. Printed / screen print label
+    // keep the legacy Recycle/Fabric/Edge/Folding form below.
+    const factoryOnly = !isScreenPrintProduct(devState.product);
     const cur = devState.material && typeof devState.material === "object" ? devState.material : (factoryOnly ? {} : {
       recycle: "recycle",
       fabric: "polyester",
