@@ -765,6 +765,15 @@ const hasProductTypeFactory = (p) => {
   const f = (PRODUCT_TYPE_FACTORY && PRODUCT_TYPE_FACTORY[p]) || PRODUCT_TYPE_FACTORY_SEED[p];
   return !!(f && ((f.fabric && f.fabric.length) || (f.folding && f.folding.length)));
 };
+
+// True when a product's Material form is defined entirely by its configured
+// custom lists (non fabric/folding) — e.g. Jacron with only a "thickness"
+// text field. Such products show ONLY their lists (no legacy Recycle / Fabric /
+// Edge / Folding fields) in both the Create popup and the Edit panel.
+const usesFactoryOnlyMaterial = (p) => {
+  const lists = listsForProduct(p);
+  return lists.some((k) => k !== "fabric" && k !== "folding") && !isScreenPrintProduct(p);
+};
 // All product types show the "No. of color" + Pantone-row layout (same as
 // "raised silicon label"). "heat transfer label" behaves like "raised silicon
 // label" for color but has no "Raised height" field — see needsRaisedHeight().
@@ -3028,19 +3037,25 @@ function wireExtraParts(root, state, updateSaveState) {
     // Always re-pull the factory map so Part 4 reflects the latest Settings /
     // Options edits (the in-memory map is only loaded at startup otherwise).
     await loadProductTypeFactory();
-    // Pre-fill with sensible defaults the first time (screen print label).
-    const cur = devState.material && typeof devState.material === "object" ? devState.material : {
+    // A product with configured factory lists defines its complete Material
+    // form. For example, Jacron with only a `thickness` list must show only
+    // Thickness — not the legacy Recycle/Fabric/Edge/Folding fields. Products
+    // without an override continue to use the standard Material form.
+    const configuredLists = listsForProduct(devState.product);
+    // A product is "factory-only" when it defines at least one custom list
+    // (non fabric/folding). Its Material form is then exactly those lists.
+    // Products with no custom lists (including ones that only set fabric/
+    // folding, e.g. screen print label) keep the standard form.
+    const hasCustomLists = configuredLists.some((k) => k !== "fabric" && k !== "folding");
+    const factoryOnly = hasCustomLists && !isScreenPrintProduct(devState.product);
+    const cur = devState.material && typeof devState.material === "object" ? devState.material : (factoryOnly ? {} : {
       recycle: "recycle",
       fabric: "polyester",
       edge: "slit",
       folding: "loop fold",
-    };
-    const overlay = document.createElement("div");
-    overlay.className = "modal-overlay";
-    overlay.innerHTML = `
-      <div class="modal" role="dialog" aria-modal="true" style="max-width:480px">
-        <h3>Material</h3>
-
+    });
+    const extra = materialExtraListFields(devState.product, cur);
+    const standardMaterialFields = factoryOnly ? "" : `
         <div class="field">
           <label class="radio-label">Recycle</label>
           <div class="radio-row" id="mat-recycle-row">
@@ -3076,9 +3091,15 @@ function wireExtraParts(root, state, updateSaveState) {
             <img id="mat-folding-img" class="folding-preview" alt="" ${cur.folding && foldingImage(cur.folding) ? `src="${foldingImage(cur.folding)}" onerror="this.style.display='none'"` : ""} style="${cur.folding && foldingImage(cur.folding) ? "" : "display:none;"}"/>
           </div>
           <span class="hint" id="mat-folding-hint"></span>
-        </div>
+        </div>`;
+    const overlay = document.createElement("div");
+    overlay.className = "modal-overlay";
+    overlay.innerHTML = `
+      <div class="modal" role="dialog" aria-modal="true" style="max-width:480px">
+        <h3>Material</h3>
 
-        ${materialExtraListFields(devState.product, cur)}
+        ${standardMaterialFields}
+        ${extra}
 
         <div class="actions modal-actions">
           <button class="btn ghost" id="mat-clear" type="button">Clear</button>
@@ -3097,6 +3118,7 @@ function wireExtraParts(root, state, updateSaveState) {
     // If the currently-saved value is no longer valid for the product, show a
     // hint and reset that field to "— select —" so the user picks a valid one.
     const syncMaterialForProduct = (product) => {
+      if (factoryOnly) return;
       const validFabric = fabricOptionsFor(product, null);
       fabricSelect.innerHTML = `<option value="">— select —</option>` +
         validFabric.map((f) => `<option value="${escapeHtml(f)}">${escapeHtml(f)}</option>`).join("");
@@ -3116,11 +3138,11 @@ function wireExtraParts(root, state, updateSaveState) {
     const close = () => overlay.remove();
     overlay.querySelector("#mat-save").addEventListener("click", () => {
       const recycle = overlay.querySelector('input[name="mat-recycle"]:checked')?.value || null;
-      const fabric = fabricSelect.value || null;
+      const fabric = fabricSelect ? (fabricSelect.value || null) : null;
       const edge = overlay.querySelector('input[name="mat-edge"]:checked')?.value || null;
-      const folding = foldingSelect.value || null;
+      const folding = foldingSelect ? (foldingSelect.value || null) : null;
       const lists = materialExtraListValues(overlay, devState.product, cur);
-      devState.material = { recycle, fabric, edge, folding };
+      devState.material = factoryOnly ? { lists: lists || {} } : { recycle, fabric, edge, folding };
       if (lists) devState.material.lists = lists;
       refreshDevExtras();
       if (typeof updateSaveState === "function") updateSaveState();
@@ -3133,7 +3155,7 @@ function wireExtraParts(root, state, updateSaveState) {
       close();
     });
 
-    foldingSelect.addEventListener("change", () => {
+    if (foldingSelect) foldingSelect.addEventListener("change", () => {
       const imgSrc = foldingImage(foldingSelect.value);
       if (imgSrc) {
         foldingImg.src = imgSrc;
@@ -6864,7 +6886,8 @@ async function openDevEditModal(id) {
       </div>
 
       <h4 class="subhead">Material</h4>
-      ${(isScreenPrintProduct(rec.product_type) || hasProductTypeFactory(rec.product_type)) ? `
+      ${(isScreenPrintProduct(rec.product_type) || hasProductTypeFactory(rec.product_type) || usesFactoryOnlyMaterial(rec.product_type)) ? `
+      ${usesFactoryOnlyMaterial(rec.product_type) ? "" : `
       <div class="field">
         <label class="radio-label">Recycle</label>
         <div class="radio-row" id="ed-mat-recycle-row">
@@ -6898,6 +6921,7 @@ async function openDevEditModal(id) {
         </div>
         <span class="hint">${hasProductTypeFactory(rec.product_type) ? `Options for ${escapeHtml(rec.product_type)}` : ""}</span>
       </div>
+      `}
       ${materialExtraListFields(rec.product_type, rec.material)}
       ` : `
       <div class="field">
@@ -7178,11 +7202,11 @@ async function openDevEditModal(id) {
       } : null,
       image_names: editImages.map((i) => i.name),
       doc_names: editDocs.map((d) => d.name),
-      material: (isScreenPrintProduct(product_type) || hasProductTypeFactory(product_type)) ? {
+      material: (isScreenPrintProduct(product_type) || hasProductTypeFactory(product_type) || usesFactoryOnlyMaterial(product_type)) ? {
         recycle: overlay.querySelector('input[name="ed-mat-recycle"]:checked')?.value || null,
-        fabric: overlay.querySelector("#ed-mat-fabric").value || null,
+        fabric: overlay.querySelector("#ed-mat-fabric")?.value || null,
         edge: overlay.querySelector('input[name="ed-mat-edge"]:checked')?.value || null,
-        folding: overlay.querySelector("#ed-mat-folding").value || null,
+        folding: overlay.querySelector("#ed-mat-folding")?.value || null,
         ...(() => {
           const lists = materialExtraListValues(overlay, product_type, rec.material);
           return lists ? { lists } : {};
