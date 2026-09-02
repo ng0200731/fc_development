@@ -144,6 +144,8 @@ def init_db():
             material      TEXT,
             special       TEXT,
             remake        TEXT,
+            color_sides   TEXT,
+            notes         TEXT,
             created_at    TEXT NOT NULL,
             updated_at    TEXT NOT NULL
         )
@@ -240,6 +242,9 @@ _ENQUIRY_MISSING_COLUMNS = {
     "pantones": "TEXT",
     "doc_names": "TEXT",
     "color_sides": "TEXT",
+    # Free-text field captured on the Enquiry / Create screen ("Part 2 · Notes").
+    # Round-trips through list / get / create / update.
+    "notes": "TEXT",
 }
 
 
@@ -2146,6 +2151,7 @@ def _enquiry_insert_or_update(conn, eid, data):
     color_sides = data.get("color_sides")
     if isinstance(color_sides, (list, dict)):
         color_sides = json.dumps(color_sides, ensure_ascii=False)
+    notes = (data.get("notes") or "").strip() or None
     vals = (
         data.get("company_id") if data.get("company_id") is not None else None,
         company_name,
@@ -2163,6 +2169,7 @@ def _enquiry_insert_or_update(conn, eid, data):
         image_names,
         doc_names,
         color_sides,
+        notes,
     )
     if eid is None:
         cur = conn.cursor()
@@ -2170,8 +2177,8 @@ def _enquiry_insert_or_update(conn, eid, data):
             "INSERT INTO enquiries "
             "(company_id, company_name, member_id, member_name, project_id, project_name, "
             "item_name, product_type, height, width, raised_height, no_of_color, pantones, "
-            "image_names, doc_names, color_sides, created_at, updated_at) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "image_names, doc_names, color_sides, notes, created_at, updated_at) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             vals + (now_iso(), now_iso()),
         )
         return cur.lastrowid
@@ -2179,7 +2186,7 @@ def _enquiry_insert_or_update(conn, eid, data):
         "UPDATE enquiries SET "
         "company_id=?, company_name=?, member_id=?, member_name=?, project_id=?, project_name=?, "
         "item_name=?, product_type=?, height=?, width=?, raised_height=?, no_of_color=?, "
-        "pantones=?, image_names=?, doc_names=?, color_sides=?, updated_at=? WHERE id=?",
+        "pantones=?, image_names=?, doc_names=?, color_sides=?, notes=?, updated_at=? WHERE id=?",
         vals + (now_iso(), eid),
     )
     return eid

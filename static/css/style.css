@@ -242,7 +242,8 @@ select:focus-visible,
 .field .hint { font-weight: 400; color: var(--muted); }
 
 .field input,
-.field select {
+.field select,
+.field textarea {
   width: 100%;
   padding: 9px 11px;
   border: 1px solid var(--border);
@@ -252,9 +253,22 @@ select:focus-visible,
   color: var(--text-soft);
   background: var(--surface);
   outline: none;
-  transition: border-color var(--ease), box-shadow var(--ease);
+  transition: border-color var(--ease), box-shadow var(--ease), background var(--ease);
 }
 .field select { cursor: pointer; }
+.field textarea {
+  /* Soft, modern multi-line look — matches inputs, but resizes vertically and
+     pads for line-height so wrapped text doesn't hug the border. */
+  min-height: 112px;
+  resize: vertical;
+  line-height: 1.5;
+  padding: 10px 12px;
+  background-image:
+    linear-gradient(var(--surface), var(--surface));
+  box-shadow: inset 0 1px 0 rgba(15, 23, 42, .02);
+}
+.field textarea::placeholder { color: var(--muted); }
+.field textarea:hover { border-color: var(--border-strong); }
 
 .folding-row { display: flex; align-items: center; gap: 12px; }
 .folding-row select { width: auto; min-width: 200px; flex: 0 1 auto; }
@@ -267,9 +281,78 @@ select:focus-visible,
   object-fit: contain;
 }
 .field input:focus,
-.field select:focus {
+.field select:focus,
+.field textarea:focus {
   border-color: var(--accent);
   box-shadow: 0 0 0 3px var(--ring);
+}
+
+/* ---- Notes textarea (Enquiry Create/Edit · Part 2 / Part 5) -------------- */
+.field.notes-field {
+  position: relative;
+  padding: 14px 14px 10px;
+  margin: 6px 0 4px;
+  background: linear-gradient(180deg, #f8fafc 0%, var(--surface) 60%);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--accent);
+  border-radius: var(--radius);
+  transition: border-color var(--ease), box-shadow var(--ease);
+}
+.field.notes-field:focus-within {
+  border-color: var(--accent-border);
+  border-left-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--ring);
+  background: linear-gradient(180deg, #eff6ff 0%, var(--surface) 70%);
+}
+.field.notes-field label { margin-bottom: 4px; }
+.field.notes-field label .field-hint {
+  font-weight: 400;
+  color: var(--muted);
+  margin-left: 6px;
+  font-size: 12px;
+}
+.field.notes-field textarea {
+  border: 1px solid transparent;
+  padding: 8px 10px;
+  background: transparent;
+  box-shadow: none;
+  min-height: 120px;
+}
+.field.notes-field textarea:focus { border-color: transparent; box-shadow: none; }
+.field-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 6px;
+}
+.field-meta .field-hint-line { color: var(--muted); font-size: 12px; }
+.char-count {
+  font-variant-numeric: tabular-nums;
+  font-size: 11px;
+  color: var(--muted);
+  background: #f1f5f9;
+  padding: 2px 8px;
+  border-radius: 999px;
+  letter-spacing: .02em;
+  transition: background var(--ease), color var(--ease);
+}
+.char-count.warn { color: #b45309; background: #fef3c7; }
+.char-count.over { color: #fff; background: var(--destructive); }
+
+/* Decorative icon next to a Part heading (used by the Notes section). */
+.subhead .part-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  margin-right: 8px;
+  border-radius: 6px;
+  background: var(--accent-weak);
+  color: var(--accent);
+  font-size: 13px;
+  vertical-align: -4px;
 }
 
 .input-affix {

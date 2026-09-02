@@ -2369,6 +2369,9 @@ function blankEnquiryState() {
     // Split-color (Front/Back) state for screen print label / printed label / hang tag.
     // `null` means "not applicable"; an object means the product uses the split layout.
     colorSides: null,   // { front: { noOfColor, pantones }, back: { noOfColor, pantones } }
+    // Free-text notes captured on Enquiry / Create ("Part 2 · Notes"). Persisted
+    // to the `notes` column of the `enquiries` table and required to save.
+    notes: "",
     images: [],   // [{ id, name, url }] — MULTIPLE images allowed (unlike Development)
     docs: [],     // [{ id, name, file }]
   };
@@ -2719,7 +2722,7 @@ async function fillDummyDevelopment(ctx) {
 // fills item/product/Part-3 details just like Development. Always seeds MULTIPLE
 // images (Enquiry supports >1 image).
 async function fillDummyEnquiry(ctx) {
-  const { searchEl, hiddenEl, memberEl, projectEl, productEl, itemEl, companies,
+  const { searchEl, hiddenEl, memberEl, projectEl, productEl, itemEl, notesEl, companies,
           selectCompany, loadMembers, updateNextState, updateSaveState, updateUnlock,
           renderImageThumbs } = ctx;
   try {
@@ -2743,6 +2746,19 @@ async function fillDummyEnquiry(ctx) {
       projectEl.value = p.value;
       devState.projectId = p.value;
       devState.projectName = p.textContent;
+    }
+
+    // Fill Notes (Part 2) so the required-to-save gate passes for the dummy row.
+    if (notesEl) {
+      const NOTE_TEMPLATES = [
+        "Customer wants a metallic gold finish on the logo; soft enamel sample preferred.",
+        "Need 2-day production lead time. Pantone must match the swatch exactly.",
+        "Confirm edge stitching matches existing label — see attached reference image.",
+        "Quote required with both standard and premium backing options.",
+        "Customer asked for eco-friendly material alternatives where possible.",
+      ];
+      notesEl.value = rnd(NOTE_TEMPLATES);
+      devState.notes = notesEl.value;
     }
 
     // Only fill item/product/Part-3 when the Create screen has them (Edit does;
@@ -3278,13 +3294,18 @@ function buildEnquiryPayload() {
   const itemEl = panel.querySelector("#enq-item");
   const productEl = panel.querySelector("#enq-product");
   const memberEl = panel.querySelector("#enq-member");
+  const notesEl = panel.querySelector("#enq-notes");
   const companyName = devState.companyName;
   const item = (itemEl ? itemEl.value.trim() : devState.item) || devState.item || "";
   const product = (productEl ? productEl.value : devState.product) || devState.product || "";
-  // company is always required; item/product only when the screen has them
+  const notes = (notesEl ? notesEl.value.trim() : (devState.notes || "").trim());
+  // company is always required; item/product only when the screen has them.
+  // Notes are required on Enquiry / Create only — Enquiry / Edit leaves the
+  // field optional so existing rows predating the column can still be updated.
   if (!companyName) return null;
   if (itemEl && !item) return null;
   if (productEl && !product) return null;
+  if (notesEl && !notes && !itemEl) return null;
   const memberName = memberEl && memberEl.value
     ? memberEl.options[memberEl.selectedIndex]?.textContent || ""
     : "";
@@ -3308,6 +3329,7 @@ function buildEnquiryPayload() {
     material: devState.material,
     special: devState.special,
     remake: devState.remake,
+    notes: notes || null,
   };
 }
 
@@ -3358,6 +3380,20 @@ async function renderEnquiryCreate() {
             </select>
           </div>
         </div>
+
+        <h3 class="subhead">
+          <span class="part-icon" aria-hidden="true">📝</span>2 · Notes <span class="req-mark">required</span>
+        </h3>
+        <div class="field notes-field" id="enq-notes-field">
+          <label for="enq-notes">Notes <span class="field-hint">— what the customer asked for, references, anything the team should know</span></label>
+          <textarea id="enq-notes" rows="4"
+                    placeholder="e.g. Customer wants a metallic gold finish on the logo; soft enamel sample preferred."
+                    autocomplete="off" maxlength="2000"></textarea>
+          <div class="field-meta">
+            <span class="field-hint-line">📌 Visible to the whole team</span>
+            <span class="char-count" id="enq-notes-count">0 / 2000</span>
+          </div>
+        </div>
       </div>
 
       <!-- 4th part: images (multiple) + documents. -->
@@ -3390,8 +3426,19 @@ async function renderEnquiryCreate() {
   const listEl   = panel.querySelector("#enq-company-list");
   const memberEl = panel.querySelector("#enq-member");
   const projectEl = panel.querySelector("#enq-project");
+  const notesEl  = panel.querySelector("#enq-notes");
+  const notesCountEl = panel.querySelector("#enq-notes-count");
   const saveBtn = panel.querySelector("#enq-save");
   const dummyBtn = panel.querySelector("#enq-dummy");
+
+  // Restore any draft Notes text so the textarea survives tab switches and the
+  // post-save "save & same customer" reuse keeps the same notes for the next row.
+  if (notesEl && devState.notes) notesEl.value = devState.notes;
+
+  // Auto-grow + live char counter (initial paint refreshes both for restored text).
+  wireNotesTextarea(notesEl, notesCountEl, {
+    onChange: () => { devState.notes = notesEl.value; updateSaveState(); },
+  });
 
   const part4 = panel.querySelector("#enq-part4");
 
@@ -3400,7 +3447,11 @@ async function renderEnquiryCreate() {
   };
 
   // enable search once we have the company list
+  // Fetch companies but NEVER bail out on failure — bailing here would skip
+  // every later step (form population, Back/Reset/Update wiring) and the user
+  // would see an empty Edit screen with a dead Back button.
   let companies = [];
+  let companiesLoadFailed = false;
   try {
     if (devCompaniesCache) {
       companies = devCompaniesCache;
@@ -3409,11 +3460,12 @@ async function renderEnquiryCreate() {
       devCompaniesCache = companies;
     }
   } catch (err) {
+    companiesLoadFailed = true;
     searchEl.placeholder = "Failed to load companies: " + err.message;
     searchEl.disabled = true;
-    return;
+    companies = [];   // input handler filters an empty list (no crash)
   }
-  searchEl.disabled = false;
+  if (!companiesLoadFailed) searchEl.disabled = false;
 
   // When the Create draft still carries a company/member/project (e.g. after a
   // "same customer" post-save), repopulate the dropdowns so Part 1 stays filled
@@ -3613,13 +3665,17 @@ async function renderEnquiryCreate() {
     }
     updateSaveState();
   });
+  // Notes textarea is wired through wireNotesTextarea() above — its onChange
+  // already mirrors the value into devState and re-evaluates updateSaveState.
 
-  // Save gating: Part 1 complete AND at least one image attached. Part 2/3 are
-  // removed from Create, so only company + member + image are required. Documents
-  // stay optional and never gate Save. Images are required (>=1) to save.
+  // Save gating: Part 1 complete AND Part 2 Notes filled AND at least one image
+  // attached. Part 2/3 fields are removed from Create, so only company + member
+  // + notes + image are required. Documents stay optional and never gate Save.
+  // Images are required (>=1) to save.
   const updateSaveState = () => {
     const hasImage = devState.images.length >= 1;
-    const allFilled = hiddenEl.value !== "" && memberEl.value !== "" && hasImage;
+    const notesFilled = (notesEl ? notesEl.value.trim() : (devState.notes || "").trim()) !== "";
+    const allFilled = hiddenEl.value !== "" && memberEl.value !== "" && notesFilled && hasImage;
     const canSave = allFilled;
     saveBtn.disabled = !canSave;
     saveBtn.classList.toggle("active", canSave);
@@ -3823,7 +3879,7 @@ async function renderEnquiryCreate() {
 
   // ===== Action buttons: Dummy / Save =====
   dummyBtn.addEventListener("click", () => fillDummyEnquiry({
-    searchEl, hiddenEl, memberEl, projectEl, listEl, companies,
+    searchEl, hiddenEl, memberEl, projectEl, notesEl, listEl, companies,
     selectCompany, loadMembers, updateNextState, updateSaveState, updateUnlock,
     renderImageThumbs,
   }));
@@ -3832,7 +3888,7 @@ async function renderEnquiryCreate() {
     if (saveBtn.disabled) return;
     const payload = buildEnquiryPayload();
     if (!payload) {
-      openConfirmModal("Cannot save", "Please fill company, member, and add at least one image.", () => {});
+      openConfirmModal("Cannot save", "Please fill company, member, notes, and add at least one image.", () => {});
       return;
     }
     saveBtn.disabled = true;
@@ -3910,23 +3966,19 @@ async function renderEnquiryEdit() {
           </div>
         </div>
 
-        <h3 class="subhead">2 · Item &amp; Product Type</h3>
-        <div class="dim-row">
-          <div class="field">
-            <label for="enq-item">Item name</label>
-            <input id="enq-item" type="text" placeholder="e.g. Spring Collection Patch" autocomplete="off" />
-          </div>
-          <div class="field">
-            <label for="enq-product">Product type</label>
-            <select id="enq-product" disabled>
-              <option value="">— select —</option>
-              ${opt("development","product_type").map((p) => `<option value="${escapeHtml(p)}">${escapeHtml(p)}</option>`).join("")}
-            </select>
+        <h3 class="subhead">
+          <span class="part-icon" aria-hidden="true">📝</span>2 · Notes <span class="req-mark optional">optional</span>
+        </h3>
+        <div class="field notes-field" id="enq-notes-field">
+          <label for="enq-notes">Notes <span class="field-hint">— what the customer asked for, references, anything the team should know</span></label>
+          <textarea id="enq-notes" rows="4"
+                    placeholder="e.g. Customer wants a metallic gold finish on the logo; soft enamel sample preferred."
+                    autocomplete="off" maxlength="2000">${escapeHtml(devState.notes || "")}</textarea>
+          <div class="field-meta">
+            <span class="field-hint-line">📌 visible to the whole team</span>
+            <span class="char-count" id="enq-notes-count">0 / 2000</span>
           </div>
         </div>
-
-        <h3 class="subhead">3 · Details</h3>
-        <div id="enq-part3-body"></div>
       </div>
 
       <div class="dev-part" id="enq-part4">
@@ -3953,28 +4005,36 @@ async function renderEnquiryEdit() {
   `;
 
   const part1 = panel.querySelector("#enq-main");
-  const part2 = panel.querySelector("#enq-product");
   const searchEl = panel.querySelector("#enq-company");
   const hiddenEl = panel.querySelector("#enq-company-id");
   const listEl   = panel.querySelector("#enq-company-list");
   const memberEl = panel.querySelector("#enq-member");
   const projectEl = panel.querySelector("#enq-project");
-  const productEl = panel.querySelector("#enq-product");
-  const itemEl = panel.querySelector("#enq-item");
   const saveBtn = panel.querySelector("#enq-save");
   const dummyBtn = panel.querySelector("#enq-dummy");
   const resetBtn = panel.querySelector("#enq-reset");
 
-  const part3Body = panel.querySelector("#enq-part3-body");
-  const part3 = part3Body;
   const part4 = panel.querySelector("#enq-part4");
+  const notesEl = panel.querySelector("#enq-notes");
+  const notesCountEl = panel.querySelector("#enq-notes-count");
+
+  // Auto-grow + live char counter. Edit's onChange still mirrors into devState
+  // and re-evaluates the dirty-check so the Update button wakes up. The Update
+  // gate is NOT strict on notes (existing rows predating the column can stay
+  // empty); the gate is enforced only on Create.
+  wireNotesTextarea(notesEl, notesCountEl, {
+    onChange: () => { devState.notes = notesEl.value; updateSaveState(); },
+  });
 
   const updateUnlock = () => {
     part4.classList.remove("locked");
-    renderPart3();
   };
 
+  // Fetch companies but NEVER bail out on failure — bailing here would skip
+  // every later step (form population, Back/Reset/Update wiring) and the user
+  // would see an empty Edit screen with a dead Back button.
   let companies = [];
+  let companiesLoadFailed = false;
   try {
     if (devCompaniesCache) {
       companies = devCompaniesCache;
@@ -3983,16 +4043,12 @@ async function renderEnquiryEdit() {
       devCompaniesCache = companies;
     }
   } catch (err) {
+    companiesLoadFailed = true;
     searchEl.placeholder = "Failed to load companies: " + err.message;
     searchEl.disabled = true;
-    return;
+    companies = [];   // input handler filters an empty list (no crash)
   }
-  searchEl.disabled = false;
-
-  if (devState.product) productEl.value = devState.product;
-  if (devState.item) itemEl.value = devState.item;
-  if (heightEl && devState.height) heightEl.value = devState.height;
-  if (widthEl && devState.width) widthEl.value = devState.width;
+  if (!companiesLoadFailed) searchEl.disabled = false;
 
   // The record is already fully valid: seed company/member/project dropdowns
   // synchronously so Part 1 stays filled and Update unlocks without waiting on
@@ -4038,170 +4094,17 @@ async function renderEnquiryEdit() {
 
   const updateNextState = () => {
     const part1Done = hiddenEl.value !== "" && memberEl.value !== "";
-    part2.disabled = !part1Done;
-    productEl.disabled = !part1Done;
     updateUnlock();
     updateSaveState();
   };
 
-  itemEl.addEventListener("input", () => {
-    devState.item = itemEl.value.trim();
-    updateSaveState();
-  });
-
-  // Part 2 dimensions: bind Height/Width inputs to devState so the value is
-  // captured by the payload (no gating change — these remain optional).
-  if (heightEl) {
-    heightEl.addEventListener("input", () => {
-      devState.height = heightEl.value;
-      updateSaveState();
-    });
-  }
-  if (widthEl) {
-    widthEl.addEventListener("input", () => {
-      devState.width = widthEl.value;
-      updateSaveState();
-    });
-  }
-
-  // ---- Part 3 dynamic body (depends on product type) ----
-  const renderPart3 = () => {
-    ensurePantoneData();
-    // Every product type now shows No. of color + Pantone rows (like raised
-    // silicon patch). Only "raised silicon label" additionally shows Raised height.
-    renderRaisedSiliconLabel();
-  };
-
-  const bindDimInputs = () => {
-    const h = part3Body.querySelector("#enq-height");
-    const w = part3Body.querySelector("#enq-width");
-    if (h) { h.value = devState.height; h.addEventListener("input", () => { devState.height = h.value; updateSaveState(); }); }
-    if (w) { w.value = devState.width;  w.addEventListener("input",  () => { devState.width  = w.value; updateSaveState(); }); }
-  };
-
-  const renderRaisedSiliconLabel = () => {
-    const showRaised = needsRaisedHeight(devState.product);
-    part3Body.innerHTML = `
-      <div class="dim-row">
-        <div class="field">
-          <label for="enq-height">Height (mm)</label>
-          <input id="enq-height" type="number" min="0" step="0.1" placeholder="0.0" autocomplete="off" />
-        </div>
-        <div class="field">
-          <label for="enq-width">Width (mm)</label>
-          <input id="enq-width" type="number" min="0" step="0.1" placeholder="0.0" autocomplete="off" />
-        </div>
-      </div>
-      ${showRaised ? `
-      <div class="dim-row">
-        <div class="field">
-          <label for="enq-raised-height">Raised height (mm)</label>
-          <input id="enq-raised-height" type="number" min="0" step="0.1" placeholder="0.0" autocomplete="off" />
-        </div>
-      </div>` : ``}
-      <div class="dim-row">
-        <div class="field">
-          <label for="enq-no-of-color">No. of color</label>
-          <input id="enq-no-of-color" type="number" min="1" step="1" placeholder="0" autocomplete="off" />
-        </div>
-      </div>
-      <div id="enq-pantone-wrap"></div>
-    `;
-
-    bindDimInputs();
-    const rh = part3Body.querySelector("#enq-raised-height");
-    const nc = part3Body.querySelector("#enq-no-of-color");
-    if (rh) { rh.value = devState.raisedHeight; rh.addEventListener("input", () => { devState.raisedHeight = rh.value; updateSaveState(); }); }
-    if (nc) {
-      nc.value = devState.noOfColor;
-      nc.addEventListener("input", () => {
-        devState.noOfColor = nc.value;
-        renderPantoneRows();
-        updateSaveState();
-      });
-    }
-    renderPantoneRows();
-  };
-
-  const renderPantoneRows = () => {
-    const wrap = part3Body.querySelector("#enq-pantone-wrap");
-    if (!wrap) return;
-    const n = parseInt(devState.noOfColor, 10);
-    if (!isNaN(n) && n > 0) {
-      while (devState.pantones.length < n) devState.pantones.push({ value: "", color: "#000000" });
-      if (devState.pantones.length > n) devState.pantones.length = n;
-    }
-    if ((parseInt(devState.noOfColor, 10) || 0) <= 0) {
-      wrap.innerHTML = "";
-      return;
-    }
-    wrap.innerHTML = devState.pantones.map((p, i) => `
-      <div class="pantone-row">
-        <div class="field pantone-code">
-          <label for="enq-pantone-${i}">Pantone #${i + 1}</label>
-          <input id="enq-pantone-${i}" type="text" class="pantone-input"
-                 data-idx="${i}" value="${escapeHtml(p.value)}"
-                 placeholder="code (11-0103) or name (egret)" autocomplete="off" />
-          <div class="pantone-match" id="enq-pantone-match-${i}"></div>
-        </div>
-      </div>`).join("");
-    const showPantoneMatch = (i, query) => {
-      const matchEl = wrap.querySelector("#enq-pantone-match-" + i);
-      if (!matchEl) return;
-      const matches = findPantoneMatches(query);
-      if (!matches.length) {
-        matchEl.innerHTML = `<span class="muted small">No match</span>`;
-        return;
-      }
-      const top = matches[0];
-      if (devState.pantones[i]) devState.pantones[i].color = "#" + top.hex;
-
-      matchEl.innerHTML =
-        `<div class="pantone-top">` +
-          `<span class="swatch" style="background:#${escapeHtml(top.hex)}"></span>` +
-          `<span class="muted small">${escapeHtml(top.code)} · ${escapeHtml(top.name)} · ` +
-          `<span class="pantone-type" title="${escapeHtml(pantoneTypeName(top.type))}">${escapeHtml(pantoneTypeName(top.type))}</span> · #${escapeHtml(top.hex)}</span>` +
-        `</div>` +
-        (matches.length > 1
-          ? `<div class="pantone-similar">similar: ` +
-            matches.slice(1).map((m) =>
-              `<span class="pantone-chip" data-code="${escapeHtml(m.code)}" ` +
-              `title="${escapeHtml(m.code)} · ${escapeHtml(m.name)} · ${escapeHtml(pantoneTypeName(m.type))}">` +
-                `<span class="swatch sm" style="background:#${escapeHtml(m.hex)}"></span>` +
-                `${escapeHtml(m.name)} ` +
-                `<span class="pantone-type" title="${escapeHtml(pantoneTypeName(m.type))}">${escapeHtml(pantoneTypeName(m.type))}</span></span>`
-            ).join("") +
-            `</div>`
-          : "");
-
-      // Make the top suggestion clickable too (so the first fuzzy-match result
-      // can be selected, not just the "similar" chips).
-      const topEl = matchEl.querySelector(".pantone-top");
-      if (topEl) topEl.addEventListener("click", () => {
-        applyPantoneSelection(matchEl, wrap, i, top.code, updateSaveState);
-      });
-
-      matchEl.querySelectorAll(".pantone-chip").forEach((chip) => {
-        chip.addEventListener("click", () => {
-          applyPantoneSelection(matchEl, wrap, i, chip.dataset.code, updateSaveState);
-        });
-      });
-    };
-
-    wrap.querySelectorAll(".pantone-input").forEach((inp) => {
-      inp.addEventListener("input", () => {
-        const i = Number(inp.dataset.idx);
-        if (!devState.pantones[i]) return;
-        devState.pantones[i].value = inp.value;
-        showPantoneMatch(i, inp.value);
-        updateSaveState();
-      });
-    });
-
-    devState.pantones.forEach((p, i) => {
-      if (p && p.value) showPantoneMatch(i, p.value);
-    });
-  };
+  // Notes (Part 2 in Enquiry Edit, no-op elsewhere). Captured into devState so
+  // buildEnquiryPayload sends it and the dirty-check picks up edits. Update is
+  // NOT gated on notes here — existing rows predating the field can be left
+  // empty; Create is the only place where notes is required. The textarea is
+  // wired by wireNotesTextarea() at the top of this function (its onChange
+  // mirrors devState and triggers updateSaveState), so no listener is needed
+  // here.
 
   const resetCompanySelection = () => {
     hiddenEl.value = "";
@@ -4351,57 +4254,22 @@ async function renderEnquiryEdit() {
     }
     updateSaveState();
   });
-  productEl.addEventListener("change", () => {
-    onProductTypeChanged(productEl);
-  });
-
-  // Part 3 (Details) validation: every visible Details field must be filled
-  // before Update is allowed.
-  const part3Valid = () => {
-    const h = (devState.height || "").trim();
-    const w = (devState.width || "").trim();
-    if (h.length === 0 || w.length === 0) return false;   // height + width always required
-
-    // Every product type now requires No. of color (and its Pantone rows),
-    // mirroring "raised silicon label" behaviour.
-    if (needsRaisedHeight(devState.product)) {
-      const rh = (devState.raisedHeight || "").trim();
-      if (rh.length === 0) return false;                   // raised height required (raised silicon label only)
-    }
-
-    // Split-color products require BOTH Front and Back sides to be valid.
-    if (isSplitColorProduct(devState.product)) {
-      return splitColorsValid(devState.colorSides);
-    }
-
-    const n = parseInt(devState.noOfColor, 10);
-    if (!n || n < 1) return false;                       // no. of color required (>= 1)
-
-    if (n >= 1) {
-      for (const p of devState.pantones) {
-        const v = (p && (p.value || "") || "").trim().length;
-        if (v <= 1) return false;
-      }
-    }
-    return true;
-  };
+  // Part 3 (Details) was removed from Enquiry / Edit to mirror Enquiry / Create
+  // — no Part 3 validation here. Update is gated on Part 1 + Notes + Images
+  // (Notes optional — old records predating the column stay updatable).
 
   // Compare the current editable fields against the originally-loaded record.
   // Update only enables (and Reset only matters) once something actually changed.
+  // Enquiry / Edit mirrors Enquiry / Create: only Part 1, Notes, Images and
+  // Documents — Item / Product Type / Details were dropped from Create, so an
+  // Edit of a Create-saved record must round-trip without those fields.
   const currentSignature = () => ({
     company_id: devState.companyId ? Number(devState.companyId) : null,
     member_id: devState.memberId ? Number(devState.memberId) : null,
     project_id: devState.projectId ? Number(devState.projectId) : null,
-    item_name: (devState.item || "").trim(),
-    product_type: devState.product || "",
-    height: devState.height ? Number(devState.height) : null,
-    width: devState.width ? Number(devState.width) : null,
-    raised_height: devState.raisedHeight ? Number(devState.raisedHeight) : null,
-    no_of_color: devState.noOfColor ? Number(devState.noOfColor) : null,
-    pantones: devState.pantones.filter((p) => p && p.value).map((p) => ({ value: p.value.trim(), color: p.color })),
-    color_sides: isSplitColorProduct(devState.product) ? (devState.colorSides || null) : null,
     image_names: devState.images.map((i) => i.name).sort(),
     doc_names: devState.docs.map((d) => d.name).sort(),
+    notes: (devState.notes || "").trim(),
   });
 
   const sigEq = (a, b) => JSON.stringify(a) === JSON.stringify(b);
@@ -4409,26 +4277,18 @@ async function renderEnquiryEdit() {
     company_id: enquiryOriginal.company_id != null ? Number(enquiryOriginal.company_id) : null,
     member_id: enquiryOriginal.member_id != null ? Number(enquiryOriginal.member_id) : null,
     project_id: enquiryOriginal.project_id != null ? Number(enquiryOriginal.project_id) : null,
-    item_name: (enquiryOriginal.item_name || "").trim(),
-    product_type: enquiryOriginal.product_type || "",
-    height: enquiryOriginal.height != null ? Number(enquiryOriginal.height) : null,
-    width: enquiryOriginal.width != null ? Number(enquiryOriginal.width) : null,
-    raised_height: enquiryOriginal.raised_height != null ? Number(enquiryOriginal.raised_height) : null,
-    no_of_color: enquiryOriginal.no_of_color != null ? Number(enquiryOriginal.no_of_color) : null,
-    pantones: (enquiryOriginal.pantones || []).map((p) => ({ value: (p.value || "").trim(), color: p.color })),
-    color_sides: enquiryOriginal.color_sides
-      ? (typeof enquiryOriginal.color_sides === "string" ? parseColorSidesString(enquiryOriginal.color_sides) : enquiryOriginal.color_sides)
-      : null,
     image_names: (enquiryOriginal.image_names || []).slice().sort(),
     doc_names: (enquiryOriginal.doc_names || []).slice().sort(),
+    notes: (enquiryOriginal.notes || "").trim(),
   });
 
   // Save gating for the Edit tab: company + member + at least one image present,
-  // AND a real change detected (so removing an image activates Update, but
-  // removing ALL images disables it again). Part 2/3 (item/product/details) are
-  // not required here because Enquiry / Create no longer collects them, so a
-  // record opened from Create must still be editable (and its image changes
-  // must still drive Update).
+// AND a real change detected (so removing an image activates Update, but
+// removing ALL images disables it again). Notes is optional here — existing
+// rows predating the column stay updatable; Enquiry / Create is the only place
+// that requires it. Enquiry / Edit mirrors Enquiry / Create's fields exactly:
+// Part 1 (Company & Member), Part 2 (Notes — optional), Part 4 (Images +
+// Documents).
   const updateSaveState = () => {
     const hasImage = devState.images.length >= 1;
     const allFilled = hiddenEl.value !== "" && memberEl.value !== "" && hasImage;
@@ -4637,8 +4497,9 @@ async function renderEnquiryEdit() {
   // ===== Action: Dummy =====
   if (dummyBtn) {
     dummyBtn.addEventListener("click", () => fillDummyEnquiry({
-      searchEl, hiddenEl, memberEl, projectEl, productEl, itemEl, listEl, companies,
+      searchEl, hiddenEl, memberEl, projectEl, notesEl, listEl, companies,
       selectCompany, loadMembers, updateNextState, updateSaveState, updateUnlock,
+      renderImageThumbs,
     }));
   }
 
@@ -4646,11 +4507,20 @@ async function renderEnquiryEdit() {
   const backBtn = panel.querySelector("#enq-back");
   if (backBtn) {
     backBtn.addEventListener("click", () => {
+      // Always return the user to the Enquiry / View page. Reset the edit draft
+      // and pin View as the active tab, even if Edit was the only tab open —
+      // closeTab on its own would leave activeTarget=null (no panel rendered)
+      // if View was never registered.
       enquiryEditMode = false;
       enquiryEditId = null;
       enquiryOriginal = null;
       Object.assign(enquiryEditState, blankEnquiryState());
-      openTab("enquiry-view");
+      openTabs.delete("enquiry-edit");
+      if (!openTabs.has("enquiry-view")) openTabs.add("enquiry-view");
+      activeTarget = "enquiry-view";
+      renderTabs();
+      renderPanel();    // dispatches to renderEnquiryView()
+      highlightNav();
     });
   }
 
@@ -4665,15 +4535,19 @@ async function renderEnquiryEdit() {
       s.memberName = enquiryOriginal.member_name || "";
       s.projectId = enquiryOriginal.project_id != null ? String(enquiryOriginal.project_id) : "";
       s.projectName = enquiryOriginal.project_name || "";
-      s.item = enquiryOriginal.item_name || "";
-      s.product = enquiryOriginal.product_type || "";
-      s.height = enquiryOriginal.height != null ? String(enquiryOriginal.height) : "";
-      s.width = enquiryOriginal.width != null ? String(enquiryOriginal.width) : "";
-      s.raisedHeight = enquiryOriginal.raised_height != null ? String(enquiryOriginal.raised_height) : "";
-      s.noOfColor = enquiryOriginal.no_of_color != null ? String(enquiryOriginal.no_of_color) : "";
-      s.pantones = Array.isArray(enquiryOriginal.pantones) ? enquiryOriginal.pantones.map((p) => ({ value: p.value || "", color: p.color || "#000000" })) : [];
+      // Item / Product Type / Details are NOT part of Enquiry / Edit (mirrors
+      // Create) — keep their state at the blank values regardless.
+      s.item = "";
+      s.product = "";
+      s.height = "";
+      s.width = "";
+      s.raisedHeight = "";
+      s.noOfColor = "";
+      s.pantones = [];
+      s.colorSides = null;
       s.images = (enquiryOriginal.image_names || []).map((n) => ({ id: "eimg-" + n, name: n, url: assetUrl(n) }));
       s.docs = (enquiryOriginal.doc_names || []).map((name, i) => ({ id: "edoc-" + enquiryEditId + "-" + i, name, file: null }));
+      s.notes = enquiryOriginal.notes || "";
       renderEnquiryEdit();   // re-render with restored data
     });
   }
@@ -4683,7 +4557,7 @@ async function renderEnquiryEdit() {
     if (saveBtn.disabled) return;
     const payload = buildEnquiryPayload();
     if (!payload) {
-      openConfirmModal("Cannot save", "Please fill company, member, item, product type, Height (mm), and Width (mm).", () => {});
+      openConfirmModal("Cannot save", "Please fill company, member, and add at least one image.", () => {});
       return;
     }
     saveBtn.disabled = true;
@@ -4915,7 +4789,11 @@ async function renderDevelopmentCreate() {
   };
 
   // enable search once we have the company list
+  // Fetch companies but NEVER bail out on failure — bailing here would skip
+  // every later step (form population, Back/Reset/Update wiring) and the user
+  // would see an empty Edit screen with a dead Back button.
   let companies = [];
+  let companiesLoadFailed = false;
   try {
     if (devCompaniesCache) {
       companies = devCompaniesCache;
@@ -4924,11 +4802,12 @@ async function renderDevelopmentCreate() {
       devCompaniesCache = companies;
     }
   } catch (err) {
+    companiesLoadFailed = true;
     searchEl.placeholder = "Failed to load companies: " + err.message;
     searchEl.disabled = true;
-    return;
+    companies = [];   // input handler filters an empty list (no crash)
   }
-  searchEl.disabled = false;
+  if (!companiesLoadFailed) searchEl.disabled = false;
 
   // restore product selection
   if (devState.product) productEl.value = devState.product;
@@ -5707,7 +5586,11 @@ async function renderDevelopmentEdit() {
     renderPart3();
   };
 
+  // Fetch companies but NEVER bail out on failure — bailing here would skip
+  // every later step (form population, Back/Reset/Update wiring) and the user
+  // would see an empty Edit screen with a dead Back button.
   let companies = [];
+  let companiesLoadFailed = false;
   try {
     if (devCompaniesCache) {
       companies = devCompaniesCache;
@@ -5716,11 +5599,12 @@ async function renderDevelopmentEdit() {
       devCompaniesCache = companies;
     }
   } catch (err) {
+    companiesLoadFailed = true;
     searchEl.placeholder = "Failed to load companies: " + err.message;
     searchEl.disabled = true;
-    return;
+    companies = [];   // input handler filters an empty list (no crash)
   }
-  searchEl.disabled = false;
+  if (!companiesLoadFailed) searchEl.disabled = false;
 
   if (devState.product) productEl.value = devState.product;
   if (devState.item) itemEl.value = devState.item;
@@ -8585,6 +8469,36 @@ function escapeHtml(s) {
   return String(s).replace(/[&<>"']/g, (c) => ({
     "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
   }[c]));
+}
+
+// Wire a notes textarea: keeps the line counter ("N / max") in sync, colours
+// it warn/over as the limit approaches/exceeds, and auto-grows the textarea up
+// to a sensible max-height as the user types. `onChange` (optional) fires on
+// every input so callers can run their own devState updates / Save re-eval.
+function wireNotesTextarea(notesEl, countEl, opts) {
+  if (!notesEl) return;
+  const max = Number(notesEl.getAttribute("maxlength")) || 2000;
+  const onChange = (opts && opts.onChange) || function () {};
+  const grow = () => {
+    notesEl.style.height = "auto";
+    notesEl.style.height = Math.min(notesEl.scrollHeight, 320) + "px";
+  };
+  const updateCount = () => {
+    if (!countEl) return;
+    const n = notesEl.value.length;
+    countEl.textContent = `${n} / ${max}`;
+    countEl.classList.toggle("warn", n >= max * 0.9 && n < max);
+    countEl.classList.toggle("over", n >= max);
+  };
+  notesEl.addEventListener("input", () => {
+    grow();
+    updateCount();
+    onChange();
+  });
+  // Initial paint — important when the textarea is restored from draft state
+  // (post-save "same customer") or prefilled with the existing note on Edit.
+  grow();
+  updateCount();
 }
 
 // Escape a value for use inside a CSS attribute selector (list names may hold
