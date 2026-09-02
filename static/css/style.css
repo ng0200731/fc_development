@@ -1146,7 +1146,7 @@ select:focus-visible,
   inset: 0;
   background: rgba(15, 23, 42, 0.45);
   display: flex;
-  align-items: flex-start;
+  align-items: center;            /* center vertically (was flex-start) */
   justify-content: center;
   padding: 40px 16px;
   overflow-y: auto;
@@ -1158,12 +1158,22 @@ select:focus-visible,
   padding: 22px 24px;
   width: 100%;
   max-width: 540px;
+  margin: auto;                   /* belt-and-braces vertical center */
+  max-height: calc(100vh - 80px); /* keep tall modals inside the viewport */
+  overflow-y: auto;               /* scroll inside the modal, not the page */
   box-shadow: 0 12px 40px rgba(0,0,0,.25);
 }
 .modal h3 { margin: 0 0 16px; color: var(--text); }
 .modal h4 { margin: 20px 0 8px; color: var(--text); }
 .modal .actions { margin-top: 16px; }
 .modal-actions { display: flex; justify-content: flex-end; gap: 10px; border-top: 1px solid var(--border); padding-top: 16px; }
+/* destructive confirm: red "Yes, delete" so it doesn't look like a normal OK */
+.modal .btn.danger {
+  background: #dc2626;
+  border-color: #dc2626;
+  color: #fff;
+}
+.modal .btn.danger:hover { background: #b91c1c; border-color: #b91c1c; }
 
 /* ---- Image lightbox (click a thumbnail to preview) ---- */
 .image-lightbox {

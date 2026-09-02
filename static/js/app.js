@@ -2552,7 +2552,9 @@ function buildDevelopmentPayload() {
 }
 
 // Centered confirm modal (replaces window.confirm). onConfirm runs on "Yes".
-function openConfirmModal(title, message, onConfirm) {
+function openConfirmModal(title, message, onConfirm, opts) {
+  const danger = !!(opts && opts.danger);
+  const okLabel = (opts && opts.okLabel) || (danger ? "Yes, delete" : "Yes");
   const overlay = document.createElement("div");
   overlay.className = "modal-overlay";
   overlay.innerHTML = `
@@ -2561,7 +2563,7 @@ function openConfirmModal(title, message, onConfirm) {
       <p class="muted">${escapeHtml(message)}</p>
       <div class="actions modal-actions">
         <button class="btn ghost" id="cf-cancel" type="button">Cancel</button>
-        <button class="btn primary" id="cf-ok" type="button">Yes</button>
+        <button class="btn ${danger ? "danger" : "primary"}" id="cf-ok" type="button">${escapeHtml(okLabel)}</button>
       </div>
     </div>`;
   document.body.appendChild(overlay);
@@ -2569,6 +2571,11 @@ function openConfirmModal(title, message, onConfirm) {
   overlay.querySelector("#cf-ok").addEventListener("click", () => {
     overlay.remove();
     onConfirm();
+  });
+  // Click on backdrop (outside the modal box) also cancels — feels natural
+  // for a centered overlay, and matches the global "no native pop-ups" rule.
+  overlay.addEventListener("click", (e) => {
+    if (e.target === overlay) overlay.remove();
   });
 }
 
@@ -2722,7 +2729,7 @@ async function fillDummyDevelopment(ctx) {
 // fills item/product/Part-3 details just like Development. Always seeds MULTIPLE
 // images (Enquiry supports >1 image).
 async function fillDummyEnquiry(ctx) {
-  const { searchEl, hiddenEl, memberEl, projectEl, productEl, itemEl, notesEl, companies,
+  const { searchEl, hiddenEl, memberEl, headupEl, productEl, itemEl, notesEl, companies,
           selectCompany, loadMembers, updateNextState, updateSaveState, updateUnlock,
           renderImageThumbs } = ctx;
   try {
@@ -2740,12 +2747,18 @@ async function fillDummyEnquiry(ctx) {
       memberEl.value = m.value;
       devState.memberId = m.value;
     }
-    const projOpts = [...projectEl.querySelectorAll("option")].filter((o) => o.value !== "");
-    if (projOpts.length) {
-      const p = rnd(projOpts);
-      projectEl.value = p.value;
-      devState.projectId = p.value;
-      devState.projectName = p.textContent;
+    // headup is a free-text field — seed with a sample heads-up note so the
+    // dummy row shows the column populated.
+    if (headupEl) {
+      const HEADUP_TEMPLATES = [
+        "Rush — customer needs sample by Friday.",
+        "Watch out for the metallic gold finish on the logo.",
+        "Existing customer — use prior quote as reference.",
+        "Confirm backing thickness before quoting.",
+      ];
+      headupEl.value = rnd(HEADUP_TEMPLATES);
+      devState.projectId = "";
+      devState.projectName = headupEl.value.trim();
     }
 
     // Fill Notes (Part 2) so the required-to-save gate passes for the dummy row.
@@ -3373,11 +3386,10 @@ async function renderEnquiryCreate() {
             </select>
           </div>
 
-          <div class="field" id="enq-project-field">
-            <label for="enq-project">Project <span class="hint">(optional)</span></label>
-            <select id="enq-project" disabled>
-              <option value="">No project</option>
-            </select>
+          <div class="field" id="enq-headup-field">
+            <label for="enq-headup">headup <span class="hint">(optional)</span></label>
+            <input id="enq-headup" type="text" autocomplete="off"
+                   placeholder="e.g. Any quick heads-up for the team" />
           </div>
         </div>
 
@@ -3425,7 +3437,7 @@ async function renderEnquiryCreate() {
   const hiddenEl = panel.querySelector("#enq-company-id");
   const listEl   = panel.querySelector("#enq-company-list");
   const memberEl = panel.querySelector("#enq-member");
-  const projectEl = panel.querySelector("#enq-project");
+  const headupEl = panel.querySelector("#enq-headup");
   const notesEl  = panel.querySelector("#enq-notes");
   const notesCountEl = panel.querySelector("#enq-notes-count");
   const saveBtn = panel.querySelector("#enq-save");
@@ -3476,12 +3488,9 @@ async function renderEnquiryCreate() {
     memberEl.innerHTML = `<option value="${devState.memberId}">${escapeHtml(devState.memberName || devState.memberId)}</option>`;
     memberEl.value = devState.memberId;
     memberEl.disabled = false;
-    if (devState.projectId) {
-      projectEl.innerHTML = `<option value="${devState.projectId}">${escapeHtml(devState.projectName || devState.projectId)}</option>`;
-      projectEl.value = devState.projectId;
-      projectEl.disabled = false;
-    }
-    loadMembers(Number(devState.companyId), devState.memberId, devState.projectId);
+    // headup is a free-text field — mirror the saved projectName string.
+    headupEl.value = devState.projectName || "";
+    loadMembers(Number(devState.companyId), devState.memberId);
   }
 
   // refresh = re-fetch latest companies + members from the customer database
@@ -3496,7 +3505,7 @@ async function renderEnquiryCreate() {
       if (prevId !== "") {
         const stillThere = companies.some((c) => String(c.id) === String(prevId));
         if (stillThere) {
-          await loadMembers(Number(prevId), devState.memberId || undefined, devState.projectId || undefined);
+          await loadMembers(Number(prevId), devState.memberId || undefined);
         } else {
           resetCompanySelection();
         }
@@ -3543,28 +3552,12 @@ async function renderEnquiryCreate() {
       if (restoreMemberId != null && members.some((m) => String(m.id) === String(restoreMemberId))) {
         memberEl.value = String(restoreMemberId);
       }
-      const projects = comp.projects || [];
-      projectEl.innerHTML = `<option value="">No project</option>` +
-        (projects.length
-          ? projects.map((p) =>
-              `<option value="${p.id}">${escapeHtml(p.name)}</option>`).join("")
-          : "");
-      projectEl.disabled = false;
-      const wantProject = restoreProjectId != null ? String(restoreProjectId) : (devState.projectId || "");
-      if (wantProject && projects.some((p) => String(p.id) === wantProject)) {
-        projectEl.value = wantProject;
-        const hit = projects.find((p) => String(p.id) === wantProject);
-        devState.projectId = wantProject;
-        devState.projectName = hit.name;
-      } else {
-        devState.projectId = "";
-        devState.projectName = "";
-      }
+      // headup is a free-text field — no select to populate. Just keep the
+      // current value (or restore one if provided).
+      headupEl.value = devState.projectName || "";
     } catch (err) {
       memberEl.innerHTML = `<option value="">— load failed —</option>`;
       memberEl.disabled = true;
-      projectEl.innerHTML = `<option value="">No project</option>`;
-      projectEl.disabled = false;
     }
     updateNextState();
   };
@@ -3655,14 +3648,11 @@ async function renderEnquiryCreate() {
     devState.memberId = memberEl.value;
     updateNextState();
   });
-  projectEl.addEventListener("change", () => {
-    if (projectEl.value) {
-      devState.projectId = projectEl.value;
-      devState.projectName = projectEl.options[projectEl.selectedIndex]?.textContent || "";
-    } else {
-      devState.projectId = "";
-      devState.projectName = "";
-    }
+  headupEl.addEventListener("input", () => {
+    // headup is a free-text field — store it in projectName, leave projectId
+    // empty (no association with a saved Project row).
+    devState.projectId = "";
+    devState.projectName = headupEl.value.trim();
     updateSaveState();
   });
   // Notes textarea is wired through wireNotesTextarea() above — its onChange
@@ -3879,7 +3869,7 @@ async function renderEnquiryCreate() {
 
   // ===== Action buttons: Dummy / Save =====
   dummyBtn.addEventListener("click", () => fillDummyEnquiry({
-    searchEl, hiddenEl, memberEl, projectEl, notesEl, listEl, companies,
+    searchEl, hiddenEl, memberEl, headupEl, notesEl, listEl, companies,
     selectCompany, loadMembers, updateNextState, updateSaveState, updateUnlock,
     renderImageThumbs,
   }));
@@ -3958,11 +3948,10 @@ async function renderEnquiryEdit() {
             </select>
           </div>
 
-          <div class="field" id="enq-project-field">
-            <label for="enq-project">Project <span class="hint">(optional)</span></label>
-            <select id="enq-project" disabled>
-              <option value="">No project</option>
-            </select>
+          <div class="field" id="enq-headup-field">
+            <label for="enq-headup">headup <span class="hint">(optional)</span></label>
+            <input id="enq-headup" type="text" autocomplete="off"
+                   placeholder="e.g. Any quick heads-up for the team" />
           </div>
         </div>
 
@@ -4009,7 +3998,7 @@ async function renderEnquiryEdit() {
   const hiddenEl = panel.querySelector("#enq-company-id");
   const listEl   = panel.querySelector("#enq-company-list");
   const memberEl = panel.querySelector("#enq-member");
-  const projectEl = panel.querySelector("#enq-project");
+  const headupEl = panel.querySelector("#enq-headup");
   const saveBtn = panel.querySelector("#enq-save");
   const dummyBtn = panel.querySelector("#enq-dummy");
   const resetBtn = panel.querySelector("#enq-reset");
@@ -4059,12 +4048,9 @@ async function renderEnquiryEdit() {
     memberEl.innerHTML = `<option value="${devState.memberId}">${escapeHtml(devState.memberName || devState.memberId)}</option>`;
     memberEl.value = devState.memberId;
     memberEl.disabled = false;
-    if (devState.projectId) {
-      projectEl.innerHTML = `<option value="${devState.projectId}">${escapeHtml(devState.projectName || devState.projectId)}</option>`;
-      projectEl.value = devState.projectId;
-      projectEl.disabled = false;
-    }
-    loadMembers(Number(devState.companyId), devState.memberId, devState.projectId);
+    // headup is a free-text field — mirror the saved projectName string.
+    headupEl.value = devState.projectName || "";
+    loadMembers(Number(devState.companyId), devState.memberId);
   }
 
   panel.querySelector("#enq-refresh").addEventListener("click", async (e) => {
@@ -4078,7 +4064,7 @@ async function renderEnquiryEdit() {
       if (prevId !== "") {
         const stillThere = companies.some((c) => String(c.id) === String(prevId));
         if (stillThere) {
-          await loadMembers(Number(prevId), devState.memberId || undefined, devState.projectId || undefined);
+          await loadMembers(Number(prevId), devState.memberId || undefined);
         } else {
           resetCompanySelection();
         }
@@ -4132,28 +4118,12 @@ async function renderEnquiryEdit() {
       if (restoreMemberId != null && members.some((m) => String(m.id) === String(restoreMemberId))) {
         memberEl.value = String(restoreMemberId);
       }
-      const projects = comp.projects || [];
-      projectEl.innerHTML = `<option value="">No project</option>` +
-        (projects.length
-          ? projects.map((p) =>
-              `<option value="${p.id}">${escapeHtml(p.name)}</option>`).join("")
-          : "");
-      projectEl.disabled = false;
-      const wantProject = restoreProjectId != null ? String(restoreProjectId) : (devState.projectId || "");
-      if (wantProject && projects.some((p) => String(p.id) === wantProject)) {
-        projectEl.value = wantProject;
-        const hit = projects.find((p) => String(p.id) === wantProject);
-        devState.projectId = wantProject;
-        devState.projectName = hit.name;
-      } else {
-        devState.projectId = "";
-        devState.projectName = "";
-      }
+      // headup is a free-text field — no select to populate. Just keep the
+      // current value (or restore one if provided).
+      headupEl.value = devState.projectName || "";
     } catch (err) {
       memberEl.innerHTML = `<option value="">— load failed —</option>`;
       memberEl.disabled = true;
-      projectEl.innerHTML = `<option value="">No project</option>`;
-      projectEl.disabled = false;
     }
     updateNextState();
   }
@@ -4244,14 +4214,11 @@ async function renderEnquiryEdit() {
     devState.memberId = memberEl.value;
     updateNextState();
   });
-  projectEl.addEventListener("change", () => {
-    if (projectEl.value) {
-      devState.projectId = projectEl.value;
-      devState.projectName = projectEl.options[projectEl.selectedIndex]?.textContent || "";
-    } else {
-      devState.projectId = "";
-      devState.projectName = "";
-    }
+  headupEl.addEventListener("input", () => {
+    // headup is a free-text field — store it in projectName, leave projectId
+    // empty (no association with a saved Project row).
+    devState.projectId = "";
+    devState.projectName = headupEl.value.trim();
     updateSaveState();
   });
   // Part 3 (Details) was removed from Enquiry / Edit to mirror Enquiry / Create
@@ -4266,7 +4233,9 @@ async function renderEnquiryEdit() {
   const currentSignature = () => ({
     company_id: devState.companyId ? Number(devState.companyId) : null,
     member_id: devState.memberId ? Number(devState.memberId) : null,
-    project_id: devState.projectId ? Number(devState.projectId) : null,
+    // headup is free text — compare by the trimmed name so the dirty check
+    // doesn't false-alarm when project_id was dropped on schema change.
+    project_name: (devState.projectName || "").trim(),
     image_names: devState.images.map((i) => i.name).sort(),
     doc_names: devState.docs.map((d) => d.name).sort(),
     notes: (devState.notes || "").trim(),
@@ -4276,7 +4245,7 @@ async function renderEnquiryEdit() {
   const isDirty = () => !enquiryOriginal || !sigEq(currentSignature(), {
     company_id: enquiryOriginal.company_id != null ? Number(enquiryOriginal.company_id) : null,
     member_id: enquiryOriginal.member_id != null ? Number(enquiryOriginal.member_id) : null,
-    project_id: enquiryOriginal.project_id != null ? Number(enquiryOriginal.project_id) : null,
+    project_name: (enquiryOriginal.project_name || "").trim(),
     image_names: (enquiryOriginal.image_names || []).slice().sort(),
     doc_names: (enquiryOriginal.doc_names || []).slice().sort(),
     notes: (enquiryOriginal.notes || "").trim(),
@@ -4497,7 +4466,7 @@ async function renderEnquiryEdit() {
   // ===== Action: Dummy =====
   if (dummyBtn) {
     dummyBtn.addEventListener("click", () => fillDummyEnquiry({
-      searchEl, hiddenEl, memberEl, projectEl, notesEl, listEl, companies,
+      searchEl, hiddenEl, memberEl, headupEl, notesEl, listEl, companies,
       selectCompany, loadMembers, updateNextState, updateSaveState, updateUnlock,
       renderImageThumbs,
     }));
@@ -4533,7 +4502,9 @@ async function renderEnquiryEdit() {
       s.companyName = enquiryOriginal.company_name || "";
       s.memberId = enquiryOriginal.member_id != null ? String(enquiryOriginal.member_id) : "";
       s.memberName = enquiryOriginal.member_name || "";
-      s.projectId = enquiryOriginal.project_id != null ? String(enquiryOriginal.project_id) : "";
+      // headup mirrors project_name — clear the id (no association) and restore
+      // the saved text.
+      s.projectId = "";
       s.projectName = enquiryOriginal.project_name || "";
       // Item / Product Type / Details are NOT part of Enquiry / Edit (mirrors
       // Create) — keep their state at the blank values regardless.
@@ -6554,7 +6525,8 @@ async function batchDeleteDevelopments() {
       if (failed) openConfirmModal("Partial failure", `${failed} deletion(s) failed.`, () => {});
       devViewSelected.clear();
       await renderDevelopmentView();
-    }
+    },
+    { danger: true }
   );
 }
 
@@ -6572,7 +6544,8 @@ async function deleteDevelopment(id) {
       } catch (err) {
         openConfirmModal("Delete failed", err.message, () => {});
       }
-    }
+    },
+    { danger: true }
   );
 }
 
@@ -7333,7 +7306,8 @@ async function batchDeleteEnquiries() {
       if (failed) openConfirmModal("Partial failure", `${failed} deletion(s) failed.`, () => {});
       enqViewSelected.clear();
       await renderEnquiryView();
-    }
+    },
+    { danger: true }
   );
 }
 
@@ -7351,7 +7325,8 @@ async function deleteEnquiry(id) {
       } catch (err) {
         openConfirmModal("Delete failed", err.message, () => {});
       }
-    }
+    },
+    { danger: true }
   );
 }
 
@@ -7372,7 +7347,9 @@ async function editEnquiryInEdit(id) {
   s.companyName = rec.company_name || "";
   s.memberId = rec.member_id != null ? String(rec.member_id) : "";
   s.memberName = rec.member_name || "";
-  s.projectId = rec.project_id != null ? String(rec.project_id) : "";
+  // headup is a free-text field — show whatever name was previously saved.
+  // (Old project_id associations are dropped; only the name string is kept.)
+  s.projectId = "";
   s.projectName = rec.project_name || "";
   s.item = rec.item_name || "";
   s.product = rec.product_type || "";
