@@ -100,9 +100,25 @@ async function loadProductTypeFactory() {
   try {
     const data = await fetchJson(API + "/api/product-type-factory");
     PRODUCT_TYPE_FACTORY = data || {};
+    // Mirror each kind's input_type into PRODUCT_TYPE_FACTORY_TYPES so
+    // listKindInputType() can fetch it without touching the options map.
+    // Shape: { [product]: { [kind]: 'dropdown' | 'radio' | 'text' | 'textarea' } }
+    PRODUCT_TYPE_FACTORY_TYPES = {};
+    for (const product of Object.keys(PRODUCT_TYPE_FACTORY)) {
+      const kinds = PRODUCT_TYPE_FACTORY[product] || {};
+      PRODUCT_TYPE_FACTORY_TYPES[product] = {};
+      for (const kind of Object.keys(kinds)) {
+        const arr = kinds[kind];
+        // Each option row carries the same input_type for a given kind; take
+        // it from the first row and fall back to 'dropdown'.
+        const t = (arr && arr.length && arr[0] && arr[0].input_type) || "dropdown";
+        PRODUCT_TYPE_FACTORY_TYPES[product][kind] = t;
+      }
+    }
   } catch (e) {
     console.warn("loadProductTypeFactory failed:", e.message);
     PRODUCT_TYPE_FACTORY = {};
+    PRODUCT_TYPE_FACTORY_TYPES = {};
   }
 }
 
@@ -791,6 +807,13 @@ const PRODUCT_TYPE_FACTORY_SEED = {
 };
 let PRODUCT_TYPE_FACTORY = {};
 
+// Per-kind input-type for each product type's PTF lists. Populated from
+// /api/product-type-factory alongside PRODUCT_TYPE_FACTORY. Used by
+// `listKindInputType` below so the Material popup can render dropdown / radio /
+// text / textarea fields per the kind's configured type. Defaults to
+// 'dropdown' (the legacy behavior) for any kind that has no entry here.
+let PRODUCT_TYPE_FACTORY_TYPES = {};
+
 // The live DB map (PRODUCT_TYPE_FACTORY, from loadProductTypeFactory) stores
 // each kind as [{id, value}], while PRODUCT_TYPE_FACTORY_SEED stores plain
 // strings. Normalize either shape to an array of strings for the dropdowns.
@@ -813,6 +836,17 @@ function listsForProduct(product) {
   // Exclude the internal placeholder-only marker; if a list has only a
   // placeholder it's treated as empty and falls back at the option level.
   return names;
+}
+
+// The configured input type for a list kind, or 'dropdown' if unset / unknown.
+// Drives how the Material popup renders that kind's field:
+//   dropdown → <select>           radio → <input type="radio"> group
+//   text     → <input type="text">  textarea → <textarea>
+function listKindInputType(product, kind) {
+  const map = PRODUCT_TYPE_FACTORY_TYPES && PRODUCT_TYPE_FACTORY_TYPES[product];
+  const t = map && map[kind];
+  if (t === "radio" || t === "text" || t === "textarea") return t;
+  return "dropdown";
 }
 
 // Options valid for an arbitrary list name of a product type, with fallback to
@@ -1137,7 +1171,7 @@ async function renderSettingsOptions() {
 
     <div class="opt-card">
       <h3 class="subhead">Product type factory (Development)</h3>
-      <p class="muted small">Override the dropdown lists <em>per product type</em>. Each product type starts with <strong>Fabric</strong> and <strong>Folding</strong> (seeded from the global Development lists above) — you can rename, delete, or add more named lists. Each list can hold its own options. Product types with no override fall back to the global Development lists.</p>
+      <p class="muted small">Override the dropdown lists <em>per product type</em>. Each product type starts <strong>empty</strong> — add the named lists you need (e.g. Fabric, Folding, Thickness, Finish). Each list can hold its own options (or be a free-text / textarea field). Product types with no override fall back to the global Development lists.</p>
       <div class="opt-controls">
         <div class="field">
           <label for="ptf-product">Product type</label>
@@ -1465,9 +1499,15 @@ async function renderSettingsOptions() {
     .map((p) => `<option value="${escapeHtml(p)}">${escapeHtml(p)}</option>`)
     .join("");
 
-  // Message helper scoped to a kind.
+  // Message helper scoped to a kind. Falls back to the panel's first message
+  // slot when called with an empty kind (e.g. Add-list called with no name
+  // typed) so the user still sees the warning instead of a silent crash.
   function ptfShowMsg(kind, text, isErr) {
-    const el = panel.querySelector(`[data-ptf-msg="${kind}"]`);
+    const sel = kind
+      ? `[data-ptf-msg="${cssEscape(kind)}"]`
+      : `[data-ptf-msg]:first-of-type`;
+    const el = panel.querySelector(sel);
+    if (!el) return;
     el.textContent = text || "";
     el.classList.toggle("err", !!isErr);
     el.classList.toggle("ok", !isErr && !!text);
@@ -1493,7 +1533,10 @@ async function renderSettingsOptions() {
     // absent from the factory map. Once a product type has been seeded (even
     // with an empty {} object), its real list names drive rendering — so
     // deleting the last list leaves it empty instead of resurrecting Fabric/Folding.
-    if (f === undefined) return ["fabric", "folding"];
+    // An uninitialized product has no override blocks. Fabric and Folding
+    // still fall back to global options in the Material popup, but they must
+    // not appear here as editable factory lists until the user adds them.
+    if (f === undefined) return [];
     return Object.keys(f);
   }
 
@@ -1502,22 +1545,35 @@ async function renderSettingsOptions() {
     const product = ptfProductEl.value;
     const container = panel.querySelector("#ptf-lists");
     const names = ptfListNames(product);
-    container.innerHTML = names.map((kind, li) => `
+    container.innerHTML = names.map((kind, li) => {
+      const curType = listKindInputType(product, kind);
+      const showAddRow = curType === "dropdown" || curType === "radio";
+      return `
       <div class="ptf-kind" data-kind="${escapeHtml(kind)}">
         <div class="ptf-kind-head">
           <button class="icon-btn opt-up" data-list-idx="${li}" title="Move list up" ${li === 0 ? "disabled" : ""}>▲</button>
           <button class="icon-btn opt-down" data-list-idx="${li}" title="Move list down" ${li === names.length - 1 ? "disabled" : ""}>▼</button>
           <span class="ptf-kind-name" data-list-name="${escapeHtml(kind)}" title="Click to rename list">${escapeHtml(kind)}</span>
+          <label class="ptf-type-label" for="ptf-type-${cssEscape(kind)}">type</label>
+          <select class="ptf-type-select" id="ptf-type-${cssEscape(kind)}" data-list-type="${escapeHtml(kind)}" title="Input type used in Material popup">
+            <option value="dropdown" ${curType === "dropdown" ? "selected" : ""}>dropdown</option>
+            <option value="radio" ${curType === "radio" ? "selected" : ""}>radio</option>
+            <option value="text" ${curType === "text" ? "selected" : ""}>text</option>
+            <option value="textarea" ${curType === "textarea" ? "selected" : ""}>textarea</option>
+          </select>
           <button class="icon-btn danger ptf-del-list" data-list-name="${escapeHtml(kind)}" title="Delete list">✕</button>
         </div>
+        ${showAddRow ? `
         <div class="opt-add-row">
           <input type="text" placeholder="New ${escapeHtml(kind)} option" autocomplete="off" data-ptf-new="${escapeHtml(kind)}" />
           <button class="btn primary" type="button" data-ptf-add="${escapeHtml(kind)}">Add</button>
-        </div>
+        </div>` : `
+        <p class="hint ptf-type-note">Free input — type "${escapeHtml(curType)}" in Settings doesn't use options.</p>`}
         <div class="opt-msg" data-ptf-msg="${escapeHtml(kind)}"></div>
         <p class="hint opt-factory-hint" data-ptf-hint="${escapeHtml(kind)}"></p>
         <ul class="opt-list" data-ptf-list="${escapeHtml(kind)}"></ul>
-      </div>`).join("");
+      </div>`;
+    }).join("");
     names.forEach((kind) => ptfRenderList(kind));
 
     // Per-list Add buttons + Enter-to-add.
@@ -1534,6 +1590,30 @@ async function renderSettingsOptions() {
     // List rename (click the name).
     container.querySelectorAll(".ptf-kind-name").forEach((s) =>
       s.addEventListener("click", () => ptfStartRenameList(s.dataset.listName, s)));
+    // Per-list input-type selector.
+    container.querySelectorAll("[data-list-type]").forEach((sel) =>
+      sel.addEventListener("change", () => ptfSetListType(sel.dataset.listType, sel.value)));
+  }
+
+  async function ptfSetListType(kind, inputType) {
+    const product = ptfProductEl.value;
+    try {
+      await fetchJson(API + "/api/product-type-factory/list/type", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ product_type: product, kind, input_type: inputType }),
+      });
+      await loadProductTypeFactory();
+      // Re-render the list block so its visual state matches the new type
+      // (e.g. a radio kind with no options now hides its add-row).
+      ptfRenderList(kind);
+      ptfShowMsg(kind, "Type set to " + inputType + ".");
+    } catch (e) {
+      ptfShowMsg(kind, "Set type failed: " + (e.message || "unknown error"), true);
+      // Reload to revert the <select> to the authoritative server state.
+      await loadProductTypeFactory();
+      ptfRenderAll();
+    }
   }
 
   function ptfRenderList(kind) {
@@ -1698,10 +1778,12 @@ async function renderSettingsOptions() {
           });
           await loadProductTypeFactory();
           ptfRenderAll();
+          ptfShowMsg(kind, `Deleted "${kind}".`);
         } catch (e) {
           ptfShowMsg(kind, "Delete list failed: " + e.message, true);
         }
-      }
+      },
+      { danger: true, okLabel: "Yes, delete" }
     );
   }
 
@@ -1729,26 +1811,40 @@ async function renderSettingsOptions() {
     input.type = "text";
     input.className = "opt-rename-input";
     input.value = oldKind;
+    input.dataset.renaming = "1";        // marker: an in-flight rename owns this row
     spanEl.replaceWith(input);
-    input.focus();
-    input.select();
-    function commit() {
+    // Defer focus/select so the click that opened us doesn't immediately steal
+    // focus back (some browsers fire blur synchronously during the same tick).
+    requestAnimationFrame(() => { input.focus(); input.select(); });
+
+    let done = false;
+    async function commit() {
+      if (done) return;
+      done = true;
       const newKind = input.value.trim();
-      if (newKind && newKind !== oldKind) {
-        ptfRenameList(oldKind, newKind);
-      } else {
+      if (!newKind || newKind === oldKind) {
         ptfRenderAll();
+        return;
       }
+      await ptfRenameList(oldKind, newKind);
+    }
+    function cancel() {
+      if (done) return;
+      done = true;
+      ptfRenderAll();
     }
     input.addEventListener("blur", commit);
     input.addEventListener("keydown", (e) => {
-      if (e.key === "Enter") input.blur();
-      else if (e.key === "Escape") ptfRenderAll();
+      if (e.key === "Enter") { e.preventDefault(); commit(); }
+      else if (e.key === "Escape") { e.preventDefault(); cancel(); }
     });
   }
 
   async function ptfRenameList(oldKind, newKind) {
     const product = ptfProductEl.value;
+    // Clear any stale rename marker left in the DOM before the network call —
+    // otherwise the row's "rename input" gets orphaned when loadProductTypeFactory
+    // finishes and ptfRenderAll replaces the panel.
     try {
       await fetchJson(API + "/api/product-type-factory/list", {
         method: "PUT",
@@ -1757,8 +1853,12 @@ async function renderSettingsOptions() {
       });
       await loadProductTypeFactory();
       ptfRenderAll();
+      // Show a confirmation anchored to the renamed list so the user sees the
+      // name change actually took effect (vs. silently snapping back).
+      ptfShowMsg(newKind, `Renamed "${oldKind}" → "${newKind}".`);
     } catch (e) {
       ptfShowMsg(oldKind, "Rename list failed: " + (e.message || "name may already exist"), true);
+      await loadProductTypeFactory();
       ptfRenderAll();
     }
   }
@@ -2845,12 +2945,53 @@ function wireExtraParts(root, state, updateSaveState) {
     const lists = (cur && cur.lists) || {};
     return extra.map((kind) => {
       const value = lists[kind] || "";
+      const id = "mat-" + cssEscape(kind);
+      const label = escapeHtml(kind[0].toUpperCase() + kind.slice(1));
+      const type = listKindInputType(product, kind);
+      if (type === "radio") {
+        const opts = listOptionsFor(product, kind, value);
+        if (!opts.length) {
+          // No options configured for this radio kind — fall back to a free-
+          // text input so the field is still usable until options are added.
+          return `
+            <div class="field">
+              <label for="${id}">${label}</label>
+              <input id="${id}" type="text" autocomplete="off" value="${escapeHtml(value)}" placeholder="(add options in Settings)"/>
+            </div>`;
+        }
+        return `
+          <div class="field">
+            <label class="radio-label">${label}</label>
+            <div class="radio-row" id="${id}-row">
+              ${opts.map((o) => `
+                <label class="radio-opt">
+                  <input type="radio" name="${id}" value="${escapeHtml(o)}" ${value === o ? "checked" : ""}/> ${escapeHtml(o)}
+                </label>`).join("")}
+            </div>
+          </div>`;
+      }
+      if (type === "textarea") {
+        return `
+          <div class="field">
+            <label for="${id}">${label}</label>
+            <textarea id="${id}" rows="3" placeholder="…">${escapeHtml(value)}</textarea>
+          </div>`;
+      }
+      if (type === "text") {
+        return `
+          <div class="field">
+            <label for="${id}">${label}</label>
+            <input id="${id}" type="text" autocomplete="off" value="${escapeHtml(value)}" placeholder="…"/>
+          </div>`;
+      }
+      // default: dropdown (existing behavior)
       return `
         <div class="field">
-          <label for="mat-${cssEscape(kind)}">${escapeHtml(kind[0].toUpperCase() + kind.slice(1))}</label>
-          <select id="mat-${cssEscape(kind)}">
+          <label for="${id}">${label}</label>
+          <select id="${id}">
             <option value="">— select —</option>
-            ${listOptionsFor(product, kind, value).map((f) => `<option value="${escapeHtml(f)}" ${value === f ? "selected" : ""}>${escapeHtml(f)}</option>`).join("")}
+            ${listOptionsFor(product, kind, value).map((f) =>
+              `<option value="${escapeHtml(f)}" ${value === f ? "selected" : ""}>${escapeHtml(f)}</option>`).join("")}
           </select>
         </div>`;
     }).join("");
@@ -2861,8 +3002,22 @@ function wireExtraParts(root, state, updateSaveState) {
     if (!extra.length) return undefined;
     const lists = {};
     for (const kind of extra) {
-      const sel = overlay.querySelector("#mat-" + cssEscape(kind));
-      const v = sel ? (sel.value || null) : (cur && cur.lists ? cur.lists[kind] || null : null);
+      const id = "mat-" + cssEscape(kind);
+      const type = listKindInputType(product, kind);
+      let v = null;
+      if (type === "radio") {
+        const checked = overlay.querySelector(`input[name="${id}"]:checked`);
+        v = checked ? (checked.value || null) : null;
+      } else if (type === "text" || type === "textarea") {
+        const el = overlay.querySelector("#" + id);
+        const raw = el ? (el.value || "") : "";
+        v = raw.trim() || null;
+      } else {
+        // dropdown
+        const sel = overlay.querySelector("#" + id);
+        v = sel ? (sel.value || null) : null;
+      }
+      if (!v && cur && cur.lists) v = cur.lists[kind] || null;
       if (v) lists[kind] = v;
     }
     return lists;
@@ -3051,13 +3206,13 @@ function wireExtraParts(root, state, updateSaveState) {
   // level, document-scoped). Wire the buttons + product-change hook to it.
   if (matBtn) {
     // Bind once; decide at CLICK time because devState.product is empty when the
-    // panel first mounts (Create tab). Screen print label / printed label, and any
-    // product type that has a Product type factory override, open the full Material
-    // popup (so their factory Fabric/Folding options are editable there). Every
-    // other product type opens the generic "TBA" popup.
+    // panel first mounts (Create tab). Always open the full Material popup —
+    // even for product types without a Product type factory override — so the
+    // user can fill in the base Recycle / Fabric / Edge / Folding fields. When
+    // there's no product-specific override, the Fabric / Folding <select>s
+    // fall back to the global Development lists.
     matBtn.addEventListener("click", () => {
-      if (isScreenPrintProduct(devState.product) || hasProductTypeFactory(devState.product)) openMaterialPopup();
-      else openTbaPopup("Material");
+      openMaterialPopup();
     });
   }
   if (specBtn) {

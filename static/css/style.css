@@ -1354,10 +1354,12 @@ select:focus-visible,
 /* Product type factory (Settings / Options) */
 .ptf-lists { display: flex; flex-direction: column; gap: 16px; margin-top: 8px; }
 .ptf-kind { border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 12px; }
-.ptf-kind-head { display: flex; align-items: center; gap: 6px; margin-bottom: 10px; }
+.ptf-kind-head { display: flex; align-items: center; gap: 6px; margin-bottom: 10px; flex-wrap: wrap; }
 .ptf-kind-head .opt-up, .ptf-kind-head .opt-down { font-size: 11px; padding: 2px 6px; }
-.ptf-kind-name { flex: 1; font-size: 14px; font-weight: 600; cursor: pointer; color: var(--text-soft); }
+.ptf-kind-name { flex: 1; font-size: 14px; font-weight: 600; cursor: pointer; color: var(--text-soft); min-width: 80px; }
 .ptf-kind-name:hover { color: var(--accent); text-decoration: underline; }
+.ptf-type-label { font-size: 12px; color: var(--muted); margin-left: 4px; }
+.ptf-type-select { font-size: 12px; padding: 2px 6px; max-width: 110px; }
 .ptf-kind .opt-add-row #ptf-new-list,
 .ptf-kind .opt-add-row input[data-ptf-new] { flex: 1; max-width: 360px; }
 .opt-factory-hint { margin: 4px 0 10px; font-size: 12px; color: var(--muted); }
