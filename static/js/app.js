@@ -6808,14 +6808,15 @@ async function openFollowUpHistory(devId) {
   overlay.querySelectorAll("[data-fuid]").forEach((b) => {
     b.addEventListener("click", () => {
       const f = (followups || []).find((x) => x.id === Number(b.dataset.fuid));
-      if (f) openFollowUpDetail(f);
+      if (f) openFollowUpDetail(devId, f);
     });
   });
 }
 
 // Read-only detail popup styled like the Follow Up form, showing one Follow
-// Up's saved Category, Notes, Images and Documents.
-function openFollowUpDetail(f) {
+// Up's saved Category, Notes, Images and Documents. An "Edit" button opens the
+// editable Follow Up modal for this exact record.
+function openFollowUpDetail(devId, f) {
   const imgs = (f.image_names || []).map((n) =>
     `<img class="dev-thumb-sm create-thumb-img fud-thumb" src="${escapeHtml(assetUrl(n))}" alt="${escapeHtml(displayName(n))}" data-full="${escapeHtml(assetUrl(n))}" data-name="${escapeHtml(displayName(n))}" />`
   ).join("");
@@ -6843,12 +6844,17 @@ function openFollowUpDetail(f) {
         </div>
       </div>
       <div class="actions modal-actions">
+        <button class="btn ghost" type="button" id="fud-edit">Edit</button>
         <button class="btn primary" type="button" id="fud-close">Close</button>
       </div>
     </div>`;
   document.body.appendChild(overlay);
   const close = () => overlay.remove();
   overlay.querySelector("#fud-close").addEventListener("click", close);
+  overlay.querySelector("#fud-edit").addEventListener("click", () => {
+    close();
+    openFollowUpModal(devId, f);
+  });
   overlay.addEventListener("click", (e) => { if (e.target === overlay) close(); });
   overlay.querySelectorAll(".fud-thumb").forEach((img) => {
     img.addEventListener("click", () => openImageLightbox(img.dataset.full, img.dataset.name));
@@ -6858,7 +6864,7 @@ function openFollowUpDetail(f) {
 // Follow Up modal: record a follow-up (managed option, note, images, docs)
 // against a development. Images/docs are uploaded to /api/uploads immediately;
 // only the returned "uploads/..." paths are persisted so they survive reloads.
-async function openFollowUpModal(devId) {
+async function openFollowUpModal(devId, editFollowup) {
   let rec = null;
   try {
     rec = await fetchJson(API + `/api/developments/${devId}`);
@@ -6867,15 +6873,23 @@ async function openFollowUpModal(devId) {
     return;
   }
 
-  const images = [];   // { id, name, url, uploading }
-  const docs = [];     // { id, name, url, file, uploading }
+  const isEdit = !!editFollowup;
+  const saveLabel = isEdit ? "Save Changes" : "Save Follow Up";
+  // Seed the editable state from the saved DB record when editing. Names are
+  // persisted "uploads/..." paths; bytes live on disk and resolve via assetUrl.
+  const images = isEdit
+    ? (editFollowup.image_names || []).map((n, i) => ({ id: "eimg-" + i, name: n, url: assetUrl(n), uploading: false }))
+    : [];   // { id, name, url, uploading }
+  const docs = isEdit
+    ? (editFollowup.doc_names || []).map((n, i) => ({ id: "edoc-" + i, name: n, url: docUrl(n), file: null, uploading: false }))
+    : [];   // { id, name, url, file, uploading }
   const previousImagePasteTarget = activeImagePasteTarget;
 
   const overlay = document.createElement("div");
   overlay.className = "modal-overlay";
   overlay.innerHTML = `
     <div class="modal followup-modal" role="dialog" aria-modal="true">
-      <h3>Follow Up · ${escapeHtml(rec.item_name || "")} <span class="muted small">${escapeHtml(rec.company_name || "")}</span></h3>
+      <h3>${isEdit ? "Edit Follow Up" : "Follow Up"} · ${escapeHtml(rec.item_name || "")} <span class="muted small">${escapeHtml(rec.company_name || "")}</span></h3>
       <div class="followup-frames">
         <div class="followup-frame">
           <label class="field-label" for="fu-category">Category</label>
@@ -6907,8 +6921,9 @@ async function openFollowUpModal(devId) {
         </div>
       </div>
       <div class="actions modal-actions">
+        ${isEdit ? '<button class="btn ghost" id="fu-reset" type="button" title="Revert to the saved original values">Reset</button>' : ""}
         <button class="btn ghost" id="fu-cancel" type="button">Cancel</button>
-        <button class="btn primary" id="fu-save" type="button">Save Follow Up</button>
+        <button class="btn primary" id="fu-save" type="button">${saveLabel}</button>
       </div>
     </div>`;
   document.body.appendChild(overlay);
@@ -6919,10 +6934,29 @@ async function openFollowUpModal(devId) {
   const docDrop = overlay.querySelector("#fu-doc-drop");
   const docList = overlay.querySelector("#fu-doc-list");
   const saveBtn = overlay.querySelector("#fu-save");
+  const catSel = overlay.querySelector("#fu-category");
+  const noteEl = overlay.querySelector("#fu-note");
   const closeModal = () => {
     overlay.remove();
     activeImagePasteTarget = previousImagePasteTarget;
   };
+
+  const selectCategory = (cat) => {
+    const val = cat || "";
+    if (val && ![...catSel.options].some((o) => o.value === val)) {
+      const o = document.createElement("option");
+      o.value = val;
+      o.textContent = val;
+      catSel.appendChild(o);
+    }
+    catSel.value = val;
+  };
+
+  // Seed the edit form with the saved record's Category / Notes.
+  if (isEdit) {
+    selectCategory(editFollowup.category);
+    noteEl.value = editFollowup.note || "";
+  }
 
   const canSave = () => images.every((x) => !x.uploading) && docs.every((x) => !x.uploading);
   const refreshSave = () => { saveBtn.disabled = !canSave(); };
@@ -7082,24 +7116,43 @@ async function openFollowUpModal(devId) {
   overlay.querySelector("#fu-cancel").addEventListener("click", closeModal);
   overlay.addEventListener("click", (e) => { if (e.target === overlay) closeModal(); });
 
+  // Reset reverts an edit back to the saved original values (no DB writes).
+  const resetToOriginal = () => {
+    if (!isEdit) return;
+    images.splice(0, images.length,
+      ...(editFollowup.image_names || []).map((n, i) => ({ id: "eimg-" + i, name: n, url: assetUrl(n), uploading: false })));
+    docs.splice(0, docs.length,
+      ...(editFollowup.doc_names || []).map((n, i) => ({ id: "edoc-" + i, name: n, url: docUrl(n), file: null, uploading: false })));
+    selectCategory(editFollowup.category);
+    noteEl.value = editFollowup.note || "";
+    renderImageThumbs();
+    renderDocList();
+    refreshSave();
+  };
+  const resetBtn = overlay.querySelector("#fu-reset");
+  if (resetBtn) resetBtn.addEventListener("click", resetToOriginal);
+
   saveBtn.addEventListener("click", async () => {
     if (!canSave()) return;
     const payload = {
-      category: overlay.querySelector("#fu-category").value || null,
-      note: overlay.querySelector("#fu-note").value.trim() || null,
+      category: catSel.value || null,
+      note: noteEl.value.trim() || null,
       image_names: images.map((x) => x.name),
       doc_names: docs.map((x) => x.name),
     };
     saveBtn.disabled = true;
     saveBtn.textContent = "Saving…";
+    const url = isEdit
+      ? API + `/api/developments/${devId}/followups/${editFollowup.id}`
+      : API + `/api/developments/${devId}/followups`;
     try {
-      await fetchJson(API + `/api/developments/${devId}/followups`, { method: "POST", body: JSON.stringify(payload) });
-      showToast("Follow up saved");
+      await fetchJson(url, { method: isEdit ? "PUT" : "POST", body: JSON.stringify(payload) });
+      showToast(isEdit ? "Follow up updated" : "Follow up saved");
       closeModal();
       renderDevelopmentView();   // re-fetch so the Status column shows the new category
     } catch (err) {
       saveBtn.disabled = false;
-      saveBtn.textContent = "Save Follow Up";
+      saveBtn.textContent = saveLabel;
       openConfirmModal("Save failed", err.message, () => {});
     }
   });

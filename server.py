@@ -2192,6 +2192,43 @@ def api_create_followup(handler, did):
     return json_response(handler, _followup_row_to_payload(row), 201)
 
 
+def api_update_followup(handler, did, fid):
+    conn = db()
+    dev = conn.execute("SELECT id FROM developments WHERE id = ?", (did,)).fetchone()
+    if not dev:
+        conn.close()
+        return json_response(handler, {"error": "not found"}, 404)
+    row = conn.execute(
+        "SELECT * FROM followups WHERE id = ? AND development_id = ?", (fid, did)
+    ).fetchone()
+    if not row:
+        conn.close()
+        return json_response(handler, {"error": "not found"}, 404)
+    data = read_json_body(handler)
+    category = (data.get("category") or "").strip()
+    old_category = (row["category"] or "").strip() if row["category"] else ""
+    conn.execute(
+        "UPDATE followups SET category = ?, note = ?, image_names = ?, doc_names = ? WHERE id = ?",
+        (
+            category or None,
+            data.get("note") or None,
+            _json_array(data.get("image_names")),
+            _json_array(data.get("doc_names")),
+            fid,
+        ),
+    )
+    # The development's Status follows the latest non-empty Category.
+    if category and category != old_category:
+        conn.execute(
+            "UPDATE developments SET status = ?, updated_at = ? WHERE id = ?",
+            (category, now_iso(), did),
+        )
+    updated = conn.execute("SELECT * FROM followups WHERE id = ?", (fid,)).fetchone()
+    conn.commit()
+    conn.close()
+    return json_response(handler, _followup_row_to_payload(updated), 200)
+
+
 def api_list_followups(handler, did):
     conn = db()
     dev = conn.execute("SELECT id FROM developments WHERE id = ?", (did,)).fetchone()
@@ -2467,6 +2504,12 @@ class Handler(SimpleHTTPRequestHandler):
         if path.startswith("/api/developments/"):
             rest = path[len("/api/developments/"):]
             parts = rest.split("/")
+            if len(parts) == 3 and parts[0].isdigit() and parts[1] == "followups" and parts[2].isdigit():
+                did = int(parts[0])
+                fid = int(parts[2])
+                if method == "PUT":
+                    api_update_followup(self, did, fid); return True
+                return True
             if len(parts) == 2 and parts[0].isdigit() and parts[1] == "followups":
                 did = int(parts[0])
                 if method == "GET":
