@@ -1175,6 +1175,85 @@ select:focus-visible,
 }
 .modal .btn.danger:hover { background: #b91c1c; border-color: #b91c1c; }
 
+/* ---- Follow Up modal ---- */
+.followup-modal { max-width: 860px; }
+.followup-frames {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 18px;
+}
+.followup-frame {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 14px 16px;
+  background: var(--surface);
+}
+.followup-frame .field-label {
+  display: block;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-soft);
+  margin: 0 0 6px;
+}
+.followup-frame .field-label:not(:first-child) { margin-top: 14px; }
+.fu-input {
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  font-family: inherit;
+  font-size: 13px;
+  color: var(--text);
+  background: #fff;
+  outline: none;
+  transition: border-color var(--ease), box-shadow var(--ease);
+}
+.fu-input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--ring); }
+.fu-note {
+  min-height: 120px;
+  resize: vertical;
+  line-height: 1.5;
+}
+.followup-frame .dropzone { margin-top: 4px; }
+.dev-grid .actions-th { width: 132px; }
+.followup-status-btn {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 8px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--accent-weak, #eff6ff);
+  text-decoration: none;
+  white-space: nowrap;
+}
+.followup-status-btn:hover { border-color: var(--accent); background: var(--accent-soft, #dbeafe); }
+.status-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 8px;
+  border-radius: 999px;
+  background: var(--accent-weak, #eff6ff);
+  color: var(--accent, #2563eb);
+  font-size: 12px;
+  font-weight: 600;
+}
+.followup-history-modal { max-width: 760px; }
+.followup-history-list { display: flex; flex-direction: column; gap: 12px; }
+.followup-history-card {
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+.followup-history-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.followup-history-note { margin: 10px 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.followup-history-images { margin-top: 8px; }
+.followup-history-thumb { cursor: zoom-in; }
+.followup-history-docs { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 8px; }
+@media (max-width: 720px) {
+  .followup-frames { grid-template-columns: 1fr; }
+}
+
 /* ---- Image lightbox (click a thumbnail to preview) ---- */
 .image-lightbox {
   align-items: center;        /* center vertically too, not just top */

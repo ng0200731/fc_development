@@ -73,6 +73,27 @@ let OPTION_SETS = {};
 // Settings UI and the Refresh scan always agree with the server.
 let OPTION_GROUPS = {};
 
+// The active form registers its image adder so Ctrl+V works even when the
+// dropzone itself does not have focus. Text pasted into fields is left alone.
+let activeImagePasteTarget = null;
+document.addEventListener("paste", (e) => {
+  // Look for an image in the clipboard first. Fields in these forms are plain
+  // text (no inline images), so an image paste always goes to the image zone,
+  // while a pure-text paste is left alone (even when a text field has focus).
+  let imgHit = null;
+  for (const item of (e.clipboardData?.items || [])) {
+    if (item.kind === "file" && item.type.startsWith("image/")) { imgHit = item; break; }
+  }
+  if (!imgHit) return;
+  const target = activeImagePasteTarget;
+  if (!target || !target.drop || !document.body.contains(target.drop)) return;
+  // When focus is inside the dropzone itself, its own handler already dealt
+  // with the paste — don't double-add.
+  if (e.target && e.target.closest && e.target.closest(".dropzone")) return;
+  const file = imgHit.getAsFile();
+  if (file) { e.preventDefault(); target.add(file); }
+});
+
 // Fetch all managed option sets from the API into the cache. Also refreshes
 // OPTION_GROUPS (the groups registry) so newly-registered groups show up.
 async function loadOptions() {
@@ -5388,6 +5409,9 @@ async function renderDevelopmentCreate() {
     uploadImageFile(file, id);
   };
 
+  // Register this form as the active image paste target (Ctrl+V works anywhere).
+  activeImagePasteTarget = { drop: imageDrop, add: addImageFile };
+
   // Upload a dropped/pasted image to /api/uploads and link it to the dev sequence.
   const uploadImageFile = async (file, id) => {
     const entry = images.find((x) => x.id === id);
@@ -6160,6 +6184,9 @@ async function renderDevelopmentEdit() {
     uploadImageFile(file, id);
   };
 
+  // Register this form as the active image paste target (Ctrl+V works anywhere).
+  activeImagePasteTarget = { drop: imageDrop, add: addImageFile };
+
   const uploadImageFile = async (file, id) => {
     const entry = images.find((x) => x.id === id);
     if (!entry) return;
@@ -6441,6 +6468,7 @@ function paintDevelopmentView() {
     { key: "member_name", label: "Member" },
     { key: "item_name", label: "Item" },
     { key: "product_type", label: "Product Type" },
+    { key: "status", label: "Status" },
     { key: "image", label: "Image" },
     { key: "documents", label: "Documents" },
     { key: "material", label: "Material" },
@@ -6510,6 +6538,7 @@ function paintDevelopmentView() {
         <td>${escapeHtml(r.member_name || "—")}</td>
         <td>${escapeHtml(r.item_name)}</td>
         <td>${escapeHtml(r.product_type)}</td>
+        <td>${r.status ? `<button type="button" class="link-btn followup-status-btn" data-status="${r.id}" title="View follow-up history">${escapeHtml(r.status)}</button>` : `<span class="muted">—</span>`}</td>
         <td class="cell-imgs">${thumbs}</td>
         <td class="cell-docs">${docLinks}</td>
         <td>${materialCell}</td>
@@ -6521,11 +6550,12 @@ function paintDevelopmentView() {
         <td>${escapeHtml(r.updated_at)}</td>
         <td class="details-cell"><button type="button" class="link-btn dev-details-btn" data-details="${r.id}" title="View color &amp; Pantone details">${escapeHtml(devDetailsSummary(r))}</button></td>
         <td class="row-actions">
+          <button class="icon-btn" data-followup="${r.id}" title="Follow Up">📌</button>
           <button class="icon-btn" data-edit="${r.id}" title="Edit">✎</button>
           <button class="icon-btn danger" data-del="${r.id}" title="Delete">🗑</button>
         </td>
       </tr>`;
-  }).join("") || `<tr><td colspan="16" class="muted">No matches.</td></tr>`;
+  }).join("") || `<tr><td colspan="17" class="muted">No matches.</td></tr>`;
 
   panel.innerHTML = `
     <div class="view-head">
@@ -6667,6 +6697,12 @@ function paintDevelopmentView() {
 
   batchDelete.addEventListener("click", batchDeleteDevelopments);
 
+  panel.querySelectorAll("[data-followup]").forEach((b) => {
+    b.addEventListener("click", () => openFollowUpModal(Number(b.dataset.followup)));
+  });
+  panel.querySelectorAll("[data-status]").forEach((b) => {
+    b.addEventListener("click", () => openFollowUpHistory(Number(b.dataset.status)));
+  });
   panel.querySelectorAll("[data-edit]").forEach((b) => {
     b.addEventListener("click", () => editDevelopmentInCreate(Number(b.dataset.edit)));
   });
@@ -6722,6 +6758,310 @@ async function deleteDevelopment(id) {
     },
     { danger: true }
   );
+}
+
+// Show all saved Follow Ups for a development from its clickable Status cell.
+async function openFollowUpHistory(devId) {
+  const rec = devViewData.find((r) => r.id === devId) || {};
+  let followups;
+  try {
+    followups = await fetchJson(API + `/api/developments/${devId}/followups`);
+  } catch (err) {
+    openConfirmModal("Load failed", err.message, () => {});
+    return;
+  }
+
+  const overlay = document.createElement("div");
+  overlay.className = "modal-overlay";
+  overlay.innerHTML = `
+    <div class="modal followup-history-modal" role="dialog" aria-modal="true">
+      <h3>Follow Up History</h3>
+      <p class="muted small">${escapeHtml(rec.item_name || "Development")} · ${escapeHtml(rec.company_name || "")}</p>
+      <div class="followup-history-list">
+        ${followups.length ? followups.map((f) => {
+          const imgs = (f.image_names || []).map((n) =>
+            `<img class="dev-thumb-sm followup-history-thumb" src="${escapeHtml(assetUrl(n))}" alt="${escapeHtml(displayName(n))}" data-full="${escapeHtml(assetUrl(n))}" data-name="${escapeHtml(displayName(n))}" />`
+          ).join("");
+          const docs = (f.doc_names || []).map((n) =>
+            `<a class="doc-tag" href="${escapeHtml(docUrl(n))}" target="_blank" rel="noopener" download title="${escapeHtml(n)}">📄 ${escapeHtml(displayName(n))}</a>`
+          ).join("");
+          return `
+            <article class="followup-history-card">
+              <div class="followup-history-head">
+                <span class="status-badge">${escapeHtml(f.category || "—")}</span>
+                <time class="muted small">${escapeHtml(f.created_at || "")}</time>
+              </div>
+              <p class="followup-history-note">${f.note ? escapeHtml(f.note) : `<span class="muted">No notes.</span>`}</p>
+              ${imgs ? `<div class="dev-thumbs followup-history-images">${imgs}</div>` : ""}
+              ${docs ? `<div class="followup-history-docs">${docs}</div>` : ""}
+            </article>`;
+        }).join("") : `<p class="empty">No follow ups yet.</p>`}
+      </div>
+      <div class="actions modal-actions">
+        <button class="btn primary" type="button" id="fu-history-close">Close</button>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+  const close = () => overlay.remove();
+  overlay.querySelector("#fu-history-close").addEventListener("click", close);
+  overlay.addEventListener("click", (e) => { if (e.target === overlay) close(); });
+  overlay.querySelectorAll(".followup-history-thumb").forEach((img) => {
+    img.addEventListener("click", () => openImageLightbox(img.dataset.full, img.dataset.name));
+  });
+}
+
+// Follow Up modal: record a follow-up (managed option, note, images, docs)
+// against a development. Images/docs are uploaded to /api/uploads immediately;
+// only the returned "uploads/..." paths are persisted so they survive reloads.
+async function openFollowUpModal(devId) {
+  let rec = null;
+  try {
+    rec = await fetchJson(API + `/api/developments/${devId}`);
+  } catch (err) {
+    openConfirmModal("Load failed", err.message, () => {});
+    return;
+  }
+
+  const images = [];   // { id, name, url, uploading }
+  const docs = [];     // { id, name, url, file, uploading }
+  const previousImagePasteTarget = activeImagePasteTarget;
+
+  const overlay = document.createElement("div");
+  overlay.className = "modal-overlay";
+  overlay.innerHTML = `
+    <div class="modal followup-modal" role="dialog" aria-modal="true">
+      <h3>Follow Up · ${escapeHtml(rec.item_name || "")} <span class="muted small">${escapeHtml(rec.company_name || "")}</span></h3>
+      <div class="followup-frames">
+        <div class="followup-frame">
+          <label class="field-label" for="fu-category">Category</label>
+          <select id="fu-category" class="fu-input">
+            ${opt("development", "follow_up").map((v) => `<option value="${escapeHtml(v)}">${escapeHtml(v)}</option>`).join("")}
+          </select>
+          <label class="field-label" for="fu-note">Notes</label>
+          <textarea id="fu-note" class="fu-input fu-note" placeholder="Enter follow-up notes…"></textarea>
+        </div>
+        <div class="followup-frame">
+          <label class="field-label">Images</label>
+          <div class="dropzone" id="fu-img-drop" tabindex="0">
+            <div class="drop-region">
+              <div class="drop-icon">🖼️</div>
+              <p class="drop-hint">Drop images here, paste (Ctrl+V), or <button type="button" class="link-btn" id="fu-img-browse">browse</button></p>
+            </div>
+            <div class="thumb-grid" id="fu-img-thumbs"></div>
+            <input type="file" id="fu-img-input" accept="image/*" multiple hidden />
+          </div>
+          <label class="field-label">Attachments</label>
+          <div class="dropzone" id="fu-doc-drop">
+            <div class="drop-region">
+              <div class="drop-icon">📎</div>
+              <p class="drop-hint">Drop documents here or <button type="button" class="link-btn" id="fu-doc-browse">browse</button></p>
+            </div>
+            <div id="fu-doc-list"></div>
+            <input type="file" id="fu-doc-input" multiple hidden />
+          </div>
+        </div>
+      </div>
+      <div class="actions modal-actions">
+        <button class="btn ghost" id="fu-cancel" type="button">Cancel</button>
+        <button class="btn primary" id="fu-save" type="button">Save Follow Up</button>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+
+  const imageDrop = overlay.querySelector("#fu-img-drop");
+  const imageThumbs = overlay.querySelector("#fu-img-thumbs");
+  const isImageFile = (file) => file && file.type && file.type.startsWith("image/");
+  const docDrop = overlay.querySelector("#fu-doc-drop");
+  const docList = overlay.querySelector("#fu-doc-list");
+  const saveBtn = overlay.querySelector("#fu-save");
+  const closeModal = () => {
+    overlay.remove();
+    activeImagePasteTarget = previousImagePasteTarget;
+  };
+
+  const canSave = () => images.every((x) => !x.uploading) && docs.every((x) => !x.uploading);
+  const refreshSave = () => { saveBtn.disabled = !canSave(); };
+
+  const renderImageThumbs = () => {
+    if (!images.length) {
+      imageThumbs.innerHTML = "";
+      imageDrop.classList.remove("has-items");
+      return;
+    }
+    imageDrop.classList.add("has-items");
+    imageThumbs.innerHTML = images.map((img) => `
+      <div class="thumb" data-id="${img.id}">
+        <img class="create-thumb-img" src="${img.url}" alt="${escapeHtml(img.name)}" data-full="${escapeHtml(img.url)}" data-name="${escapeHtml(img.name)}" />
+        <div class="thumb-name">${escapeHtml(img.name)}</div>
+        ${img.uploading ? '<span class="thumb-badge uploading">uploading…</span>' : ''}
+        <button class="icon-btn danger thumb-rm" data-rm="${img.id}" title="Remove">✕</button>
+      </div>`).join("");
+    imageThumbs.querySelectorAll(".create-thumb-img").forEach((im) => {
+      im.addEventListener("click", () => openImageLightbox(im.dataset.full, im.dataset.name));
+    });
+    imageThumbs.querySelectorAll("[data-rm]").forEach((b) => {
+      b.addEventListener("click", () => {
+        const id = b.dataset.rm;
+        const idx = images.findIndex((x) => x.id === id);
+        if (idx >= 0) {
+          if (images[idx].url && images[idx].url.startsWith("blob:")) URL.revokeObjectURL(images[idx].url);
+          images.splice(idx, 1);
+          renderImageThumbs();
+          refreshSave();
+        }
+      });
+    });
+  };
+
+  const addImageFile = (file) => {
+    if (!isImageFile(file)) return;
+    const id = "fu-img-" + Date.now() + "-" + images.length;
+    images.push({ id, name: file.name, url: URL.createObjectURL(file), uploading: true });
+    renderImageThumbs();
+    uploadImageFile(file, id);
+    refreshSave();
+  };
+
+  activeImagePasteTarget = { drop: imageDrop, add: addImageFile };
+
+  const uploadImageFile = async (file, id) => {
+    const entry = images.find((x) => x.id === id);
+    if (!entry) return;
+    try {
+      const data = await uploadFile(file);
+      entry.name = data.path;          // "uploads/<uuid>__<file>"
+      entry.url = API + data.path;
+      entry.uploading = false;
+    } catch (err) {
+      entry.uploading = false;
+      openConfirmModal("Upload failed", "Could not upload image: " + err.message, () => {});
+    }
+    renderImageThumbs();
+    refreshSave();
+  };
+
+  // image drag & drop, paste, browse (multiple images allowed)
+  ["dragenter", "dragover"].forEach((ev) =>
+    imageDrop.addEventListener(ev, (e) => { e.preventDefault(); imageDrop.classList.add("dragover"); })
+  );
+  ["dragleave", "drop"].forEach((ev) =>
+    imageDrop.addEventListener(ev, (e) => {
+      e.preventDefault();
+      if (ev === "dragleave" && imageDrop.contains(e.relatedTarget)) return;
+      imageDrop.classList.remove("dragover");
+    })
+  );
+  imageDrop.addEventListener("drop", (e) => { [...(e.dataTransfer?.files || [])].forEach(addImageFile); });
+  imageDrop.addEventListener("paste", (e) => {
+    const items = e.clipboardData?.items || [];
+    for (const it of items) {
+      if (it.kind === "file" && it.type.startsWith("image/")) {
+        addImageFile(it.getAsFile());
+        e.preventDefault();
+      }
+    }
+  });
+  overlay.querySelector("#fu-img-browse").addEventListener("click", () => overlay.querySelector("#fu-img-input").click());
+  overlay.querySelector("#fu-img-input").addEventListener("change", (e) => {
+    [...(e.target.files || [])].forEach(addImageFile);
+    e.target.value = "";
+  });
+
+  const renderDocList = () => {
+    if (!docs.length) {
+      docList.innerHTML = "";
+      docDrop.classList.remove("has-items");
+      return;
+    }
+    docDrop.classList.add("has-items");
+    docList.innerHTML = docs.map((d) => {
+      const downloadUrl = d.name ? docUrl(d.name) : (d.url || "");
+      return `
+      <div class="doc-row" data-id="${d.id}">
+        <span class="doc-icon">📄</span>
+        <span class="doc-name">${escapeHtml(displayName(d.name))}</span>
+        <span class="doc-size muted small">${d.file ? formatBytes(d.file.size) : "saved"}</span>
+        ${d.uploading ? '<span class="thumb-badge uploading">uploading…</span>' : ''}
+        ${downloadUrl ? `<a class="doc-dl" href="${escapeHtml(downloadUrl)}" target="_blank" rel="noopener" download title="Download ${escapeHtml(displayName(d.name))}">⬇</a>` : ""}
+        <button class="icon-btn danger doc-rm" data-rm="${d.id}" title="Remove">✕</button>
+      </div>`;
+    }).join("");
+    docList.querySelectorAll(".doc-rm").forEach((b) => {
+      b.addEventListener("click", () => {
+        const id = b.dataset.rm;
+        const idx = docs.findIndex((x) => x.id === id);
+        if (idx >= 0) { docs.splice(idx, 1); renderDocList(); refreshSave(); }
+      });
+    });
+  };
+
+  const addDocFiles = async (fileList) => {
+    for (const f of fileList) {
+      const id = "fu-doc-" + Date.now() + "-" + docs.length;
+      const entry = { id, name: f.name, file: f, uploading: true };
+      docs.push(entry);
+      renderDocList();
+      refreshSave();
+      try {
+        const r = await uploadFile(f);
+        entry.name = r.path;          // "uploads/<uuid>__<file>"
+        entry.url = API + r.path;
+        entry.uploading = false;
+      } catch (err) {
+        entry.uploading = false;
+        openConfirmModal("Upload failed", "Could not upload document: " + err.message, () => {});
+      }
+      renderDocList();
+      refreshSave();
+    }
+  };
+
+  // document drag & drop + browse (multiple documents allowed)
+  ["dragenter", "dragover"].forEach((ev) =>
+    docDrop.addEventListener(ev, (e) => { e.preventDefault(); docDrop.classList.add("dragover"); })
+  );
+  ["dragleave", "drop"].forEach((ev) =>
+    docDrop.addEventListener(ev, (e) => {
+      e.preventDefault();
+      if (ev === "dragleave" && docDrop.contains(e.relatedTarget)) return;
+      docDrop.classList.remove("dragover");
+    })
+  );
+  docDrop.addEventListener("drop", (e) => addDocFiles(e.dataTransfer?.files || []));
+  overlay.querySelector("#fu-doc-browse").addEventListener("click", () => overlay.querySelector("#fu-doc-input").click());
+  overlay.querySelector("#fu-doc-input").addEventListener("change", (e) => {
+    addDocFiles(e.target.files || []);
+    e.target.value = "";
+  });
+
+  overlay.querySelector("#fu-cancel").addEventListener("click", closeModal);
+  overlay.addEventListener("click", (e) => { if (e.target === overlay) closeModal(); });
+
+  saveBtn.addEventListener("click", async () => {
+    if (!canSave()) return;
+    const payload = {
+      category: overlay.querySelector("#fu-category").value || null,
+      note: overlay.querySelector("#fu-note").value.trim() || null,
+      image_names: images.map((x) => x.name),
+      doc_names: docs.map((x) => x.name),
+    };
+    saveBtn.disabled = true;
+    saveBtn.textContent = "Saving…";
+    try {
+      await fetchJson(API + `/api/developments/${devId}/followups`, { method: "POST", body: JSON.stringify(payload) });
+      showToast("Follow up saved");
+      closeModal();
+      renderDevelopmentView();   // re-fetch so the Status column shows the new category
+    } catch (err) {
+      saveBtn.disabled = false;
+      saveBtn.textContent = "Save Follow Up";
+      openConfirmModal("Save failed", err.message, () => {});
+    }
+  });
+
+  renderImageThumbs();
+  renderDocList();
+  refreshSave();
 }
 
 // Load an existing development into the Create screen (pre-filled) and switch
@@ -8704,37 +9044,10 @@ async function uploadFile(file) {
 }
 
 // ---------------------------------------------------------------------------
-// Auto-refresh for the View tabs (no forced landing tab on page load)
+// View tabs refresh on demand only: when the page is landed on, after a
+// delete, and after returning from an Edit save. There is no periodic
+// auto-refresh timer, so a View stays put while you read it.
 // ---------------------------------------------------------------------------
-
-// How often (ms) the active View tab re-fetches latest data so updates made
-// elsewhere show up without clicking Refresh. The user lands on a View by
-// clicking it; once open, it keeps itself current (latest on top). Filters +
-// row selections are preserved because the View renderers read from
-// module-level filter/selection state (viewFilters/viewSelected,
-// devViewFilters/devViewSelected).
-const AUTO_REFRESH_MS = 15000;
-
-let autoRefreshTimer = null;
-
-function startAutoRefresh() {
-  if (autoRefreshTimer) return;
-  autoRefreshTimer = setInterval(() => {
-    // Don't clobber a column-search box the user is actively typing in.
-    const ae = document.activeElement;
-    if (ae && ae.classList && ae.classList.contains("col-search")) return;
-    // Only the currently-visible View tab is repainted. The other open View
-    // tab keeps its data in memory and refreshes when you switch to it.
-    if (activeTarget === "customer-view" || activeTarget === "development-view") {
-      renderPanel();
-    }
-  }, AUTO_REFRESH_MS);
-}
-
-// Start the (idle until a View is active) auto-refresh loop on load. We do NOT
-// auto-open a View tab — the user lands on whichever View they click, and that
-// View always reloads fresh with the latest record on top.
-startAutoRefresh();
 
 // Populate the managed dropdown-option cache once at startup so every form
 // renders from the DB-backed sets. If the fetch fails, forms fall back to the

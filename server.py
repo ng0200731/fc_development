@@ -124,6 +124,19 @@ def init_db():
     )
     cur.execute(
         """
+        CREATE TABLE IF NOT EXISTS followups (
+            id             INTEGER PRIMARY KEY AUTOINCREMENT,
+            development_id INTEGER NOT NULL REFERENCES developments(id) ON DELETE CASCADE,
+            category       TEXT,
+            note           TEXT,
+            image_names    TEXT,
+            doc_names      TEXT,
+            created_at     TEXT NOT NULL
+        )
+        """
+    )
+    cur.execute(
+        """
         CREATE TABLE IF NOT EXISTS enquiries (
             id            INTEGER PRIMARY KEY AUTOINCREMENT,
             company_id    INTEGER,
@@ -218,6 +231,7 @@ _DEV_MISSING_COLUMNS = {
     "special": "TEXT",
     "remake": "TEXT",
     "color_sides": "TEXT",
+    "status": "TEXT",
 }
 
 
@@ -227,6 +241,10 @@ def _ensure_dev_columns(conn):
     for col, ctype in _DEV_MISSING_COLUMNS.items():
         if col not in existing:
             cur.execute(f"ALTER TABLE developments ADD COLUMN {col} {ctype}")
+    # Existing rows predate the status column; give them the same initial state
+    # as newly-created developments.
+    if "status" in _DEV_MISSING_COLUMNS:
+        cur.execute("UPDATE developments SET status = 'Created' WHERE status IS NULL OR TRIM(status) = ''")
 
 
 # Columns added to `enquiries` after the table was first created. Each entry
@@ -279,6 +297,7 @@ _OPTION_GROUP_SEED = {
         {"name": "folding", "label": "Folding", "seed": [
             "loop fold", "end fold", "straight cut", "mitre fold", "Manhattan Fold", "Asymmetrical Fold",
         ]},
+        {"name": "follow_up", "label": "Follow up", "seed": ["TBA"]},
     ],
     "enquiry": [
         # Enquiry / Create has no dropdowns (only Company & Member + Images).
@@ -314,13 +333,12 @@ def _ensure_option_groups_table(conn):
 
 def _seed_option_groups(conn):
     cur = conn.cursor()
-    have = cur.execute("SELECT 1 FROM option_groups LIMIT 1").fetchone()
-    if have:
-        return
+    # Add any newly-defined groups without disturbing groups/options already
+    # present in an existing database.
     for level, groups in _OPTION_GROUP_SEED.items():
         for g in groups:
             cur.execute(
-                "INSERT INTO option_groups (level, name, label) VALUES (?, ?, ?)",
+                "INSERT OR IGNORE INTO option_groups (level, name, label) VALUES (?, ?, ?)",
                 (level, g["name"], g.get("label", g["name"])),
             )
 
@@ -328,10 +346,21 @@ def _seed_option_groups(conn):
 def _load_option_group_defs(conn):
     global _OPTION_GROUP_DEFS
     # init_db()'s connection may not have row_factory set, so read by position.
+    # Keep the canonical seed values attached to definitions because _seed_options
+    # uses them when a newly-added group has no option rows yet.
+    seed_by_key = {
+        (level, g["name"]): g.get("seed", [])
+        for level, groups in _OPTION_GROUP_SEED.items()
+        for g in groups
+    }
     defs = {lvl: [] for lvl in _OPTION_GROUP_SEED}
     for r in conn.execute("SELECT level, name, label FROM option_groups ORDER BY id").fetchall():
         level, name, label = r[0], r[1], r[2]
-        defs.setdefault(level, []).append({"name": name, "label": label})
+        defs.setdefault(level, []).append({
+            "name": name,
+            "label": label,
+            "seed": seed_by_key.get((level, name), []),
+        })
     _OPTION_GROUP_DEFS = defs
 
 
@@ -1997,6 +2026,9 @@ def _dev_insert_or_update(conn, did, data):
     color_sides = data.get("color_sides")
     if isinstance(color_sides, (list, dict)):
         color_sides = json.dumps(color_sides, ensure_ascii=False)
+    # A new development starts with status "Created" unless the payload says
+    # otherwise. Updates never touch status (it is driven by Follow Ups).
+    status_val = (data.get("status") or "").strip() or "Created"
     vals = (
         data.get("company_id") if did is None else (data.get("company_id") if data.get("company_id") is not None else None),
         company_name,
@@ -2024,9 +2056,9 @@ def _dev_insert_or_update(conn, did, data):
             "INSERT INTO developments "
             "(company_id, company_name, member_id, member_name, project_id, project_name, "
             "item_name, product_type, height, width, raised_height, no_of_color, pantones, "
-            "image_names, doc_names, material, special, remake, color_sides, created_at, updated_at) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-            vals + (now_iso(), now_iso()),
+            "image_names, doc_names, material, special, remake, color_sides, status, created_at, updated_at) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            vals + (status_val, now_iso(), now_iso()),
         )
         return cur.lastrowid
     conn.execute(
@@ -2094,6 +2126,83 @@ def api_delete_development(handler, did):
     conn.commit()
     conn.close()
     return json_response(handler, {"ok": True, "id": did}, 200)
+
+
+# --- Development follow-up handlers -------------------------------------
+
+def _followup_row_to_payload(row):
+    out = dict(row)
+    for k in ("image_names", "doc_names"):
+        if out.get(k):
+            try:
+                out[k] = json.loads(out[k])
+            except (json.JSONDecodeError, TypeError):
+                out[k] = []
+        else:
+            out[k] = []
+    return out
+
+
+def _json_array(v):
+    """Normalise a submitted list (or list-shaped string) to a JSON array."""
+    if isinstance(v, str):
+        try:
+            parsed = json.loads(v)
+        except (json.JSONDecodeError, TypeError):
+            parsed = v
+        if isinstance(parsed, list):
+            v = parsed
+        else:
+            v = [v] if parsed else []
+    if not isinstance(v, (list, tuple)):
+        v = []
+    return json.dumps([str(x) for x in v], ensure_ascii=False)
+
+
+def api_create_followup(handler, did):
+    conn = db()
+    dev = conn.execute("SELECT id FROM developments WHERE id = ?", (did,)).fetchone()
+    if not dev:
+        conn.close()
+        return json_response(handler, {"error": "not found"}, 404)
+    data = read_json_body(handler)
+    category = (data.get("category") or "").strip()
+    cur = conn.cursor()
+    cur.execute(
+        "INSERT INTO followups (development_id, category, note, image_names, doc_names, created_at) "
+        "VALUES (?, ?, ?, ?, ?, ?)",
+        (
+            did,
+            category or None,
+            data.get("note") or None,
+            _json_array(data.get("image_names")),
+            _json_array(data.get("doc_names")),
+            now_iso(),
+        ),
+    )
+    fid = cur.lastrowid
+    if category:
+        conn.execute(
+            "UPDATE developments SET status = ?, updated_at = ? WHERE id = ?",
+            (category, now_iso(), did),
+        )
+    row = conn.execute("SELECT * FROM followups WHERE id = ?", (fid,)).fetchone()
+    conn.commit()
+    conn.close()
+    return json_response(handler, _followup_row_to_payload(row), 201)
+
+
+def api_list_followups(handler, did):
+    conn = db()
+    dev = conn.execute("SELECT id FROM developments WHERE id = ?", (did,)).fetchone()
+    if not dev:
+        conn.close()
+        return json_response(handler, {"error": "not found"}, 404)
+    rows = conn.execute(
+        "SELECT * FROM followups WHERE development_id = ? ORDER BY id DESC", (did,)
+    ).fetchall()
+    conn.close()
+    return json_response(handler, [_followup_row_to_payload(r) for r in rows])
 
 
 # --- Enquiry handlers ----------------------------------------------------
@@ -2357,6 +2466,14 @@ class Handler(SimpleHTTPRequestHandler):
 
         if path.startswith("/api/developments/"):
             rest = path[len("/api/developments/"):]
+            parts = rest.split("/")
+            if len(parts) == 2 and parts[0].isdigit() and parts[1] == "followups":
+                did = int(parts[0])
+                if method == "GET":
+                    api_list_followups(self, did); return True
+                if method == "POST":
+                    api_create_followup(self, did); return True
+                return True
             if rest.isdigit():
                 did = int(rest)
                 if method == "GET":
