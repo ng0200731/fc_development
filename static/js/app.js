@@ -6760,7 +6760,9 @@ async function deleteDevelopment(id) {
   );
 }
 
-// Show all saved Follow Ups for a development from its clickable Status cell.
+// Clicking a Development status opens a two-column history popup: "Status" and
+// "Created time". The initial "Created" row and one row per Follow Up are
+// listed; clicking a Follow Up row opens the read-only detail popup.
 async function openFollowUpHistory(devId) {
   const rec = devViewData.find((r) => r.id === devId) || {};
   let followups;
@@ -6771,32 +6773,30 @@ async function openFollowUpHistory(devId) {
     return;
   }
 
+  // Rows: the development's initial creation, then one per Follow Up.
+  const rows = [{ status: "Created", time: rec.created_at || "", followup: null }];
+  (followups || []).forEach((f) => rows.push({ status: f.category || "—", time: f.created_at || "", followup: f }));
+
   const overlay = document.createElement("div");
   overlay.className = "modal-overlay";
   overlay.innerHTML = `
     <div class="modal followup-history-modal" role="dialog" aria-modal="true">
-      <h3>Follow Up History</h3>
+      <h3>Status History</h3>
       <p class="muted small">${escapeHtml(rec.item_name || "Development")} · ${escapeHtml(rec.company_name || "")}</p>
-      <div class="followup-history-list">
-        ${followups.length ? followups.map((f) => {
-          const imgs = (f.image_names || []).map((n) =>
-            `<img class="dev-thumb-sm followup-history-thumb" src="${escapeHtml(assetUrl(n))}" alt="${escapeHtml(displayName(n))}" data-full="${escapeHtml(assetUrl(n))}" data-name="${escapeHtml(displayName(n))}" />`
-          ).join("");
-          const docs = (f.doc_names || []).map((n) =>
-            `<a class="doc-tag" href="${escapeHtml(docUrl(n))}" target="_blank" rel="noopener" download title="${escapeHtml(n)}">📄 ${escapeHtml(displayName(n))}</a>`
-          ).join("");
-          return `
-            <article class="followup-history-card">
-              <div class="followup-history-head">
-                <span class="status-badge">${escapeHtml(f.category || "—")}</span>
-                <time class="muted small">${escapeHtml(f.created_at || "")}</time>
-              </div>
-              <p class="followup-history-note">${f.note ? escapeHtml(f.note) : `<span class="muted">No notes.</span>`}</p>
-              ${imgs ? `<div class="dev-thumbs followup-history-images">${imgs}</div>` : ""}
-              ${docs ? `<div class="followup-history-docs">${docs}</div>` : ""}
-            </article>`;
-        }).join("") : `<p class="empty">No follow ups yet.</p>`}
-      </div>
+      <table class="followup-history-grid">
+        <thead>
+          <tr><th>Status</th><th>Created time</th></tr>
+        </thead>
+        <tbody>
+          ${rows.map((row) => `
+            <tr class="${row.followup ? "fu-history-clickable" : "fu-history-plain"}">
+              <td>${row.followup
+                ? `<button type="button" class="link-btn followup-status-btn" data-fuid="${row.followup.id}" title="View follow-up details">${escapeHtml(row.status)}</button>`
+                : `<span class="status-badge">${escapeHtml(row.status)}</span>`}</td>
+              <td>${escapeHtml(row.time || "—")}</td>
+            </tr>`).join("")}
+        </tbody>
+      </table>
       <div class="actions modal-actions">
         <button class="btn primary" type="button" id="fu-history-close">Close</button>
       </div>
@@ -6805,7 +6805,52 @@ async function openFollowUpHistory(devId) {
   const close = () => overlay.remove();
   overlay.querySelector("#fu-history-close").addEventListener("click", close);
   overlay.addEventListener("click", (e) => { if (e.target === overlay) close(); });
-  overlay.querySelectorAll(".followup-history-thumb").forEach((img) => {
+  overlay.querySelectorAll("[data-fuid]").forEach((b) => {
+    b.addEventListener("click", () => {
+      const f = (followups || []).find((x) => x.id === Number(b.dataset.fuid));
+      if (f) openFollowUpDetail(f);
+    });
+  });
+}
+
+// Read-only detail popup styled like the Follow Up form, showing one Follow
+// Up's saved Category, Notes, Images and Documents.
+function openFollowUpDetail(f) {
+  const imgs = (f.image_names || []).map((n) =>
+    `<img class="dev-thumb-sm create-thumb-img fud-thumb" src="${escapeHtml(assetUrl(n))}" alt="${escapeHtml(displayName(n))}" data-full="${escapeHtml(assetUrl(n))}" data-name="${escapeHtml(displayName(n))}" />`
+  ).join("");
+  const docs = (f.doc_names || []).map((n) =>
+    `<a class="doc-tag" href="${escapeHtml(docUrl(n))}" target="_blank" rel="noopener" download title="${escapeHtml(n)}">📄 ${escapeHtml(displayName(n))}</a>`
+  ).join("");
+
+  const overlay = document.createElement("div");
+  overlay.className = "modal-overlay";
+  overlay.innerHTML = `
+    <div class="modal followup-modal" role="dialog" aria-modal="true">
+      <h3>Follow Up Details <span class="muted small">${escapeHtml(f.created_at || "")}</span></h3>
+      <div class="followup-frames">
+        <div class="followup-frame">
+          <label class="field-label">Category</label>
+          <div class="fud-value"><span class="status-badge">${escapeHtml(f.category || "—")}</span></div>
+          <label class="field-label">Notes</label>
+          <div class="fud-note">${f.note ? escapeHtml(f.note) : `<span class="muted">No notes.</span>`}</div>
+        </div>
+        <div class="followup-frame">
+          <label class="field-label">Images</label>
+          ${imgs ? `<div class="dev-thumbs">${imgs}</div>` : `<span class="muted">—</span>`}
+          <label class="field-label">Attachments</label>
+          ${docs ? `<div class="followup-history-docs">${docs}</div>` : `<span class="muted">—</span>`}
+        </div>
+      </div>
+      <div class="actions modal-actions">
+        <button class="btn primary" type="button" id="fud-close">Close</button>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+  const close = () => overlay.remove();
+  overlay.querySelector("#fud-close").addEventListener("click", close);
+  overlay.addEventListener("click", (e) => { if (e.target === overlay) close(); });
+  overlay.querySelectorAll(".fud-thumb").forEach((img) => {
     img.addEventListener("click", () => openImageLightbox(img.dataset.full, img.dataset.name));
   });
 }

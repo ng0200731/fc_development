@@ -1238,6 +1238,33 @@ select:focus-visible,
   font-weight: 600;
 }
 .followup-history-modal { max-width: 760px; }
+.followup-history-grid { width: 100%; border-collapse: collapse; margin-top: 4px; }
+.followup-history-grid th {
+  text-align: left;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: .03em;
+  color: var(--text-soft);
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border);
+}
+.followup-history-grid td {
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
+  font-size: 13px;
+}
+.followup-history-grid tbody tr.fu-history-clickable { cursor: pointer; }
+.followup-history-grid tbody tr.fu-history-clickable:hover { background: #f8fafc; }
+.followup-history-grid tbody tr.fu-history-plain td:first-child { color: var(--text-soft); }
+.fud-value { padding: 4px 0; }
+.fud-note {
+  font-size: 13px;
+  color: var(--text);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  line-height: 1.5;
+}
+.fud-thumb { cursor: zoom-in; }
 .followup-history-list { display: flex; flex-direction: column; gap: 12px; }
 .followup-history-card {
   padding: 12px 14px;
