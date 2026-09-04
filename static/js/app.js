@@ -529,7 +529,11 @@ function renderColorSide(container, side, onChange) {
 
   const setWays = (n) => {
     const count = Math.max(0, parseInt(n, 10) || 0);
-    while (ways.length < count) ways.push({ noOfColor: "", pantones: [] });
+    // All color ways in a set share the same color count. Seed any newly added
+    // way with the existing count so it never renders blank (matches the way
+    // the Back/B filled-in ways behave).
+    const shared = (ways.find((w) => w.noOfColor) || ways[0] || {}).noOfColor || "";
+    while (ways.length < count) ways.push({ noOfColor: shared, pantones: [] });
     if (ways.length > count) ways.length = count;
   };
   const syncWay = (way) => {
