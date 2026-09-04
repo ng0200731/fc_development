@@ -262,13 +262,16 @@ function refreshDevColorsBadge() {
   if (split && devState.colorSides) {
     for (const side of [devState.colorSides.front, devState.colorSides.back]) {
       if (!side) continue;
-      const m = parseInt(side.noOfColor, 10);
-      if (m > 0) n += m;
-      if (Array.isArray(side.pantones) && side.pantones.some((p) => p && (p.value || "").trim())) hasPantone = true;
+      const sideWays = Array.isArray(side.ways) && side.ways.length ? side.ways : [side];
+      for (const way of sideWays) {
+        const m = parseInt(way.noOfColor, 10);
+        if (m > 0) n += m;
+        if (Array.isArray(way.pantones) && way.pantones.some((p) => p && (p.value || "").trim())) hasPantone = true;
+      }
     }
   } else {
-    n = devState.noOfColor ? Number(devState.noOfColor) : 0;
-    hasPantone = Array.isArray(devState.pantones) && devState.pantones.some((p) => p && (p.value || "").trim());
+    const ways = Array.isArray(devState.colorWays) && devState.colorWays.length ? devState.colorWays : [devState];
+    for (const way of ways) { const m = parseInt(way.noOfColor, 10); if (m > 0) n += m; if ((way.pantones || []).some(p => p && (p.value || "").trim())) hasPantone = true; }
   }
   if (n > 0 && hasPantone) {
     badge.textContent = `${n} color${n > 1 ? "s" : ""}`;
@@ -415,18 +418,19 @@ function onProductTypeChanged(prodEl) {
 
 
 // Render one Pantone row for the Colors popup (editable) from a saved/blank
-// pantone object. Mirrors the inline Create/Edit layout. `i` is the 0-based
-// index, `onChange` is called with (i, value) after each keystroke.
-function colorPantoneRowHtml(i, p, matched) {
+// pantone object. Mirrors the inline Create/Edit layout. `uid` is a unique
+// id/`data-idx` token (e.g. `${way}-${n}`); `num` is the 1-based display
+// number shown in the label (restarts at 1 within each color way).
+function colorPantoneRowHtml(uid, num, p, matched) {
   const val = p && p.value ? p.value : (matched && matched.code ? matched.code : "");
   return `
     <div class="pantone-row">
       <div class="field pantone-code">
-        <label for="cp-pantone-${i}">Pantone #${i + 1}</label>
-        <input id="cp-pantone-${i}" type="text" class="pantone-input"
-               data-idx="${i}" value="${escapeHtml(val)}"
+        <label for="cp-pantone-${uid}">Pantone #${num}</label>
+        <input id="cp-pantone-${uid}" type="text" class="pantone-input"
+               data-idx="${uid}" value="${escapeHtml(val)}"
                placeholder="code (11-0103) or name (egret)" autocomplete="off" />
-        <div class="pantone-match" id="cp-pantone-match-${i}">${colorMatchHtml(matched)}</div>
+        <div class="pantone-match" id="cp-pantone-match-${uid}">${colorMatchHtml(matched)}</div>
       </div>
     </div>`;
 }
@@ -512,59 +516,59 @@ function bindPantoneAutofill(input, matchEl, get, set, onChange) {
   renderMatch(get());
 }
 
-// Build a single editable color side (No. of color + Pantone rows) inside a
-// container element. Returns nothing; wires its own inputs. `side` is the
-// working { noOfColor, pantones } object; `onChange` fires after each edit.
+// Build a single editable color side inside a container element. Returns
+// nothing; wires its own inputs. `side` is the working object holding the
+// `ways` array (one color way per block). Legacy single-way records are
+// promoted to one way in memory. An explicit "No. of color way" number input
+// sits above the blocks — changing N creates/removes that many blocks. Each
+// block has its own "No. of color" + Pantone rows. `onChange` fires after edits.
 function renderColorSide(container, side, onChange) {
-  const sync = () => {
-    const n = parseInt(side.noOfColor, 10);
-    if (!isNaN(n) && n > 0) {
-      while (side.pantones.length < n) side.pantones.push({ value: "", color: "#000000" });
-      if (side.pantones.length > n) side.pantones.length = n;
-    }
+  const ways = Array.isArray(side.ways) ? side.ways : [{ noOfColor: side.noOfColor || "", pantones: side.pantones || [] }];
+  side.ways = ways;
+  if (!ways.length) ways.push({ noOfColor: "", pantones: [] });
+
+  const setWays = (n) => {
+    const count = Math.max(0, parseInt(n, 10) || 0);
+    while (ways.length < count) ways.push({ noOfColor: "", pantones: [] });
+    if (ways.length > count) ways.length = count;
   };
-  sync();
+  const syncWay = (way) => {
+    const n = parseInt(way.noOfColor, 10);
+    if (n > 0) { while (way.pantones.length < n) way.pantones.push({value:"", color:"#000000"}); way.pantones.length = n; }
+  };
 
-  container.innerHTML = `
-    <div class="field">
-      <label>No. of color</label>
-      <input type="number" min="1" step="1" placeholder="0" autocomplete="off"
-             class="cs-nocolor" value="${escapeHtml(side.noOfColor || "")}" />
-    </div>
-    <div class="cs-pantone-wrap"></div>`;
+  const render = () => {
+    container.innerHTML = `
+      <div class="field cs-way-count-field">
+        <label>No. of color way</label>
+        <input type="number" min="1" step="1" class="cs-way-count" value="${escapeHtml(String(ways.length || ""))}" autocomplete="off" />
+      </div>
+      ${ways.map((way, wi) => {
+        syncWay(way);
+        const rows = (parseInt(way.noOfColor, 10) > 0 ? way.pantones : []).map((p, i) => colorPantoneRowHtml(wi + "-" + i, i + 1, p, p.value ? matchSinglePantone(p.value) : null)).join("");
+        return `<div class="color-way" data-way="${wi}"><div class="field"><label>No. of color · Way ${wi + 1}</label><input type="number" min="1" step="1" class="cs-nocolor" value="${escapeHtml(way.noOfColor || "")}" /></div><div class="cs-pantone-wrap">${rows}</div></div>`;
+      }).join("")}`;
 
-  const wrap = container.querySelector(".cs-pantone-wrap");
-  const nc = container.querySelector(".cs-nocolor");
+    const nc = container.querySelector(".cs-way-count");
+    nc.addEventListener("input", () => { setWays(nc.value); render(); onChange && onChange(); });
 
-  const renderRows = () => {
-    sync();
-    if ((parseInt(side.noOfColor, 10) || 0) <= 0) {
-      wrap.innerHTML = "";
-      if (onChange) onChange();
-      return;
-    }
-    wrap.innerHTML = side.pantones.map((p, i) => {
-      const matched = p && p.value ? matchSinglePantone(p.value) : null;
-      return colorPantoneRowHtml(i, p, matched);
-    }).join("");
-
-    wrap.querySelectorAll(".pantone-input").forEach((inp) => {
-      const i = Number(inp.dataset.idx);
-      if (!side.pantones[i]) return;
-      const matchEl = wrap.querySelector("#cp-pantone-match-" + i);
-      bindPantoneAutofill(
-        inp,
-        matchEl,
-        () => side.pantones[i].value,
-        (v) => { side.pantones[i].value = v; const m = v ? matchSinglePantone(v) : null; side.pantones[i].color = m ? "#" + m.hex : "#000000"; },
-        () => { if (onChange) onChange(); }
-      );
+    container.querySelectorAll(".color-way").forEach((block, wi) => {
+      const way = ways[wi];
+      block.querySelector(".cs-nocolor").addEventListener("input", e => {
+        // Every color way in a set uses the same number of colors. Keep the
+        // Pantone count and the visible No. of color inputs synchronized.
+        ways.forEach((w) => { w.noOfColor = e.target.value; });
+        render();
+        onChange && onChange();
+      });
+      block.querySelectorAll(".pantone-input").forEach(inp => {
+        const i = Number(inp.dataset.idx.split("-").pop());
+        const match = inp.parentElement.querySelector(".pantone-match");
+        bindPantoneAutofill(inp, match, () => way.pantones[i].value, v => { way.pantones[i].value = v; }, onChange);
+      });
     });
-    if (onChange) onChange();
   };
-
-  nc.addEventListener("input", () => { side.noOfColor = nc.value; renderRows(); });
-  renderRows();
+  render();
 }
 
 // Open the editable "Colors / Pantone" popup (Material-like). When the active
@@ -579,21 +583,15 @@ async function openColorsPopup(getState, setState, onChange) {
   // Deep-clone one color side from persisted state (or empty).
   const cloneColorSide = (s) => ({
     noOfColor: (s && s.noOfColor) || "",
-    pantones: Array.isArray(s && s.pantones)
-      ? s.pantones.map((p) => ({ value: (p && p.value) || "", color: (p && p.color) || "#000000" }))
-      : [],
+    pantones: Array.isArray(s && s.pantones) ? s.pantones.map((p) => ({ value: (p && p.value) || "", color: (p && p.color) || "#000000" })) : [],
+    ways: Array.isArray(s && s.ways) ? s.ways.map(w => ({ noOfColor: w.noOfColor || "", pantones: (w.pantones || []).map(p => ({value:p.value || "", color:p.color || "#000000"})) })) : undefined,
   });
 
   // Working copy so Cancel discards edits.
+  const legacyWay = { noOfColor: state.noOfColor || "", pantones: (state.pantones || []).map((p) => ({ value: (p && p.value) || "", color: (p && p.color) || "#000000" })) };
   const work = split
-    ? {
-        front: cloneColorSide(state.colorSides && state.colorSides.front),
-        back: cloneColorSide(state.colorSides && state.colorSides.back),
-      }
-    : {
-        noOfColor: state.noOfColor || "",
-        pantones: (state.pantones || []).map((p) => ({ value: (p && p.value) || "", color: (p && p.color) || "#000000" })),
-      };
+    ? { front: cloneColorSide(state.colorSides && state.colorSides.front), back: cloneColorSide(state.colorSides && state.colorSides.back) }
+    : { ways: (Array.isArray(state.colorWays) && state.colorWays.length ? state.colorWays : [legacyWay]).map(w => ({ noOfColor: w.noOfColor || "", pantones: (w.pantones || []).map(p => ({value:p.value || "", color:p.color || "#000000"})) })) };
 
   const overlay = document.createElement("div");
   overlay.className = "modal-overlay";
@@ -611,11 +609,7 @@ async function openColorsPopup(getState, setState, onChange) {
           <div class="cs-body" data-side="back"></div>
         </div>
       </div>` : `
-      <div class="field">
-        <label for="cp-no-of-color">No. of color</label>
-        <input id="cp-no-of-color" type="number" min="1" step="1" placeholder="0" autocomplete="off" value="${escapeHtml(work.noOfColor)}" />
-      </div>
-      <div id="cp-pantone-wrap"></div>`}
+      <div id="cp-color-ways"></div>`}
       <div class="actions modal-actions">
         <button class="btn ghost" id="cp-cancel" type="button">Cancel</button>
         <button class="btn primary" id="cp-save" type="button">Save</button>
@@ -629,43 +623,8 @@ async function openColorsPopup(getState, setState, onChange) {
     renderColorSide(overlay.querySelector('[data-side="front"]'), work.front, () => {});
     renderColorSide(overlay.querySelector('[data-side="back"]'), work.back, () => {});
   } else {
-    const wrap = overlay.querySelector("#cp-pantone-wrap");
-    const nc = overlay.querySelector("#cp-no-of-color");
-
-    const renderRows = () => {
-      const sync = () => {
-        const n = parseInt(work.noOfColor, 10);
-        if (!isNaN(n) && n > 0) {
-          while (work.pantones.length < n) work.pantones.push({ value: "", color: "#000000" });
-          if (work.pantones.length > n) work.pantones.length = n;
-        }
-      };
-      sync();
-      if ((parseInt(work.noOfColor, 10) || 0) <= 0) {
-        wrap.innerHTML = "";
-        return;
-      }
-      wrap.innerHTML = work.pantones.map((p, i) => {
-        const matched = p && p.value ? matchSinglePantone(p.value) : null;
-        return colorPantoneRowHtml(i, p, matched);
-      }).join("");
-
-      wrap.querySelectorAll(".pantone-input").forEach((inp) => {
-        const i = Number(inp.dataset.idx);
-        if (!work.pantones[i]) return;
-        const matchEl = wrap.querySelector("#cp-pantone-match-" + i);
-        bindPantoneAutofill(
-          inp,
-          matchEl,
-          () => work.pantones[i].value,
-          (v) => { work.pantones[i].value = v; const m = v ? matchSinglePantone(v) : null; work.pantones[i].color = m ? "#" + m.hex : "#000000"; },
-          () => {}
-        );
-      });
-    };
-
-    nc.addEventListener("input", () => { work.noOfColor = nc.value; renderRows(); });
-    renderRows();
+    const wrap = overlay.querySelector("#cp-color-ways");
+    renderColorSide(wrap, { ways: work.ways }, () => {});
   }
 
   overlay.querySelector("#cp-cancel").addEventListener("click", () => overlay.remove());
@@ -673,7 +632,9 @@ async function openColorsPopup(getState, setState, onChange) {
     if (split) {
       setState({ colorSides: { front: work.front, back: work.back } });
     } else {
-      setState({ noOfColor: work.noOfColor || "", pantones: work.pantones.map((p) => ({ value: (p.value || "").trim(), color: p.color })) });
+      const ways = (work.ways || []).map(w => ({ noOfColor: w.noOfColor || "", pantones: (w.pantones || []).map(p => ({ value: (p.value || "").trim(), color: p.color })) }));
+      const first = ways[0] || { noOfColor: "", pantones: [] };
+      setState({ colorWays: ways, noOfColor: first.noOfColor, pantones: first.pantones });
     }
     refreshDevColorsBadge();
     if (typeof onChange === "function") onChange();
@@ -710,49 +671,31 @@ function openColorsViewPopup(rec) {
   const sides = rec.color_sides;
   ensurePantoneData();   // best-effort; matches show "No match" if data not yet loaded
 
-  const sideHtml = (label, side) => {
-    const n = side && side.noOfColor ? Number(side.noOfColor) : 0;
-    const pantones = (side && Array.isArray(side.pantones)) ? side.pantones : [];
+  const wayBlockHtml = (way, wi) => {
+    const n = way && way.noOfColor ? Number(way.noOfColor) : 0;
+    const pantones = (way && Array.isArray(way.pantones)) ? way.pantones : [];
     return `
-      <h4 class="subhead">${label}</h4>
-      <div class="field">
-        <label>No. of color</label>
-        <div class="readonly-value">${n > 0 ? escapeHtml(String(n)) : "—"}</div>
-      </div>
-      ${n > 0 && pantones.length ? pantones.map((p, i) => {
-        const matched = (p && p.value) ? matchSinglePantone(p.value) : null;
-        return `
-          <div class="pantone-row">
-            <div class="field pantone-code">
-              <label>Pantone #${i + 1}</label>
-              <div class="readonly-value">${escapeHtml((p && p.value) || "—")}</div>
-              <div class="pantone-match">${colorMatchHtml(matched)}</div>
-            </div>
-          </div>`;
-      }).join("") : `<p class="muted small">No colors recorded.</p>`}`;
+      <div class="color-way">
+        <div class="field"><label>No. of color · Way ${wi + 1}</label>
+          <div class="readonly-value">${n > 0 ? escapeHtml(String(n)) : "—"}</div></div>
+        ${n > 0 && pantones.length ? pantones.map((p, i) => {
+          const matched = (p && p.value) ? matchSinglePantone(p.value) : null;
+          return `<div class="pantone-row"><div class="field pantone-code">
+            <label>Pantone #${i + 1}</label>
+            <div class="readonly-value">${escapeHtml((p && p.value) || "—")}</div>
+            <div class="pantone-match">${colorMatchHtml(matched)}</div></div></div>`;
+        }).join("") : `<p class="muted small">No colors recorded.</p>`}
+      </div>`;
+  };
+
+  const sideHtml = (label, side) => {
+    const ways = Array.isArray(side && side.ways) && side.ways.length ? side.ways : [side];
+    return `<h4 class="subhead">${label}</h4>${ways.map(wayBlockHtml).join("")}`;
   };
 
   const singleHtml = () => {
-    const n = rec.no_of_color ? Number(rec.no_of_color) : 0;
-    const pantones = Array.isArray(rec.pantones) ? rec.pantones : [];
-    return `
-      <div class="field">
-        <label>No. of color</label>
-        <div class="readonly-value">${n > 0 ? escapeHtml(String(n)) : "—"}</div>
-      </div>
-      <div id="cpv-pantone-wrap">
-        ${n > 0 && pantones.length ? pantones.map((p, i) => {
-          const matched = (p && p.value) ? matchSinglePantone(p.value) : null;
-          return `
-            <div class="pantone-row">
-              <div class="field pantone-code">
-                <label>Pantone #${i + 1}</label>
-                <div class="readonly-value">${escapeHtml((p && p.value) || "—")}</div>
-                <div class="pantone-match">${colorMatchHtml(matched)}</div>
-              </div>
-            </div>`;
-        }).join("") : `<p class="muted small">No colors recorded.</p>`}
-      </div>`;
+    const ways = Array.isArray(rec.color_ways) && rec.color_ways.length ? rec.color_ways : [{ noOfColor: rec.no_of_color, pantones: Array.isArray(rec.pantones) ? rec.pantones : [] }];
+    return `<div id="cpv-pantone-wrap">${ways.map(wayBlockHtml).join("")}</div>`;
   };
 
   const overlay = document.createElement("div");
@@ -2461,7 +2404,8 @@ function blankDevState() {
     pantones: [],   // [{ value, color }]  one entry per color
     // Split-color (Front/Back) state for screen print label / printed label / hang tag.
     // `null` means "not applicable"; an object means the product uses the split layout.
-    colorSides: null,   // { front: { noOfColor, pantones }, back: { noOfColor, pantones } }
+    colorSides: null,   // legacy { front: { noOfColor, pantones }, back: { noOfColor, pantones } }
+    colorWays: [],      // [{ noOfColor, pantones }] (or {front:[], back:[]} for split products)
     // Part 4 material / Part 5 special (TBA — popup details, stored as JSON)
     material: null, // [{ ... }]  (placeholder structure, TBA)
     special: null,  // [{ ... }]  (placeholder structure, TBA)
@@ -2637,6 +2581,7 @@ function resetDevState() {
   s.raisedHeight = "";
   s.noOfColor = "";
   s.pantones = [];
+  s.colorWays = [];
   s.colorSides = null;
   s.material = null;   // Part 4 (TBA)
   s.special = null;    // Part 5 (TBA)
@@ -2673,6 +2618,7 @@ function buildDevelopmentPayload() {
     raised_height: devState.raisedHeight || null,
     no_of_color: devState.noOfColor ? Number(devState.noOfColor) : null,
     pantones: devState.pantones.filter((p) => p && p.value).map((p) => ({ value: p.value, color: p.color })),
+    color_ways: (devState.colorWays || []).map(w => ({ noOfColor: w.noOfColor || "", pantones: (w.pantones || []).filter(p => p && p.value).map(p => ({value:p.value, color:p.color})) })),
     color_sides: isSplitColorProduct(product) ? devState.colorSides || null : null,
     image_names: devState.images.map((i) => i.name),
     doc_names: devState.docs.map((d) => d.name),
@@ -3485,6 +3431,7 @@ function resetEnquiryState() {
   s.projectName = "";
   s.noOfColor = "";
   s.pantones = [];
+  s.colorWays = [];
   s.colorSides = null;
   s.images = [];
 }
@@ -3528,6 +3475,7 @@ function buildEnquiryPayload() {
     raised_height: devState.raisedHeight || null,
     no_of_color: devState.noOfColor ? Number(devState.noOfColor) : null,
     pantones: devState.pantones.filter((p) => p && p.value).map((p) => ({ value: p.value, color: p.color })),
+    color_ways: (devState.colorWays || []).map(w => ({ noOfColor: w.noOfColor || "", pantones: (w.pantones || []).filter(p => p && p.value).map(p => ({value:p.value, color:p.color})) })),
     color_sides: isSplitColorProduct(product) ? devState.colorSides || null : null,
     image_names: devState.images.map((i) => i.name),
     doc_names: devState.docs.map((d) => d.name),
@@ -4707,6 +4655,7 @@ async function renderEnquiryEdit() {
       s.raisedHeight = "";
       s.noOfColor = "";
       s.pantones = [];
+      s.colorWays = [];
       s.colorSides = null;
       s.images = (enquiryOriginal.image_names || []).map((n) => ({ id: "eimg-" + n, name: n, url: assetUrl(n) }));
       s.docs = (enquiryOriginal.doc_names || []).map((name, i) => ({ id: "edoc-" + enquiryEditId + "-" + i, name, file: null }));
@@ -6354,6 +6303,7 @@ async function renderDevelopmentEdit() {
           s.raisedHeight = devOriginal.raised_height != null ? String(devOriginal.raised_height) : "";
           s.noOfColor = devOriginal.no_of_color != null ? String(devOriginal.no_of_color) : "";
           s.pantones = Array.isArray(devOriginal.pantones) ? devOriginal.pantones.map((p) => ({ value: p.value || "", color: p.color || "#000000" })) : [];
+          s.colorWays = Array.isArray(devOriginal.color_ways) ? devOriginal.color_ways : [];
           s.colorSides = isSplitColorProduct(devOriginal.product_type) && devOriginal.color_sides
             ? (typeof devOriginal.color_sides === "string"
                 ? parseColorSidesString(devOriginal.color_sides)
@@ -7236,6 +7186,7 @@ async function editDevelopmentInCreate(id) {
   s.raisedHeight = rec.raised_height != null ? String(rec.raised_height) : "";
   s.noOfColor = rec.no_of_color != null ? String(rec.no_of_color) : "";
   s.pantones = Array.isArray(rec.pantones) ? rec.pantones.map((p) => ({ value: p.value || "", color: p.color || "#000000" })) : [];
+  s.colorWays = Array.isArray(rec.color_ways) ? rec.color_ways : [];
   s.colorSides = isSplitColorProduct(rec.product_type) && rec.color_sides
     ? (typeof rec.color_sides === "string" ? parseColorSidesString(rec.color_sides) : (rec.color_sides || null))
     : null;
@@ -7676,9 +7627,10 @@ async function openDevEditModal(id) {
       raised_height: needsRaisedHeight(product_type) ? overlay.querySelector("#ed-raised")?.value || null : null,
       no_of_color: isSplitColorProduct(product_type) ? null : overlay.querySelector("#ed-nocolor").value || null,
       pantones: isSplitColorProduct(product_type) ? [] : (rec.pantones || []),
+      color_ways: isSplitColorProduct(product_type) ? [] : (Array.isArray(rec.color_ways) ? rec.color_ways : []),
       color_sides: isSplitColorProduct(product_type) ? {
-        front: { noOfColor: overlay.querySelector("#ed-nocolor-front")?.value || "", pantones: (rec.color_sides && rec.color_sides.front && rec.color_sides.front.pantones) || [] },
-        back: { noOfColor: overlay.querySelector("#ed-nocolor-back")?.value || "", pantones: (rec.color_sides && rec.color_sides.back && rec.color_sides.back.pantones) || [] },
+        front: { ...((rec.color_sides && rec.color_sides.front) || {}), noOfColor: overlay.querySelector("#ed-nocolor-front")?.value || "", pantones: (rec.color_sides && rec.color_sides.front && rec.color_sides.front.pantones) || [] },
+        back: { ...((rec.color_sides && rec.color_sides.back) || {}), noOfColor: overlay.querySelector("#ed-nocolor-back")?.value || "", pantones: (rec.color_sides && rec.color_sides.back && rec.color_sides.back.pantones) || [] },
       } : null,
       image_names: editImages.map((i) => i.name),
       doc_names: editDocs.map((d) => d.name),
@@ -8019,6 +7971,7 @@ async function editEnquiryInEdit(id) {
   s.pantones = Array.isArray(rec.pantones)
     ? rec.pantones.map((p) => ({ value: p.value || "", color: p.color || "#000000" }))
     : [];
+  s.colorWays = Array.isArray(rec.color_ways) ? rec.color_ways : [];
   s.colorSides = isSplitColorProduct(rec.product_type) && rec.color_sides
     ? (typeof rec.color_sides === "string" ? parseColorSidesString(rec.color_sides) : (rec.color_sides || null))
     : null;

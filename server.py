@@ -231,6 +231,7 @@ _DEV_MISSING_COLUMNS = {
     "special": "TEXT",
     "remake": "TEXT",
     "color_sides": "TEXT",
+    "color_ways": "TEXT",
     "status": "TEXT",
 }
 
@@ -260,6 +261,7 @@ _ENQUIRY_MISSING_COLUMNS = {
     "pantones": "TEXT",
     "doc_names": "TEXT",
     "color_sides": "TEXT",
+    "color_ways": "TEXT",
     # Free-text field captured on the Enquiry / Create screen ("Part 2 · Notes").
     # Round-trips through list / get / create / update.
     "notes": "TEXT",
@@ -1953,7 +1955,7 @@ def api_delete_project(handler, pid):
 
 def _dev_row_to_payload(row):
     out = dict(row)
-    for k in ("pantones", "image_names", "doc_names"):
+    for k in ("pantones", "image_names", "doc_names", "color_ways"):
         if out.get(k):
             try:
                 out[k] = json.loads(out[k])
@@ -2026,6 +2028,9 @@ def _dev_insert_or_update(conn, did, data):
     color_sides = data.get("color_sides")
     if isinstance(color_sides, (list, dict)):
         color_sides = json.dumps(color_sides, ensure_ascii=False)
+    color_ways = data.get("color_ways")
+    if isinstance(color_ways, (list, dict)):
+        color_ways = json.dumps(color_ways, ensure_ascii=False)
     # A new development starts with status "Created" unless the payload says
     # otherwise. Updates never touch status (it is driven by Follow Ups).
     status_val = (data.get("status") or "").strip() or "Created"
@@ -2049,6 +2054,7 @@ def _dev_insert_or_update(conn, did, data):
         special,
         remake,
         color_sides,
+        color_ways,
     )
     if did is None:
         cur = conn.cursor()
@@ -2056,8 +2062,8 @@ def _dev_insert_or_update(conn, did, data):
             "INSERT INTO developments "
             "(company_id, company_name, member_id, member_name, project_id, project_name, "
             "item_name, product_type, height, width, raised_height, no_of_color, pantones, "
-            "image_names, doc_names, material, special, remake, color_sides, status, created_at, updated_at) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "image_names, doc_names, material, special, remake, color_sides, color_ways, status, created_at, updated_at) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             vals + (status_val, now_iso(), now_iso()),
         )
         return cur.lastrowid
@@ -2065,7 +2071,7 @@ def _dev_insert_or_update(conn, did, data):
         "UPDATE developments SET "
         "company_id=?, company_name=?, member_id=?, member_name=?, project_id=?, project_name=?, "
         "item_name=?, product_type=?, height=?, width=?, raised_height=?, no_of_color=?, "
-        "pantones=?, image_names=?, doc_names=?, material=?, special=?, remake=?, color_sides=?, updated_at=? WHERE id=?",
+        "pantones=?, image_names=?, doc_names=?, material=?, special=?, remake=?, color_sides=?, color_ways=?, updated_at=? WHERE id=?",
         vals + (now_iso(), did),
     )
     return did
@@ -2287,7 +2293,7 @@ def api_list_followups(handler, did):
 
 def _enquiry_row_to_payload(row):
     out = dict(row)
-    for k in ("pantones", "image_names", "doc_names"):
+    for k in ("pantones", "image_names", "doc_names", "color_ways"):
         if out.get(k):
             try:
                 out[k] = json.loads(out[k])
@@ -2349,6 +2355,9 @@ def _enquiry_insert_or_update(conn, eid, data):
     color_sides = data.get("color_sides")
     if isinstance(color_sides, (list, dict)):
         color_sides = json.dumps(color_sides, ensure_ascii=False)
+    color_ways = data.get("color_ways")
+    if isinstance(color_ways, (list, dict)):
+        color_ways = json.dumps(color_ways, ensure_ascii=False)
     notes = (data.get("notes") or "").strip() or None
     vals = (
         data.get("company_id") if data.get("company_id") is not None else None,
@@ -2367,6 +2376,7 @@ def _enquiry_insert_or_update(conn, eid, data):
         image_names,
         doc_names,
         color_sides,
+        color_ways,
         notes,
     )
     if eid is None:
@@ -2375,8 +2385,8 @@ def _enquiry_insert_or_update(conn, eid, data):
             "INSERT INTO enquiries "
             "(company_id, company_name, member_id, member_name, project_id, project_name, "
             "item_name, product_type, height, width, raised_height, no_of_color, pantones, "
-            "image_names, doc_names, color_sides, notes, created_at, updated_at) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "image_names, doc_names, color_sides, color_ways, notes, created_at, updated_at) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             vals + (now_iso(), now_iso()),
         )
         return cur.lastrowid
@@ -2384,7 +2394,7 @@ def _enquiry_insert_or_update(conn, eid, data):
         "UPDATE enquiries SET "
         "company_id=?, company_name=?, member_id=?, member_name=?, project_id=?, project_name=?, "
         "item_name=?, product_type=?, height=?, width=?, raised_height=?, no_of_color=?, "
-        "pantones=?, image_names=?, doc_names=?, color_sides=?, notes=?, updated_at=? WHERE id=?",
+        "pantones=?, image_names=?, doc_names=?, color_sides=?, color_ways=?, notes=?, updated_at=? WHERE id=?",
         vals + (now_iso(), eid),
     )
     return eid

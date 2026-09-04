@@ -1351,6 +1351,11 @@ select:focus-visible,
 .cs-pantone-wrap .pantone-row { display: flex; align-items: center; gap: 8px; }
 .cs-pantone-wrap .pantone-row input { flex: 1; }
 .cs-side-add { margin-top: 4px; align-self: flex-start; }
+.color-way { border: 1px solid var(--border); border-radius: 8px; padding: 10px; margin-bottom: 10px; background: var(--surface); }
+.color-way .cs-pantone-wrap { margin-top: 4px; }
+.cs-way-count-field label { font-weight: 600; }
+.cs-way-count-field input { width: 120px; }
+.color-way .cs-nocolor { width: 90px; }
 @media (max-width: 560px) {
   .color-sides { grid-template-columns: 1fr; }
 }
