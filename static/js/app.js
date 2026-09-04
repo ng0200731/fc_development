@@ -6792,6 +6792,7 @@ async function openFollowUpHistory(devId) {
         <tbody id="fu-history-body"></tbody>
       </table>
       <div class="actions modal-actions">
+        <button class="icon-btn" type="button" id="fu-history-followup" title="Follow Up" aria-label="Follow Up">📌</button>
         <button class="btn primary" type="button" id="fu-history-close">Close</button>
       </div>
     </div>`;
@@ -6799,7 +6800,7 @@ async function openFollowUpHistory(devId) {
   const tbody = overlay.querySelector("#fu-history-body");
   const close = () => { if (fuHistoryRefresh === refresh) fuHistoryRefresh = null; overlay.remove(); };
   overlay.querySelector("#fu-history-close").addEventListener("click", close);
-  overlay.addEventListener("click", (e) => { if (e.target === overlay) close(); });
+  overlay.querySelector("#fu-history-followup").addEventListener("click", () => openFollowUpModal(devId));
 
   // Rows: the development's initial creation, then one per Follow Up.
   const render = () => {
