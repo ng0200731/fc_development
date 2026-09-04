@@ -6785,7 +6785,7 @@ async function openFollowUpHistory(devId) {
       <p class="muted small">${escapeHtml(rec.item_name || "Development")} · ${escapeHtml(rec.company_name || "")}</p>
       <table class="followup-history-grid">
         <thead>
-          <tr><th>Status</th><th>Created time</th></tr>
+          <tr><th>Status</th><th>Created time</th><th></th></tr>
         </thead>
         <tbody>
           ${rows.map((row) => `
@@ -6794,6 +6794,9 @@ async function openFollowUpHistory(devId) {
                 ? `<button type="button" class="link-btn followup-status-btn" data-fuid="${row.followup.id}" title="View follow-up details">${escapeHtml(row.status)}</button>`
                 : `<span class="status-badge">${escapeHtml(row.status)}</span>`}</td>
               <td>${escapeHtml(row.time || "—")}</td>
+              <td class="fu-history-action">${row.followup
+                ? `<button type="button" class="icon-btn danger" data-fu-del="${row.followup.id}" title="Delete this status">🗑</button>`
+                : ""}</td>
             </tr>`).join("")}
         </tbody>
       </table>
@@ -6809,6 +6812,30 @@ async function openFollowUpHistory(devId) {
     b.addEventListener("click", () => {
       const f = (followups || []).find((x) => x.id === Number(b.dataset.fuid));
       if (f) openFollowUpDetail(devId, f);
+    });
+  });
+  overlay.querySelectorAll("[data-fu-del]").forEach((b) => {
+    b.addEventListener("click", () => {
+      const fid = Number(b.dataset.fuDel);
+      const f = (followups || []).find((x) => x.id === fid);
+      if (!f) return;
+      openConfirmModal(
+        "Delete status?",
+        `Delete the "${f.category || "—"}" status permanently?`,
+        async () => {
+          b.disabled = true;
+          try {
+            await fetchJson(API + `/api/developments/${devId}/followups/${fid}`, { method: "DELETE" });
+            close();
+            await renderDevelopmentView();
+            openFollowUpHistory(devId);
+          } catch (err) {
+            b.disabled = false;
+            openConfirmModal("Delete failed", err.message, () => {});
+          }
+        },
+        { danger: true }
+      );
     });
   });
 }

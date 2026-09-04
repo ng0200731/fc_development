@@ -1256,6 +1256,8 @@ select:focus-visible,
 .followup-history-grid tbody tr.fu-history-clickable { cursor: pointer; }
 .followup-history-grid tbody tr.fu-history-clickable:hover { background: #f8fafc; }
 .followup-history-grid tbody tr.fu-history-plain td:first-child { color: var(--text-soft); }
+.followup-history-grid th:last-child, .followup-history-grid td.fu-history-action { width: 44px; text-align: center; }
+.followup-history-grid td.fu-history-action .icon-btn { padding: 3px 5px; font-size: 13px; }
 .fud-value { padding: 4px 0; }
 .fud-note {
   font-size: 13px;

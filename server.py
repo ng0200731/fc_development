@@ -2229,6 +2229,38 @@ def api_update_followup(handler, did, fid):
     return json_response(handler, _followup_row_to_payload(updated), 200)
 
 
+def api_delete_followup(handler, did, fid):
+    conn = db()
+    dev = conn.execute("SELECT id FROM developments WHERE id = ?", (did,)).fetchone()
+    if not dev:
+        conn.close()
+        return json_response(handler, {"error": "not found"}, 404)
+    row = conn.execute(
+        "SELECT * FROM followups WHERE id = ? AND development_id = ?", (fid, did)
+    ).fetchone()
+    if not row:
+        conn.close()
+        return json_response(handler, {"error": "not found"}, 404)
+    conn.execute("DELETE FROM followups WHERE id = ?", (fid,))
+    # The development's Status mirrors the latest non-empty Follow Up Category.
+    # Recompute it from the remaining rows so deleting the newest status never
+    # leaves the main view showing a stale value.
+    latest = conn.execute(
+        "SELECT category FROM followups WHERE development_id = ? "
+        "AND category IS NOT NULL AND category != '' "
+        "ORDER BY id DESC LIMIT 1",
+        (did,),
+    ).fetchone()
+    new_status = latest["category"] if latest else None
+    conn.execute(
+        "UPDATE developments SET status = ?, updated_at = ? WHERE id = ?",
+        (new_status, now_iso(), did),
+    )
+    conn.commit()
+    conn.close()
+    return json_response(handler, {"ok": True, "id": fid}, 200)
+
+
 def api_list_followups(handler, did):
     conn = db()
     dev = conn.execute("SELECT id FROM developments WHERE id = ?", (did,)).fetchone()
@@ -2509,6 +2541,8 @@ class Handler(SimpleHTTPRequestHandler):
                 fid = int(parts[2])
                 if method == "PUT":
                     api_update_followup(self, did, fid); return True
+                if method == "DELETE":
+                    api_delete_followup(self, did, fid); return True
                 return True
             if len(parts) == 2 and parts[0].isdigit() and parts[1] == "followups":
                 did = int(parts[0])
