@@ -87,9 +87,10 @@ document.addEventListener("paste", (e) => {
   if (!imgHit) return;
   const target = activeImagePasteTarget;
   if (!target || !target.drop || !document.body.contains(target.drop)) return;
-  // When focus is inside the dropzone itself, its own handler already dealt
-  // with the paste — don't double-add.
-  if (e.target && e.target.closest && e.target.closest(".dropzone")) return;
+  // When the paste originated inside the active dropzone, that dropzone's own
+  // paste handler already added the image — don't double-add.
+  if (e.target && typeof e.target.contains !== "function" && e.target.closest && e.target.closest(".dropzone")) return;
+  if (e.target && typeof e.target.contains === "function" && target.drop.contains(e.target)) return;
   const file = imgHit.getAsFile();
   if (file) { e.preventDefault(); target.add(file); }
 });
@@ -7074,6 +7075,7 @@ async function openFollowUpModal(devId, editFollowup) {
       if (it.kind === "file" && it.type.startsWith("image/")) {
         addImageFile(it.getAsFile());
         e.preventDefault();
+        e.stopPropagation();
       }
     }
   });
