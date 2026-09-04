@@ -23,7 +23,7 @@ import re
 import uuid
 import sqlite3
 import datetime
-from http.server import HTTPServer, SimpleHTTPRequestHandler
+from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler
 from urllib.parse import urlparse, unquote, quote, parse_qs
 from openpyxl import Workbook
 from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
@@ -2217,11 +2217,20 @@ def api_update_followup(handler, did, fid):
             fid,
         ),
     )
-    # The development's Status follows the latest non-empty Category.
-    if category and category != old_category:
+    # The development's Status mirrors the latest non-empty Follow Up Category.
+    # Recompute it from the remaining rows (editing an older follow-up must not
+    # overwrite a newer status), matching api_delete_followup.
+    if category != old_category:
+        latest = conn.execute(
+            "SELECT category FROM followups WHERE development_id = ? "
+            "AND category IS NOT NULL AND category != '' "
+            "ORDER BY id DESC LIMIT 1",
+            (did,),
+        ).fetchone()
+        new_status = latest["category"] if latest else None
         conn.execute(
             "UPDATE developments SET status = ?, updated_at = ? WHERE id = ?",
-            (category, now_iso(), did),
+            (new_status, now_iso(), did),
         )
     updated = conn.execute("SELECT * FROM followups WHERE id = ?", (fid,)).fetchone()
     conn.commit()
@@ -2653,7 +2662,7 @@ class Handler(SimpleHTTPRequestHandler):
 
 def main():
     init_db()
-    server = HTTPServer(("0.0.0.0", PORT), Handler)
+    server = ThreadingHTTPServer(("0.0.0.0", PORT), Handler)
     print(f"FC server on http://localhost:{PORT}  (LAN: http://{os.environ.get('COMPUTERNAME','localhost')}:{PORT})")
     print(f"DB: {DB_PATH}")
     print("CTRL+C to stop.")

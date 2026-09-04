@@ -48,6 +48,10 @@ Never use native browser pop-ups (`window.alert`, `window.confirm`, `window.prom
 - Surface messages, confirmations, and prompts inside the page UI (e.g. inline banners, toasts, in-page modals built from DOM elements).
 - This keeps the app consistent, avoids blocking the page thread, and lets the user interact with content normally.
 
+## Popup overlays must not close on outside click
+Modal popup overlays (confirmation dialog, follow-up history / detail / add-edit, development popups, etc.) must persist until the user closes them with an explicit in-modal control (Cancel / Close / Save / OK). Clicking the backdrop or anywhere outside the dialog must **never** dismiss the overlay, so no state is lost to an accidental outside click.
+- Autocomplete / dropdown suggestion lists are exempt — they may close on blur as usual.
+
 ## Warnings and test output must be copyable
 Any warning, error, or test/diagnostic output shown to the user must be **selectable and copyable** — never trapped inside a non-selectable element or native dialog.
 - Render warnings/test results as text in the page (a panel, console-style box, or log area) that the user can highlight and copy.

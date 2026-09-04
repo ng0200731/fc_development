@@ -2702,11 +2702,6 @@ function openConfirmModal(title, message, onConfirm, opts) {
     overlay.remove();
     onConfirm();
   });
-  // Click on backdrop (outside the modal box) also cancels — feels natural
-  // for a centered overlay, and matches the global "no native pop-ups" rule.
-  overlay.addEventListener("click", (e) => {
-    if (e.target === overlay) overlay.remove();
-  });
 }
 
 function showToast(message, isError) {
@@ -6763,19 +6758,25 @@ async function deleteDevelopment(id) {
 // Clicking a Development status opens a two-column history popup: "Status" and
 // "Created time". The initial "Created" row and one row per Follow Up are
 // listed; clicking a Follow Up row opens the read-only detail popup.
+// The popup keeps a refresh hook (module-level) so the Edit/Save flow can
+// re-fetch the latest follow-ups from the DB in place instead of showing stale
+// rows captured when the popup first opened.
+let fuHistoryRefresh = null;
+
 async function openFollowUpHistory(devId) {
   const rec = devViewData.find((r) => r.id === devId) || {};
   let followups;
-  try {
-    followups = await fetchJson(API + `/api/developments/${devId}/followups`);
-  } catch (err) {
-    openConfirmModal("Load failed", err.message, () => {});
-    return;
-  }
 
-  // Rows: the development's initial creation, then one per Follow Up.
-  const rows = [{ status: "Created", time: rec.created_at || "", followup: null }];
-  (followups || []).forEach((f) => rows.push({ status: f.category || "—", time: f.created_at || "", followup: f }));
+  const load = async () => {
+    try {
+      followups = await fetchJson(API + `/api/developments/${devId}/followups`);
+    } catch (err) {
+      openConfirmModal("Load failed", err.message, () => {});
+      return false;
+    }
+    return true;
+  };
+  if (!(await load())) return;
 
   const overlay = document.createElement("div");
   overlay.className = "modal-overlay";
@@ -6787,57 +6788,67 @@ async function openFollowUpHistory(devId) {
         <thead>
           <tr><th>Status</th><th>Created time</th><th></th></tr>
         </thead>
-        <tbody>
-          ${rows.map((row) => `
-            <tr class="${row.followup ? "fu-history-clickable" : "fu-history-plain"}">
-              <td>${row.followup
-                ? `<button type="button" class="link-btn followup-status-btn" data-fuid="${row.followup.id}" title="View follow-up details">${escapeHtml(row.status)}</button>`
-                : `<span class="status-badge">${escapeHtml(row.status)}</span>`}</td>
-              <td>${escapeHtml(row.time || "—")}</td>
-              <td class="fu-history-action">${row.followup
-                ? `<button type="button" class="icon-btn danger" data-fu-del="${row.followup.id}" title="Delete this status">🗑</button>`
-                : ""}</td>
-            </tr>`).join("")}
-        </tbody>
+        <tbody id="fu-history-body"></tbody>
       </table>
       <div class="actions modal-actions">
         <button class="btn primary" type="button" id="fu-history-close">Close</button>
       </div>
     </div>`;
   document.body.appendChild(overlay);
-  const close = () => overlay.remove();
+  const tbody = overlay.querySelector("#fu-history-body");
+  const close = () => { if (fuHistoryRefresh === refresh) fuHistoryRefresh = null; overlay.remove(); };
   overlay.querySelector("#fu-history-close").addEventListener("click", close);
   overlay.addEventListener("click", (e) => { if (e.target === overlay) close(); });
-  overlay.querySelectorAll("[data-fuid]").forEach((b) => {
-    b.addEventListener("click", () => {
-      const f = (followups || []).find((x) => x.id === Number(b.dataset.fuid));
-      if (f) openFollowUpDetail(devId, f);
+
+  // Rows: the development's initial creation, then one per Follow Up.
+  const render = () => {
+    const rows = [{ status: "Created", time: rec.created_at || "", followup: null }];
+    (followups || []).forEach((f) => rows.push({ status: f.category || "—", time: f.created_at || "", followup: f }));
+    tbody.innerHTML = rows.map((row) => `
+      <tr class="${row.followup ? "fu-history-clickable" : "fu-history-plain"}">
+        <td>${row.followup
+          ? `<button type="button" class="link-btn followup-status-btn" data-fuid="${row.followup.id}" title="View follow-up details">${escapeHtml(row.status)}</button>`
+          : `<span class="status-badge">${escapeHtml(row.status)}</span>`}</td>
+        <td>${escapeHtml(row.time || "—")}</td>
+        <td class="fu-history-action">${row.followup
+          ? `<button type="button" class="icon-btn danger" data-fu-del="${row.followup.id}" title="Delete this status">🗑</button>`
+          : ""}</td>
+      </tr>`).join("");
+    tbody.querySelectorAll("[data-fuid]").forEach((b) => {
+      b.addEventListener("click", () => {
+        const f = (followups || []).find((x) => x.id === Number(b.dataset.fuid));
+        if (f) openFollowUpDetail(devId, f);
+      });
     });
-  });
-  overlay.querySelectorAll("[data-fu-del]").forEach((b) => {
-    b.addEventListener("click", () => {
-      const fid = Number(b.dataset.fuDel);
-      const f = (followups || []).find((x) => x.id === fid);
-      if (!f) return;
-      openConfirmModal(
-        "Delete status?",
-        `Delete the "${f.category || "—"}" status permanently?`,
-        async () => {
-          b.disabled = true;
-          try {
-            await fetchJson(API + `/api/developments/${devId}/followups/${fid}`, { method: "DELETE" });
-            close();
-            await renderDevelopmentView();
-            openFollowUpHistory(devId);
-          } catch (err) {
-            b.disabled = false;
-            openConfirmModal("Delete failed", err.message, () => {});
-          }
-        },
-        { danger: true }
-      );
+    tbody.querySelectorAll("[data-fu-del]").forEach((b) => {
+      b.addEventListener("click", () => {
+        const fid = Number(b.dataset.fuDel);
+        const f = (followups || []).find((x) => x.id === fid);
+        if (!f) return;
+        openConfirmModal(
+          "Delete status?",
+          `Delete the "${f.category || "—"}" status permanently?`,
+          async () => {
+            b.disabled = true;
+            try {
+              await fetchJson(API + `/api/developments/${devId}/followups/${fid}`, { method: "DELETE" });
+              await renderDevelopmentView();
+              if (await load()) render();      // refresh in place, keep popup open
+            } catch (err) {
+              b.disabled = false;
+              openConfirmModal("Delete failed", err.message, () => {});
+            }
+          },
+          { danger: true }
+        );
+      });
     });
-  });
+  };
+
+  // Refresh hook: re-fetch from DB and re-render the currently-open popup.
+  const refresh = async () => { if (await load()) render(); };
+  fuHistoryRefresh = refresh;
+  render();
 }
 
 // Read-only detail popup styled like the Follow Up form, showing one Follow
@@ -6882,7 +6893,6 @@ function openFollowUpDetail(devId, f) {
     close();
     openFollowUpModal(devId, f);
   });
-  overlay.addEventListener("click", (e) => { if (e.target === overlay) close(); });
   overlay.querySelectorAll(".fud-thumb").forEach((img) => {
     img.addEventListener("click", () => openImageLightbox(img.dataset.full, img.dataset.name));
   });
@@ -7141,7 +7151,6 @@ async function openFollowUpModal(devId, editFollowup) {
   });
 
   overlay.querySelector("#fu-cancel").addEventListener("click", closeModal);
-  overlay.addEventListener("click", (e) => { if (e.target === overlay) closeModal(); });
 
   // Reset reverts an edit back to the saved original values (no DB writes).
   const resetToOriginal = () => {
@@ -7173,10 +7182,15 @@ async function openFollowUpModal(devId, editFollowup) {
       ? API + `/api/developments/${devId}/followups/${editFollowup.id}`
       : API + `/api/developments/${devId}/followups`;
     try {
-      await fetchJson(url, { method: isEdit ? "PUT" : "POST", body: JSON.stringify(payload) });
+      await fetchJson(url, {
+        method: isEdit ? "PUT" : "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
       showToast(isEdit ? "Follow up updated" : "Follow up saved");
       closeModal();
-      renderDevelopmentView();   // re-fetch so the Status column shows the new category
+      await renderDevelopmentView();   // re-fetch so the Status column shows the new category
+      if (fuHistoryRefresh) await fuHistoryRefresh();   // keep the open history popup current
     } catch (err) {
       saveBtn.disabled = false;
       saveBtn.textContent = saveLabel;
