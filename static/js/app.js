@@ -23,30 +23,87 @@ function updateWorkspaceBar() {
 function showWorkspacePicker() {
   const overlay = document.getElementById("workspace-startup");
   if (!overlay) return;
+  const choiceGrid = overlay.querySelector(".workspace-choice-grid");
+  const secretForm = document.getElementById("workspace-secret-form");
+  const secretInput = document.getElementById("workspace-secret-input");
+  const secretError = document.getElementById("workspace-secret-error");
+  const secretSubmit = document.getElementById("workspace-secret-submit");
+  const secretBack = document.getElementById("workspace-secret-back");
   overlay.hidden = false;
+
+  const finishWorkspaceSelection = (workspace) => {
+    const previous = getWorkspace();
+    setWorkspace(workspace);
+    if (previous && previous !== workspace) window.location.reload();
+    else { overlay.hidden = true; document.body.classList.remove("workspace-locked"); updateWorkspaceBar(); startApp(); }
+  };
+  const showSecretError = (message) => {
+    if (!secretError) return;
+    secretError.textContent = message;
+    secretError.hidden = false;
+  };
+  const resetSecretForm = () => {
+    if (secretForm) secretForm.hidden = true;
+    if (choiceGrid) choiceGrid.hidden = false;
+    if (secretInput) { secretInput.value = ""; secretInput.disabled = false; }
+    if (secretSubmit) secretSubmit.disabled = false;
+    if (secretError) { secretError.textContent = ""; secretError.hidden = true; }
+  };
+
   overlay.querySelectorAll("[data-workspace-choice]").forEach((button) => {
     button.onclick = () => {
       const workspace = button.dataset.workspaceChoice;
       if (!WORKSPACES.includes(workspace)) return;
-      const previous = getWorkspace();
-      setWorkspace(workspace);
-      if (previous && previous !== workspace) window.location.reload();
-      else { overlay.hidden = true; updateWorkspaceBar(); startApp(); }
+      if (workspace !== "TEST" || !secretForm || !secretInput) {
+        finishWorkspaceSelection(workspace);
+        return;
+      }
+      if (choiceGrid) choiceGrid.hidden = true;
+      secretForm.hidden = false;
+      secretInput.value = "";
+      secretInput.disabled = false;
+      if (secretSubmit) secretSubmit.disabled = false;
+      if (secretError) { secretError.textContent = ""; secretError.hidden = true; }
+      secretInput.focus();
     };
   });
+
+  if (secretBack) secretBack.onclick = resetSecretForm;
+  if (secretForm) secretForm.onsubmit = async (event) => {
+    event.preventDefault();
+    const secret = secretInput ? secretInput.value : "";
+    if (!secret) {
+      showSecretError("Enter the TEST access secret.");
+      if (secretInput) secretInput.focus();
+      return;
+    }
+    if (secretInput) secretInput.disabled = true;
+    if (secretSubmit) secretSubmit.disabled = true;
+    if (secretError) secretError.hidden = true;
+    try {
+      const response = await fetch(API + "/api/workspace-access", {
+        method: "POST",
+        credentials: "same-origin",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ secret })
+      });
+      if (!response.ok) throw new Error("Access denied");
+      finishWorkspaceSelection("TEST");
+    } catch (error) {
+      if (secretInput) { secretInput.disabled = false; secretInput.value = ""; secretInput.focus(); }
+      if (secretSubmit) secretSubmit.disabled = false;
+      showSecretError("Access denied — check the secret and try again.");
+    }
+  };
   document.body.classList.add("workspace-locked");
 }
 function initWorkspace() {
-  const current = getWorkspace();
+  // Always require an explicit workspace choice when the page loads. This
+  // prevents a remembered cookie from silently opening the wrong workspace.
   updateWorkspaceBar();
   const switchButton = document.getElementById("workspace-switch");
   if (switchButton) switchButton.addEventListener("click", showWorkspacePicker);
-  if (!WORKSPACES.includes(current)) showWorkspacePicker();
-  else {
-    const overlay = document.getElementById("workspace-startup");
-    if (overlay) overlay.hidden = true;
-    startApp();
-  }
+  showWorkspacePicker();
 }
 function startApp() {
   if (startApp.started) return;

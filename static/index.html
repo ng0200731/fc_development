@@ -19,6 +19,15 @@
         <button class="workspace-choice" type="button" data-workspace-choice="FC"><strong>FC</strong><span>Production workspace</span></button>
         <button class="workspace-choice" type="button" data-workspace-choice="TEST"><strong>TEST</strong><span>Testing workspace</span></button>
       </div>
+      <form id="workspace-secret-form" class="workspace-secret-form" hidden>
+        <label for="workspace-secret-input">TEST access secret</label>
+        <input type="password" id="workspace-secret-input" autocomplete="off" spellcheck="false" />
+        <div class="workspace-secret-row">
+          <button type="submit" class="btn" id="workspace-secret-submit">Unlock TEST</button>
+          <button type="button" class="btn ghost" id="workspace-secret-back">Back</button>
+        </div>
+        <p id="workspace-secret-error" class="workspace-secret-error" hidden></p>
+      </form>
     </div>
   </div>
 

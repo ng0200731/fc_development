@@ -24,6 +24,9 @@ import uuid
 import sqlite3
 import datetime
 import threading
+import hashlib
+import hmac
+import secrets
 from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler
 from urllib.parse import urlparse, unquote, quote, parse_qs
 from openpyxl import Workbook
@@ -36,6 +39,63 @@ DB_PATH = os.path.join(BASE_DIR, "data", "fc.db")
 STATIC_DIR = os.path.join(BASE_DIR, "static")
 UPLOADS_DIR = os.path.join(BASE_DIR, "data", "uploads")
 PORT = int(os.environ.get("PORT", "8088"))
+
+
+def _load_env_secret():
+    """Read TEST_WORKSPACE_SECRET from root .env without overriding the OS env."""
+    value = os.environ.get("TEST_WORKSPACE_SECRET")
+    if value is not None:
+        return value
+    env_path = os.path.join(BASE_DIR, ".env")
+    try:
+        with open(env_path, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                key, raw = line.split("=", 1)
+                if key.strip() != "TEST_WORKSPACE_SECRET":
+                    continue
+                raw = raw.strip()
+                if len(raw) >= 2 and raw[0] == raw[-1] and raw[0] in "\"'":
+                    raw = raw[1:-1]
+                return raw
+    except (OSError, UnicodeError):
+        pass
+    return ""
+
+
+TEST_WORKSPACE_SECRET = _load_env_secret()
+_ACCESS_COOKIE = "fc_test_access"
+
+
+def _test_access_token():
+    nonce = secrets.token_urlsafe(32)
+    mac = hmac.new(TEST_WORKSPACE_SECRET.encode("utf-8"), nonce.encode("ascii"), hashlib.sha256).hexdigest()
+    return nonce + "." + mac
+
+
+def _has_test_access(handler):
+    if not TEST_WORKSPACE_SECRET:
+        return False
+    m = re.search(r"(?:^|;\s*)" + re.escape(_ACCESS_COOKIE) + r"=([^;]+)", handler.headers.get("Cookie", ""))
+    if not m:
+        return False
+    token = unquote(m.group(1).strip())
+    try:
+        nonce, mac = token.split(".", 1)
+        nonce_bytes = nonce.encode("ascii")
+    except (ValueError, UnicodeError):
+        return False
+    expected = hmac.new(TEST_WORKSPACE_SECRET.encode("utf-8"), nonce_bytes, hashlib.sha256).hexdigest()
+    return bool(nonce) and hmac.compare_digest(mac, expected)
+
+
+def _test_access_required(handler):
+    if _has_test_access(handler):
+        return False
+    json_response(handler, {"error": "TEST workspace access required"}, 403)
+    return True
 
 os.makedirs(UPLOADS_DIR, exist_ok=True)
 
@@ -1117,6 +1177,26 @@ def db():
     conn = sqlite3.connect(DB_PATH, factory=_ScopedConnection)
     conn.row_factory = sqlite3.Row
     return conn
+
+
+def api_workspace_access(handler):
+    data = read_json_body(handler)
+    supplied = data.get("secret") if isinstance(data, dict) else None
+    if not TEST_WORKSPACE_SECRET or not isinstance(supplied, str) or not hmac.compare_digest(
+        supplied.encode("utf-8"), TEST_WORKSPACE_SECRET.encode("utf-8")
+    ):
+        return json_response(handler, {"error": "invalid workspace secret"}, 403)
+    token = _test_access_token()
+    body = json.dumps({"ok": True}).encode("utf-8")
+    handler.send_response(200)
+    handler.send_header("Content-Type", "application/json; charset=utf-8")
+    handler.send_header("Content-Length", str(len(body)))
+    handler.send_header("Set-Cookie", f"{_ACCESS_COOKIE}={quote(token, safe='')}; Path=/; HttpOnly; SameSite=Strict")
+    handler.send_header("Access-Control-Allow-Origin", "*")
+    handler.send_header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+    handler.send_header("Access-Control-Allow-Headers", "Content-Type")
+    handler.end_headers()
+    handler.wfile.write(body)
 
 
 def api_list_workspaces(handler):
@@ -2646,6 +2726,13 @@ class Handler(SimpleHTTPRequestHandler):
         parsed = urlparse(self.path)
         path = parsed.path
         method = self.command
+
+        if path == "/api/workspace-access" and method == "POST":
+            api_workspace_access(self); return True
+        # TEST is isolated behind the secret gate; FC remains directly accessible.
+        if wid == 2 and (path.startswith("/api/") or path.startswith("/uploads/") or path.startswith("/workspace")):
+            if _test_access_required(self):
+                return True
 
         if method == "OPTIONS":
             self.send_response(204)
