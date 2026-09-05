@@ -1386,6 +1386,45 @@ select:focus-visible,
   }
 }
 
+/* Workspace selection and persistent workspace control */
+.workspace-overlay[hidden] { display: none; }
+.workspace-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(15, 23, 42, .72);
+}
+.workspace-dialog {
+  width: min(480px, 100%);
+  padding: 32px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--surface);
+  box-shadow: 0 20px 60px rgba(15, 23, 42, .3);
+}
+.workspace-kicker { color: var(--accent); font-size: 11px; font-weight: 800; letter-spacing: .12em; }
+.workspace-dialog h1 { margin: 8px 0 8px; color: var(--text); font-size: 25px; }
+.workspace-dialog p { margin: 0 0 22px; color: var(--muted); font-size: 14px; line-height: 1.55; }
+.workspace-choice-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.workspace-choice {
+  display: flex; flex-direction: column; gap: 6px; align-items: flex-start;
+  padding: 16px; border: 1px solid var(--border); border-radius: 10px;
+  background: var(--surface); color: var(--text); text-align: left; cursor: pointer;
+  transition: border-color var(--ease), background var(--ease), box-shadow var(--ease);
+}
+.workspace-choice strong { font-size: 16px; }
+.workspace-choice span { color: var(--muted); font-size: 12px; }
+.workspace-choice:hover { border-color: var(--accent); background: var(--accent-weak); box-shadow: var(--shadow-sm); }
+.workspace-bar { display: flex; align-items: center; gap: 8px; padding: 8px 12px; background: var(--surface); border-bottom: 1px solid var(--border); font-size: 12px; }
+.workspace-label { color: var(--muted); text-transform: uppercase; letter-spacing: .05em; font-weight: 700; }
+#workspace-current { color: var(--accent); }
+#workspace-switch { margin-left: auto; }
+@media (max-width: 480px) { .workspace-choice-grid { grid-template-columns: 1fr; } .workspace-dialog { padding: 24px; } }
+
 /* ---- Customer / Create — Ship to + Project steps ---- */
 .member-row {
   display: flex;

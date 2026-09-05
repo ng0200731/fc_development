@@ -23,6 +23,7 @@ import re
 import uuid
 import sqlite3
 import datetime
+import threading
 from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler
 from urllib.parse import urlparse, unquote, quote, parse_qs
 from openpyxl import Workbook
@@ -44,13 +45,42 @@ SAMPLE_IMAGES_DIR = r"C:\Users\ng\Desktop\canvas_source"
 _sample_images_cache = None  # module-level cache for the scanned pool
 
 
+_request_workspace = threading.local()
+
+
+def _workspace_id(handler):
+    # Preferred source is the ?workspace=<name> query param sent by the
+    # frontend's withWorkspace() wrapper. Fall back to the fc_workspace cookie,
+    # then to FC for legacy/direct callers. Names are mapped to ids; ids pass
+    # through directly (id 1 == FC, 2 == TEST).
+    qs = parse_qs(urlparse(handler.path).query)
+    qv = (qs.get("workspace") or [None])[0]
+    if qv:
+        value = unquote(qv).strip()
+        if value.isdigit() and int(value) in {1, 2}:
+            return int(value)
+        if value.upper() in {"FC", "TEST"}:
+            return {"FC": 1, "TEST": 2}[value.upper()]
+    m = re.search(r"(?:^|;\s*)fc_workspace=([^;]+)", handler.headers.get("Cookie", ""))
+    if not m:
+        return 1
+    value = unquote(m.group(1)).strip()
+    if value.isdigit() and int(value) in {1, 2}:
+        return int(value)
+    return {"FC": 1, "TEST": 2}.get(value.upper(), 1)
+
+
 def init_db():
     conn = sqlite3.connect(DB_PATH)
     cur = conn.cursor()
+    cur.execute("CREATE TABLE IF NOT EXISTS workspaces (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL UNIQUE, created_at TEXT NOT NULL)")
+    cur.execute("INSERT OR IGNORE INTO workspaces (id, name, created_at) VALUES (1, 'FC', ?)", (now_iso(),))
+    cur.execute("INSERT OR IGNORE INTO workspaces (id, name, created_at) VALUES (2, 'TEST', ?)", (now_iso(),))
     cur.execute(
         """
         CREATE TABLE IF NOT EXISTS companies (
             id            INTEGER PRIMARY KEY AUTOINCREMENT,
+            workspace_id  INTEGER NOT NULL DEFAULT 1,
             name          TEXT NOT NULL,
             email_suffix  TEXT NOT NULL,
             currency      TEXT,
@@ -64,6 +94,7 @@ def init_db():
         """
         CREATE TABLE IF NOT EXISTS members (
             id            INTEGER PRIMARY KEY AUTOINCREMENT,
+            workspace_id  INTEGER NOT NULL DEFAULT 1,
             company_id    INTEGER NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
             name          TEXT NOT NULL,
             email_prefix  TEXT NOT NULL,
@@ -77,6 +108,7 @@ def init_db():
         """
         CREATE TABLE IF NOT EXISTS developments (
             id            INTEGER PRIMARY KEY AUTOINCREMENT,
+            workspace_id  INTEGER NOT NULL DEFAULT 1,
             company_id    INTEGER,
             company_name  TEXT NOT NULL,
             member_id     INTEGER,
@@ -104,6 +136,7 @@ def init_db():
         """
         CREATE TABLE IF NOT EXISTS ship_to (
             id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            workspace_id  INTEGER NOT NULL DEFAULT 1,
             company_id  INTEGER NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
             address     TEXT NOT NULL,
             is_default  INTEGER NOT NULL DEFAULT 0,
@@ -115,6 +148,7 @@ def init_db():
         """
         CREATE TABLE IF NOT EXISTS projects (
             id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            workspace_id  INTEGER NOT NULL DEFAULT 1,
             company_id  INTEGER NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
             name        TEXT NOT NULL,
             created_at  TEXT NOT NULL,
@@ -126,6 +160,7 @@ def init_db():
         """
         CREATE TABLE IF NOT EXISTS followups (
             id             INTEGER PRIMARY KEY AUTOINCREMENT,
+            workspace_id   INTEGER NOT NULL DEFAULT 1,
             development_id INTEGER NOT NULL REFERENCES developments(id) ON DELETE CASCADE,
             category       TEXT,
             note           TEXT,
@@ -139,6 +174,7 @@ def init_db():
         """
         CREATE TABLE IF NOT EXISTS enquiries (
             id            INTEGER PRIMARY KEY AUTOINCREMENT,
+            workspace_id  INTEGER NOT NULL DEFAULT 1,
             company_id    INTEGER,
             company_name  TEXT NOT NULL,
             member_id     INTEGER,
@@ -190,6 +226,7 @@ def init_db():
     )
     # Migrations: add any columns introduced after the initial schema so that
     # an existing database (already created without them) keeps working.
+    _ensure_workspace_columns(conn)
     _ensure_company_columns(conn)
     _ensure_dev_columns(conn)
     _ensure_enquiry_columns(conn)
@@ -211,6 +248,17 @@ _COMPANY_MISSING_COLUMNS = {
     "payment_term": "TEXT",
     "shipment_term": "TEXT",
 }
+
+
+_BUSINESS_TABLES = ("companies", "members", "developments", "ship_to", "projects", "followups", "enquiries")
+
+
+def _ensure_workspace_columns(conn):
+    for table in _BUSINESS_TABLES:
+        cols = {r[1] for r in conn.execute(f"PRAGMA table_info({table})").fetchall()}
+        if "workspace_id" not in cols:
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN workspace_id INTEGER NOT NULL DEFAULT 1")
+        conn.execute(f"UPDATE {table} SET workspace_id=1 WHERE workspace_id IS NULL")
 
 
 def _ensure_company_columns(conn):
@@ -1004,10 +1052,95 @@ def read_json_body(handler):
     return json.loads(raw.decode("utf-8"))
 
 
+_BUSINESS_TABLES = {"companies", "members", "developments", "ship_to", "projects", "followups", "enquiries"}
+
+class _ScopedCursor(sqlite3.Cursor):
+    def execute(self, sql, params=()):
+        sql, params = _scope_sql(sql, params)
+        return super().execute(sql, params)
+
+class _ScopedConnection(sqlite3.Connection):
+    def cursor(self, *args, **kwargs):
+        kwargs["factory"] = _ScopedCursor
+        return super().cursor(*args, **kwargs)
+    def execute(self, sql, params=()):
+        sql, params = _scope_sql(sql, params)
+        return super().execute(sql, params)
+
+def _business_sql_target(sql):
+    """Return (op, table_name) for a statement touching a business table, else
+    (None, None). Handles the real forms the naive first-token regex missed:
+    `SELECT * FROM t`, `SELECT 1 FROM t`, `DELETE FROM t`, `INSERT INTO t`."""
+    m = re.match(r"\s*(insert\s+into|select|update|delete)\b", sql, re.I)
+    if not m:
+        return None, None
+    kw = m.group(1).lower()
+    body = sql[m.end():]
+    if kw == "select":
+        mt = re.search(r"\bfrom\s+([A-Za-z_][A-Za-z0-9_]*)\b", sql, re.I)
+    elif kw == "delete":
+        mt = re.match(r"\s*from\s+([A-Za-z_][A-Za-z0-9_]*)\b", body, re.I)
+    elif kw == "update":
+        mt = re.match(r"\s*([A-Za-z_][A-Za-z0-9_]*)\b", body, re.I)
+    else:  # insert into
+        mt = re.match(r"\s*into\s+([A-Za-z_][A-Za-z0-9_]*)\b", body, re.I)
+    return (kw, mt.group(1)) if mt else (None, None)
+
+def _scope_sql(sql, params):
+    wid = getattr(_request_workspace, "id", 1)
+    if not wid or not isinstance(sql, str): return sql, params
+    op, table = _business_sql_target(sql)
+    if not op or not table or table.lower() not in _BUSINESS_TABLES: return sql, params
+    params = list(params) if not isinstance(params, list) else params
+    if op == "insert":
+        cm = re.search(r"insert\s+into\s+" + re.escape(table) + r"\s*\(([^)]*)\)\s*values\s*\(([^)]*)\)", sql, re.I|re.S)
+        if cm and "workspace_id" not in cm.group(1).lower():
+            cols, vals = cm.group(1), cm.group(2)
+            sql = sql[:cm.start(1)] + "workspace_id, " + cols + sql[cm.end(1):cm.start(2)] + "?, " + vals + sql[cm.end(2):]
+            params.insert(0, wid)
+        return sql, tuple(params)
+    if re.search(r"\bworkspace_id\b", sql, re.I): return sql, tuple(params)
+    # Inject "WHERE workspace_id = ?" in a valid position: before an existing
+    # WHERE, or before ORDER/GROUP/HAVING/LIMIT/OFFSET, or at the very end.
+    if re.search(r"\bwhere\b", sql, re.I):
+        sql = re.sub(r"\bwhere\b", "WHERE workspace_id=? AND ", sql, count=1, flags=re.I)
+    else:
+        m_tail = re.search(r"\b(order\s+by|group\s+by|having|limit|offset)\b", sql, re.I)
+        if m_tail:
+            sql = sql[:m_tail.start()] + "WHERE workspace_id=? " + sql[m_tail.start():]
+        else:
+            sql += " WHERE workspace_id=?"
+    params.insert(0, wid)
+    return sql, tuple(params)
+
 def db():
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(DB_PATH, factory=_ScopedConnection)
     conn.row_factory = sqlite3.Row
     return conn
+
+
+def api_list_workspaces(handler):
+    conn = db()
+    rows = conn.execute("SELECT id, name, created_at FROM workspaces ORDER BY id").fetchall()
+    conn.close()
+    return json_response(handler, [dict(r) for r in rows])
+
+
+def api_create_workspace(handler):
+    data = read_json_body(handler)
+    name = (data.get("name") or "").strip()
+    if not name:
+        return json_response(handler, {"error": "name is required"}, 400)
+    conn = db()
+    try:
+        cur = conn.execute("INSERT INTO workspaces (name, created_at) VALUES (?, ?)", (name, now_iso()))
+        conn.commit()
+    except sqlite3.IntegrityError:
+        conn.close()
+        return json_response(handler, {"error": "workspace already exists"}, 409)
+    wid = cur.lastrowid
+    conn.close()
+    return json_response(handler, {"id": wid, "name": name}, 201)
 
 
 # --- Excel export (Development / Enquiry / Customer views) -------------------
@@ -2003,6 +2136,34 @@ def _dev_validate(data):
            (data.get("product_type") or "").strip()
 
 
+def _parent_id_error(conn, data):
+    """Reject parent FK ids (company / member / project) that don't exist in
+    the current workspace. All lookups are scoped to the request workspace, so
+    a cross-workspace parent id is treated as invalid. Returns an error dict or
+    None."""
+    cid = data.get("company_id")
+    if cid is not None and conn.execute(
+        "SELECT 1 FROM companies WHERE id = ?", (cid,)).fetchone() is None:
+        return {"error": "company does not exist"}
+    mid = data.get("member_id")
+    if mid is not None:
+        member = conn.execute(
+            "SELECT company_id FROM members WHERE id = ?", (mid,)).fetchone()
+        if member is None:
+            return {"error": "member does not exist"}
+        if cid is not None and str(member["company_id"]) != str(cid):
+            return {"error": "member does not belong to company"}
+    pid = data.get("project_id")
+    if pid is not None:
+        project = conn.execute(
+            "SELECT company_id FROM projects WHERE id = ?", (pid,)).fetchone()
+        if project is None:
+            return {"error": "project does not exist"}
+        if cid is not None and str(project["company_id"]) != str(cid):
+            return {"error": "project does not belong to company"}
+    return None
+
+
 def _dev_insert_or_update(conn, did, data):
     company_name = (data.get("company_name") or "").strip()
     item_name = (data.get("item_name") or "").strip()
@@ -2100,6 +2261,10 @@ def api_create_development(handler):
     if not _dev_validate(data):
         return json_response(handler, {"error": "company_name, item_name, product_type are required"}, 400)
     conn = db()
+    err = _parent_id_error(conn, data)
+    if err:
+        conn.close()
+        return json_response(handler, err, 400)
     did = _dev_insert_or_update(conn, None, data)
     conn.commit()
     conn.close()
@@ -2116,6 +2281,10 @@ def api_update_development(handler, did):
     if not _dev_validate(data):
         conn.close()
         return json_response(handler, {"error": "company_name, item_name, product_type are required"}, 400)
+    err = _parent_id_error(conn, data)
+    if err:
+        conn.close()
+        return json_response(handler, err, 400)
     _dev_insert_or_update(conn, did, data)
     conn.commit()
     conn.close()
@@ -2409,6 +2578,10 @@ def api_create_enquiry(handler):
     if not _enquiry_validate(data):
         return json_response(handler, {"error": "company_name is required"}, 400)
     conn = db()
+    err = _parent_id_error(conn, data)
+    if err:
+        conn.close()
+        return json_response(handler, err, 400)
     eid = _enquiry_insert_or_update(conn, None, data)
     conn.commit()
     conn.close()
@@ -2425,6 +2598,10 @@ def api_update_enquiry(handler, eid):
     if not _enquiry_validate(data):
         conn.close()
         return json_response(handler, {"error": "company_name is required"}, 400)
+    err = _parent_id_error(conn, data)
+    if err:
+        conn.close()
+        return json_response(handler, err, 400)
     _enquiry_insert_or_update(conn, eid, data)
     conn.commit()
     conn.close()
@@ -2462,6 +2639,10 @@ class Handler(SimpleHTTPRequestHandler):
         return json_response(self, list_sample_images())
 
     def _route(self):
+        wid = _workspace_id(self)
+        if wid < 1:
+            wid = 1
+        _request_workspace.id = wid
         parsed = urlparse(self.path)
         path = parsed.path
         method = self.command
@@ -2474,6 +2655,10 @@ class Handler(SimpleHTTPRequestHandler):
             self.end_headers()
             return True
 
+        if path in ("/api/workspaces", "/api/accounts") and method == "GET":
+            api_list_workspaces(self); return True
+        if path in ("/api/workspaces", "/api/accounts") and method == "POST":
+            api_create_workspace(self); return True
         if path == "/api/companies" and method == "POST":
             api_create_company(self); return True
         if path == "/api/companies" and method == "GET":

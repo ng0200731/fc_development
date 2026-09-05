@@ -10,6 +10,18 @@
   <link rel="stylesheet" href="css/style.css" />
 </head>
 <body>
+  <div id="workspace-startup" class="workspace-overlay" role="dialog" aria-modal="true" aria-labelledby="workspace-startup-title">
+    <div class="workspace-dialog">
+      <div class="workspace-kicker">FC WORKSPACE</div>
+      <h1 id="workspace-startup-title">Choose a workspace</h1>
+      <p>Select the data workspace to use for this session. You can switch later from the workspace control.</p>
+      <div class="workspace-choice-grid">
+        <button class="workspace-choice" type="button" data-workspace-choice="FC"><strong>FC</strong><span>Production workspace</span></button>
+        <button class="workspace-choice" type="button" data-workspace-choice="TEST"><strong>TEST</strong><span>Testing workspace</span></button>
+      </div>
+    </div>
+  </div>
+
   <div class="layout">
     <!-- LEFT MENU — 10% -->
     <nav class="sidebar" id="sidebar" aria-label="Sidebar">
@@ -55,6 +67,11 @@
 
     <!-- RIGHT MENU — 90% -->
     <main class="content" aria-label="Content">
+      <div class="workspace-bar" id="workspace-bar">
+        <span class="workspace-label">Workspace</span>
+        <strong id="workspace-current">—</strong>
+        <button class="btn tiny" id="workspace-switch" type="button">Switch</button>
+      </div>
       <div class="tabs" id="tabs" role="tablist"><!-- mini tabs injected here --></div>
       <section class="panel" id="panel">
         <p class="empty">Select an item from the left menu.</p>

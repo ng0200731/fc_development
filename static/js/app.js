@@ -2,6 +2,58 @@
 // Both the clicked nav item and its tab stay highlighted together.
 
 const API = ""; // same origin
+const WORKSPACE_COOKIE = "fc_workspace";
+const WORKSPACES = ["FC", "TEST"];
+
+function getWorkspace() {
+  const match = document.cookie.match(new RegExp("(?:^|; )" + WORKSPACE_COOKIE + "=([^;]*)"));
+  return match ? decodeURIComponent(match[1]) : "";
+}
+function setWorkspace(workspace) {
+  document.cookie = WORKSPACE_COOKIE + "=" + encodeURIComponent(workspace) + "; path=/; max-age=31536000; SameSite=Lax";
+}
+function withWorkspace(url) {
+  if (!url || !/^\//.test(url) || /(?:^|[?&])workspace=/.test(url)) return url;
+  return url + (url.includes("?") ? "&" : "?") + "workspace=" + encodeURIComponent(getWorkspace());
+}
+function updateWorkspaceBar() {
+  const current = document.getElementById("workspace-current");
+  if (current) current.textContent = getWorkspace() || "—";
+}
+function showWorkspacePicker() {
+  const overlay = document.getElementById("workspace-startup");
+  if (!overlay) return;
+  overlay.hidden = false;
+  overlay.querySelectorAll("[data-workspace-choice]").forEach((button) => {
+    button.onclick = () => {
+      const workspace = button.dataset.workspaceChoice;
+      if (!WORKSPACES.includes(workspace)) return;
+      const previous = getWorkspace();
+      setWorkspace(workspace);
+      if (previous && previous !== workspace) window.location.reload();
+      else { overlay.hidden = true; updateWorkspaceBar(); startApp(); }
+    };
+  });
+  document.body.classList.add("workspace-locked");
+}
+function initWorkspace() {
+  const current = getWorkspace();
+  updateWorkspaceBar();
+  const switchButton = document.getElementById("workspace-switch");
+  if (switchButton) switchButton.addEventListener("click", showWorkspacePicker);
+  if (!WORKSPACES.includes(current)) showWorkspacePicker();
+  else {
+    const overlay = document.getElementById("workspace-startup");
+    if (overlay) overlay.hidden = true;
+    startApp();
+  }
+}
+function startApp() {
+  if (startApp.started) return;
+  startApp.started = true;
+  loadOptions();
+  loadProductTypeFactory();
+}
 
 // ---------------------------------------------------------------------------
 // Robust JSON fetch: rejects with a clear, actionable error when the response
@@ -10,7 +62,7 @@ const API = ""; // same origin
 async function fetchJson(url, opts) {
   let res;
   try {
-    res = await fetch(url, opts);
+    res = await fetch(withWorkspace(url), opts);
   } catch (netErr) {
     throw new Error("network error — is the FC server running? (" + netErr.message + ")");
   }
@@ -6567,7 +6619,7 @@ function paintDevelopmentView() {
     }
     try {
       const a = document.createElement("a");
-      a.href = API + "/api/export/developments?ids=" + encodeURIComponent(ids.join(","));
+      a.href = withWorkspace(API + "/api/export/developments?ids=" + encodeURIComponent(ids.join(",")));
       a.download = "developments.xlsx";
       document.body.appendChild(a);
       a.click();
@@ -7846,7 +7898,7 @@ function paintEnquiryView() {
     enqExportBtn.addEventListener("click", async () => {
       try {
         const a = document.createElement("a");
-        a.href = API + "/api/export/enquiries";
+        a.href = withWorkspace(API + "/api/export/enquiries");
         a.download = "enquiries.xlsx";
         document.body.appendChild(a);
         a.click();
@@ -8185,7 +8237,7 @@ function paintView() {
   panel.querySelector("#export-xlsx").addEventListener("click", async () => {
     try {
       const a = document.createElement("a");
-      a.href = API + "/api/export/customers";
+      a.href = withWorkspace(API + "/api/export/customers");
       a.download = "customers.xlsx";
       document.body.appendChild(a);
       a.click();
@@ -9136,7 +9188,7 @@ function displayName(name) {
 async function uploadFile(file) {
   const form = new FormData();
   form.append("file", file);
-  const res = await fetch(API + "/api/uploads", { method: "POST", body: form });
+  const res = await fetch(withWorkspace(API + "/api/uploads"), { method: "POST", body: form });
   if (!res.ok) throw new Error("upload failed: " + res.status);
   const data = await res.json();
   return data; // { path, name, url }
@@ -9148,9 +9200,5 @@ async function uploadFile(file) {
 // auto-refresh timer, so a View stays put while you read it.
 // ---------------------------------------------------------------------------
 
-// Populate the managed dropdown-option cache once at startup so every form
-// renders from the DB-backed sets. If the fetch fails, forms fall back to the
-// hardcoded seed arrays declared near the top of this file.
-loadOptions();
-// Load the per-product-type Fabric/Folding factory map (Settings / Options).
-loadProductTypeFactory();
+// Workspace selection must complete before any API-backed startup fetch.
+initWorkspace();
