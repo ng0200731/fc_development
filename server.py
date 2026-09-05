@@ -2233,7 +2233,9 @@ def api_update_followup(handler, did, fid):
             "ORDER BY id DESC LIMIT 1",
             (did,),
         ).fetchone()
-        new_status = latest["category"] if latest else None
+        # Created is the virgin/base status. Restore it when no follow-up
+        # remains instead of leaving the development status blank.
+        new_status = latest["category"] if latest else "Created"
         conn.execute(
             "UPDATE developments SET status = ?, updated_at = ? WHERE id = ?",
             (new_status, now_iso(), did),
@@ -2266,7 +2268,9 @@ def api_delete_followup(handler, did, fid):
         "ORDER BY id DESC LIMIT 1",
         (did,),
     ).fetchone()
-    new_status = latest["category"] if latest else None
+    # Created is the virgin/base status; restore it after the last follow-up
+    # is deleted.
+    new_status = latest["category"] if latest else "Created"
     conn.execute(
         "UPDATE developments SET status = ?, updated_at = ? WHERE id = ?",
         (new_status, now_iso(), did),

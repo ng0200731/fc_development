@@ -6488,7 +6488,7 @@ function paintDevelopmentView() {
         <td>${escapeHtml(r.member_name || "—")}</td>
         <td>${escapeHtml(r.item_name)}</td>
         <td>${escapeHtml(r.product_type)}</td>
-        <td>${r.status ? `<button type="button" class="link-btn followup-status-btn" data-status="${r.id}" title="View follow-up history">${escapeHtml(r.status)}</button>` : `<span class="muted">—</span>`}</td>
+        <td><button type="button" class="link-btn followup-status-btn" data-status="${r.id}" title="View follow-up history">${escapeHtml(r.status || "Created")}</button></td>
         <td class="cell-imgs">${thumbs}</td>
         <td class="cell-docs">${docLinks}</td>
         <td>${materialCell}</td>
