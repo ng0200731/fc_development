@@ -3030,7 +3030,14 @@ function wireExtraParts(root, state, updateSaveState) {
     const lists = (cur && cur.lists) || {};
     return extra.map((kind) => {
       const value = lists[kind] || "";
-      const id = "mat-" + cssEscape(kind);
+      // Use the RAW kind as the DOM id/name value (an HTML id may contain
+      // spaces). cssEscape() is only for building CSS selectors — if it's baked
+      // into the id attribute itself, the backslash it inserts for spaces/other
+      // chars never round-trips through querySelector, so multi-word list names
+      // (e.g. "Raised Height") could never be read back. Selectors are escaped
+      // separately in materialExtraListValues below.
+      const id = "mat-" + kind;
+      const idAttr = escapeHtml(id);
       const label = escapeHtml(kind[0].toUpperCase() + kind.slice(1));
       const type = listKindInputType(product, kind);
       if (type === "radio") {
@@ -3040,17 +3047,17 @@ function wireExtraParts(root, state, updateSaveState) {
           // text input so the field is still usable until options are added.
           return `
             <div class="field">
-              <label for="${id}">${label}</label>
-              <input id="${id}" type="text" autocomplete="off" value="${escapeHtml(value)}" placeholder="(add options in Settings)"/>
+              <label for="${idAttr}">${label}</label>
+              <input id="${idAttr}" type="text" autocomplete="off" value="${escapeHtml(value)}" placeholder="(add options in Settings)"/>
             </div>`;
         }
         return `
           <div class="field">
             <label class="radio-label">${label}</label>
-            <div class="radio-row" id="${id}-row">
+            <div class="radio-row" id="${escapeHtml(id + "-row")}">
               ${opts.map((o) => `
                 <label class="radio-opt">
-                  <input type="radio" name="${id}" value="${escapeHtml(o)}" ${value === o ? "checked" : ""}/> ${escapeHtml(o)}
+                  <input type="radio" name="${idAttr}" value="${escapeHtml(o)}" ${value === o ? "checked" : ""}/> ${escapeHtml(o)}
                 </label>`).join("")}
             </div>
           </div>`;
@@ -3058,22 +3065,22 @@ function wireExtraParts(root, state, updateSaveState) {
       if (type === "textarea") {
         return `
           <div class="field">
-            <label for="${id}">${label}</label>
-            <textarea id="${id}" rows="3" placeholder="…">${escapeHtml(value)}</textarea>
+            <label for="${idAttr}">${label}</label>
+            <textarea id="${idAttr}" rows="3" placeholder="…">${escapeHtml(value)}</textarea>
           </div>`;
       }
       if (type === "text") {
         return `
           <div class="field">
-            <label for="${id}">${label}</label>
-            <input id="${id}" type="text" autocomplete="off" value="${escapeHtml(value)}" placeholder="…"/>
+            <label for="${idAttr}">${label}</label>
+            <input id="${idAttr}" type="text" autocomplete="off" value="${escapeHtml(value)}" placeholder="…"/>
           </div>`;
       }
       // default: dropdown (existing behavior)
       return `
         <div class="field">
-          <label for="${id}">${label}</label>
-          <select id="${id}">
+          <label for="${idAttr}">${label}</label>
+          <select id="${idAttr}">
             <option value="">— select —</option>
             ${listOptionsFor(product, kind, value).map((f) =>
               `<option value="${escapeHtml(f)}" ${value === f ? "selected" : ""}>${escapeHtml(f)}</option>`).join("")}
@@ -3087,19 +3094,27 @@ function wireExtraParts(root, state, updateSaveState) {
     if (!extra.length) return undefined;
     const lists = {};
     for (const kind of extra) {
-      const id = "mat-" + cssEscape(kind);
+      // The rendered HTML attribute holds the RAW id (spaces and all); read it
+      // back via the DOM property, never via a CSS selector, so list names with
+      // spaces/punctuation are matched literally.
+      const id = "mat-" + kind;
       const type = listKindInputType(product, kind);
       let v = null;
       if (type === "radio") {
-        const checked = overlay.querySelector(`input[name="${id}"]:checked`);
+        // Match the DOM property directly so list names containing spaces or
+        // punctuation cannot be altered by CSS selector parsing.
+        const checked = [...overlay.querySelectorAll("input[type=radio]:checked")]
+          .find((el) => el.name === id);
         v = checked ? (checked.value || null) : null;
       } else if (type === "text" || type === "textarea") {
-        const el = overlay.querySelector("#" + id);
+        const el = [...overlay.querySelectorAll("input, textarea, select")]
+          .find((candidate) => candidate.id === id);
         const raw = el ? (el.value || "") : "";
         v = raw.trim() || null;
       } else {
         // dropdown
-        const sel = overlay.querySelector("#" + id);
+        const sel = [...overlay.querySelectorAll("input, textarea, select")]
+          .find((candidate) => candidate.id === id);
         v = sel ? (sel.value || null) : null;
       }
       if (!v && cur && cur.lists) v = cur.lists[kind] || null;
@@ -6631,6 +6646,7 @@ function paintDevelopmentView() {
         <span>Select all (${allKeys.length})</span>
       </label>
       <span class="muted batch-count" id="batch-count">${devViewSelected.size} selected</span>
+      <button class="btn ghost" id="batch-update" type="button" disabled>Batch update</button>
       <button class="btn danger" id="batch-delete" type="button" disabled>Delete selected</button>
     </div>
 
@@ -6711,11 +6727,13 @@ function paintDevelopmentView() {
   // --- batch selection ---
   const selectAll = panel.querySelector("#select-all");
   const batchDelete = panel.querySelector("#batch-delete");
+  const batchUpdate = panel.querySelector("#batch-update");
   const batchCount = panel.querySelector("#batch-count");
 
   const syncBatchUI = () => {
     batchCount.textContent = devViewSelected.size + " selected";
     batchDelete.disabled = devViewSelected.size === 0;
+    batchUpdate.disabled = devViewSelected.size === 0;
     selectAll.checked = allKeys.length > 0 && allKeys.every((k) => devViewSelected.has(k));
   };
 
@@ -6755,6 +6773,7 @@ function paintDevelopmentView() {
   });
 
   batchDelete.addEventListener("click", batchDeleteDevelopments);
+  batchUpdate.addEventListener("click", batchUpdateDevelopments);
 
   panel.querySelectorAll("[data-followup]").forEach((b) => {
     b.addEventListener("click", () => openFollowUpModal(Number(b.dataset.followup)));
@@ -6774,6 +6793,15 @@ function paintDevelopmentView() {
       if (rec) openColorsViewPopup(rec);
     });
   });
+}
+
+async function batchUpdateDevelopments() {
+  const ids = [...devViewSelected]
+    .filter((k) => k.startsWith("d:"))
+    .map((k) => Number(k.slice(2)))
+    .filter((id) => Number.isFinite(id));
+  if (!ids.length) return;
+  openFollowUpModal(ids[0], null, ids);
 }
 
 async function batchDeleteDevelopments() {
@@ -6966,17 +6994,20 @@ function openFollowUpDetail(devId, f) {
 // Follow Up modal: record a follow-up (managed option, note, images, docs)
 // against a development. Images/docs are uploaded to /api/uploads immediately;
 // only the returned "uploads/..." paths are persisted so they survive reloads.
-async function openFollowUpModal(devId, editFollowup) {
+async function openFollowUpModal(devId, editFollowup, batchIds) {
+  const isBatch = Array.isArray(batchIds) && batchIds.length > 0;
   let rec = null;
-  try {
-    rec = await fetchJson(API + `/api/developments/${devId}`);
-  } catch (err) {
-    openConfirmModal("Load failed", err.message, () => {});
-    return;
+  if (!isBatch) {
+    try {
+      rec = await fetchJson(API + `/api/developments/${devId}`);
+    } catch (err) {
+      openConfirmModal("Load failed", err.message, () => {});
+      return;
+    }
   }
 
   const isEdit = !!editFollowup;
-  const saveLabel = isEdit ? "Save Changes" : "Save Follow Up";
+  const saveLabel = isEdit ? "Save Changes" : (isBatch ? "Save Follow Up for Selected" : "Save Follow Up");
   // Seed the editable state from the saved DB record when editing. Names are
   // persisted "uploads/..." paths; bytes live on disk and resolve via assetUrl.
   const images = isEdit
@@ -6991,7 +7022,7 @@ async function openFollowUpModal(devId, editFollowup) {
   overlay.className = "modal-overlay";
   overlay.innerHTML = `
     <div class="modal followup-modal" role="dialog" aria-modal="true">
-      <h3>${isEdit ? "Edit Follow Up" : "Follow Up"} · ${escapeHtml(rec.item_name || "")} <span class="muted small">${escapeHtml(rec.company_name || "")}</span></h3>
+      <h3>${isEdit ? "Edit Follow Up" : "Follow Up"}${isBatch ? ` · ${batchIds.length} selected developments` : ` · ${escapeHtml(rec.item_name || "")} <span class="muted small">${escapeHtml(rec.company_name || "")}</span>`}</h3>
       <div class="followup-frames">
         <div class="followup-frame">
           <label class="field-label" for="fu-category">Category</label>
@@ -7248,12 +7279,22 @@ async function openFollowUpModal(devId, editFollowup) {
       ? API + `/api/developments/${devId}/followups/${editFollowup.id}`
       : API + `/api/developments/${devId}/followups`;
     try {
-      await fetchJson(url, {
-        method: isEdit ? "PUT" : "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      });
-      showToast(isEdit ? "Follow up updated" : "Follow up saved");
+      if (isBatch) {
+        for (const id of batchIds) {
+          await fetchJson(API + `/api/developments/${id}/followups`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload),
+          });
+        }
+      } else {
+        await fetchJson(url, {
+          method: isEdit ? "PUT" : "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+      }
+      showToast(isBatch ? `Follow up saved for ${batchIds.length} developments` : (isEdit ? "Follow up updated" : "Follow up saved"));
       closeModal();
       await renderDevelopmentView();   // re-fetch so the Status column shows the new category
       if (fuHistoryRefresh) await fuHistoryRefresh();   // keep the open history popup current

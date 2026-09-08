@@ -2437,9 +2437,15 @@ def api_create_followup(handler, did):
     )
     fid = cur.lastrowid
     if category:
+        latest = conn.execute(
+            "SELECT category FROM followups WHERE development_id = ? "
+            "AND category IS NOT NULL AND category != '' "
+            "ORDER BY created_at DESC, id DESC LIMIT 1",
+            (did,),
+        ).fetchone()
         conn.execute(
             "UPDATE developments SET status = ?, updated_at = ? WHERE id = ?",
-            (category, now_iso(), did),
+            (latest["category"] if latest else category, now_iso(), did),
         )
     row = conn.execute("SELECT * FROM followups WHERE id = ?", (fid,)).fetchone()
     conn.commit()
@@ -2479,7 +2485,7 @@ def api_update_followup(handler, did, fid):
         latest = conn.execute(
             "SELECT category FROM followups WHERE development_id = ? "
             "AND category IS NOT NULL AND category != '' "
-            "ORDER BY id DESC LIMIT 1",
+            "ORDER BY created_at DESC, id DESC LIMIT 1",
             (did,),
         ).fetchone()
         # Created is the virgin/base status. Restore it when no follow-up
@@ -2514,7 +2520,7 @@ def api_delete_followup(handler, did, fid):
     latest = conn.execute(
         "SELECT category FROM followups WHERE development_id = ? "
         "AND category IS NOT NULL AND category != '' "
-        "ORDER BY id DESC LIMIT 1",
+        "ORDER BY created_at DESC, id DESC LIMIT 1",
         (did,),
     ).fetchone()
     # Created is the virgin/base status; restore it after the last follow-up
@@ -2536,7 +2542,8 @@ def api_list_followups(handler, did):
         conn.close()
         return json_response(handler, {"error": "not found"}, 404)
     rows = conn.execute(
-        "SELECT * FROM followups WHERE development_id = ? ORDER BY id DESC", (did,)
+        "SELECT * FROM followups WHERE development_id = ? "
+        "ORDER BY created_at DESC, id DESC", (did,)
     ).fetchall()
     conn.close()
     return json_response(handler, [_followup_row_to_payload(r) for r in rows])
