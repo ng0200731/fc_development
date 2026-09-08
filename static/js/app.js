@@ -3341,8 +3341,12 @@ function wireExtraParts(root, state, updateSaveState) {
             state.colorSides = next.colorSides;
             state.noOfColor = "";
             state.pantones = [];
+            state.colorWays = [];
           } else {
             state.colorSides = null;
+            // Persist ALL color ways (not just the first), or multi-way records
+            // would be silently reduced to one way on Save.
+            state.colorWays = Array.isArray(next.colorWays) ? next.colorWays : [];
             state.noOfColor = next.noOfColor;
             state.pantones = next.pantones;
           }
@@ -5329,18 +5333,20 @@ async function renderDevelopmentCreate() {
       return splitColorsValid(devState.colorSides);
     }
 
-    const n = parseInt(devState.noOfColor, 10);
-    if (!n || n < 1) return false;                       // no. of color required (>= 1)
-
-    if (n >= 1) {
-      // every shown Pantone row needs a non-trivial code (length must be > 1).
-      // Pantone #1 is shown as soon as no. of color >= 1, so it must be filled.
-      for (const p of devState.pantones) {
+    // Non-split: validate EVERY color way (not just the first). Each way must
+    // have no. of color >= 1 and every Pantone row filled with a code > 1 char.
+    const ways = (Array.isArray(devState.colorWays) && devState.colorWays.length)
+      ? devState.colorWays
+      : [{ noOfColor: devState.noOfColor, pantones: devState.pantones }];
+    return ways.every((way) => {
+      const n = parseInt(way.noOfColor, 10);
+      if (!n || n < 1) return false;                       // no. of color required (>= 1)
+      for (const p of (way.pantones || [])) {
         const v = (p && (p.value || "") || "").trim().length;
         if (v <= 1) return false;
       }
-    }
-    return true;
+      return true;
+    });
   };
 
   // Build the current record signature (the meaningful editable fields) so we
@@ -5358,6 +5364,10 @@ async function renderDevelopmentCreate() {
     no_of_color: devState.noOfColor ? Number(devState.noOfColor) : null,
     pantones: devState.pantones.filter((p) => p && p.value).map((p) => ({ value: p.value.trim(), color: p.color })),
     color_sides: isSplitColorProduct(devState.product) ? (devState.colorSides || null) : null,
+    color_ways: isSplitColorProduct(devState.product) ? [] : (devState.colorWays || []).map((w) => ({
+      noOfColor: w.noOfColor || "",
+      pantones: (w.pantones || []).map((p) => ({ value: (p.value || "").trim(), color: p.color })),
+    })),
     image_names: devState.images.map((i) => i.name).sort(),
     doc_names: devState.docs.map((d) => d.name).sort(),
   });
@@ -5375,6 +5385,10 @@ async function renderDevelopmentCreate() {
     no_of_color: devOriginal.no_of_color != null ? Number(devOriginal.no_of_color) : null,
     pantones: (devOriginal.pantones || []).map((p) => ({ value: (p.value || "").trim(), color: p.color })),
     color_sides: isSplitColorProduct(devOriginal.product_type) ? (devOriginal.color_sides || null) : null,
+    color_ways: isSplitColorProduct(devOriginal.product_type) ? [] : (devOriginal.color_ways || []).map((w) => ({
+      noOfColor: w.noOfColor || "",
+      pantones: (w.pantones || []).map((p) => ({ value: (p.value || "").trim(), color: p.color })),
+    })),
     image_names: (devOriginal.image_names || []).slice().sort(),
     doc_names: (devOriginal.doc_names || []).slice().sort(),
     material: devOriginal.material,
@@ -6135,6 +6149,10 @@ async function renderDevelopmentEdit() {
     no_of_color: devState.noOfColor ? Number(devState.noOfColor) : null,
     pantones: devState.pantones.filter((p) => p && p.value).map((p) => ({ value: p.value.trim(), color: p.color })),
     color_sides: isSplitColorProduct(devState.product) ? (devState.colorSides || null) : null,
+    color_ways: isSplitColorProduct(devState.product) ? [] : (devState.colorWays || []).map((w) => ({
+      noOfColor: w.noOfColor || "",
+      pantones: (w.pantones || []).map((p) => ({ value: (p.value || "").trim(), color: p.color })),
+    })),
     image_names: devState.images.map((i) => i.name).sort(),
     doc_names: devState.docs.map((d) => d.name).sort(),
     material: devState.material,
@@ -6157,6 +6175,10 @@ async function renderDevelopmentEdit() {
     color_sides: devOriginal.color_sides
       ? (typeof devOriginal.color_sides === "string" ? parseColorSidesString(devOriginal.color_sides) : devOriginal.color_sides)
       : null,
+    color_ways: isSplitColorProduct(devOriginal.product_type) ? [] : (devOriginal.color_ways || []).map((w) => ({
+      noOfColor: w.noOfColor || "",
+      pantones: (w.pantones || []).map((p) => ({ value: (p.value || "").trim(), color: p.color })),
+    })),
     image_names: (devOriginal.image_names || []).slice().sort(),
     doc_names: (devOriginal.doc_names || []).slice().sort(),
     material: devOriginal.material,

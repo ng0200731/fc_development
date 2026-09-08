@@ -1163,14 +1163,22 @@ def _scope_sql(sql, params):
     # Inject "WHERE workspace_id = ?" in a valid position: before an existing
     # WHERE, or before ORDER/GROUP/HAVING/LIMIT/OFFSET, or at the very end.
     if re.search(r"\bwhere\b", sql, re.I):
+        mw = re.search(r"\bwhere\b", sql, re.I)
+        # The injected predicate lands immediately before the existing WHERE.
+        # Its placeholder is the (N+1)-th where N = count of "?" already bound
+        # before that point (for UPDATE these are the SET values + updated_at).
+        # Inserting wid at index 0 would bind it to the FIRST placeholder and
+        # shift every column — so UPDATEs silently matched zero rows.
+        idx = sql[:mw.start()].count("?")
         sql = re.sub(r"\bwhere\b", "WHERE workspace_id=? AND ", sql, count=1, flags=re.I)
     else:
+        idx = 0
         m_tail = re.search(r"\b(order\s+by|group\s+by|having|limit|offset)\b", sql, re.I)
         if m_tail:
             sql = sql[:m_tail.start()] + "WHERE workspace_id=? " + sql[m_tail.start():]
         else:
             sql += " WHERE workspace_id=?"
-    params.insert(0, wid)
+    params.insert(idx, wid)
     return sql, tuple(params)
 
 def db():
@@ -1401,7 +1409,7 @@ def _dev_record_to_xlsx(d):
     docs = d.get("doc_names") or []
     headers = ["Company", "Member", "Item", "Product Type", "Image",
                "Documents", "Material", "Special",
-               "Height (mm)", "Width (mm)", "Remark",
+               "Height (mm)", "Width (mm)", "Color Details", "Remark",
                "Created", "Updated", "Details"]
     material = d.get("material")
     special = d.get("special")
@@ -1428,12 +1436,77 @@ def _dev_record_to_xlsx(d):
         _special_summary(special),
         "" if height is None else str(height),
         "" if width is None else str(width),
-        "\n".join(remake),
+        _color_details_summary(d),   # Part 3 (colors) detail, way/side per line
+        "\n".join(remake),           # Part 6 remarks
         d.get("created_at") or "",
         d.get("updated_at") or "",
         dev_details_summary(d),          # Details: size / colors summary
     ]
     return headers, cells, images
+
+
+def _color_details_summary(d):
+    """Full Part 3 (colors) detail for the export, one color-way/side per line.
+
+    Split-color products (screen print / printed label / hang tag) store colors
+    under `color_sides` (Front + Back); newer single-layout records use
+    `color_ways`; legacy records use no_of_color/pantones.
+    """
+    lines = []
+    sides = d.get("color_sides")
+    if sides and (sides.get("front") or sides.get("back")):
+        for label in ("front", "back"):
+            side = sides.get(label)
+            if not side:
+                continue
+            n = side.get("no_of_color")
+            cols = [(p.get("value") if isinstance(p, dict) else p)
+                    for p in (side.get("pantones") or []) if p]
+            if not n and not cols:
+                continue
+            try:
+                plural = int(n or 0) > 1
+            except (TypeError, ValueError):
+                plural = False
+            lines.append(
+                f"{label.capitalize()} {n or ''} color{'s' if plural else ''}"
+                + (f" ({', '.join(str(c) for c in cols)})" if cols else "")
+            )
+        return "\n".join(lines)
+    ways = d.get("color_ways")
+    if isinstance(ways, list) and ways:
+        out = []
+        for wi, w in enumerate(ways, start=1):
+            if not isinstance(w, dict):
+                continue
+            n = w.get("noOfColor") or w.get("no_of_color")
+            cols = [(p.get("value") if isinstance(p, dict) else p)
+                    for p in (w.get("pantones") or []) if p]
+            if not n and not cols:
+                continue
+            try:
+                plural = int(n or 0) > 1
+            except (TypeError, ValueError):
+                plural = False
+            out.append(
+                f"Way {wi}: {n or ''} color{'s' if plural else ''}"
+                + (f" ({', '.join(str(c) for c in cols)})" if cols else "")
+            )
+        if out:
+            return "\n".join(out)
+    n = d.get("no_of_color")
+    cols = [(p.get("value") if isinstance(p, dict) else p)
+            for p in (d.get("pantones") or []) if p]
+    if n or cols:
+        try:
+            plural = int(n or 0) > 1
+        except (TypeError, ValueError):
+            plural = False
+        return (
+            f"{n or ''} color{'s' if plural else ''}"
+            + (f" ({', '.join(str(c) for c in cols)})" if cols else "")
+        )
+    return ""
 
 
 def _material_summary(mat):
