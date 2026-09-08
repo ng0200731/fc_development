@@ -1190,6 +1190,60 @@ function highlightNav() {
   });
 }
 
+// Add HTML5 drag-and-drop reordering to a Settings / Options option list.
+// A clear grip (⋮⋮) on each item signals the rows are draggable. On drop the
+// whole current order is recomputed and handed to `getRef().persist` for the
+// reorder API call. Handlers are attached once per list; `getRef()` returns a
+// live object whose `values`/`persist` are rebound on every re-render.
+function installDragReorder(listEl, getRef) {
+  if (listEl.dataset.dragReady) return;
+  listEl.dataset.dragReady = "1";
+  let src = null;
+
+  listEl.addEventListener("dragstart", (e) => {
+    const grip = e.target.closest(".opt-grip");
+    if (!grip) return;
+    const item = grip.closest(".opt-item");
+    if (!item) return;
+    src = item;
+    item.classList.add("dragging");
+    e.dataTransfer.effectAllowed = "move";
+    e.dataTransfer.setData("text/plain", item.dataset.idx);
+  });
+  listEl.addEventListener("dragend", () => {
+    if (src) src.classList.remove("dragging");
+    src = null;
+    listEl.querySelectorAll(".opt-item").forEach((el) => el.classList.remove("drag-over"));
+  });
+  listEl.addEventListener("dragover", (e) => {
+    if (!src) return;
+    const item = e.target.closest(".opt-item");
+    if (!item) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "move";
+    listEl.querySelectorAll(".opt-item").forEach((el) => el.classList.remove("drag-over"));
+    item.classList.add("drag-over");
+  });
+  listEl.addEventListener("drop", async (e) => {
+    e.preventDefault();
+    if (!src) return;
+    const from = Number(src.dataset.idx);
+    const target = e.target.closest(".opt-item");
+    const to = target ? Number(target.dataset.idx) : null;
+    listEl.querySelectorAll(".opt-item").forEach((el) => el.classList.remove("drag-over", "dragging"));
+    src = null;
+    if (Number.isNaN(from) || to === null || from === to) return;
+
+    const state = getRef();
+    const values = state.values();
+    const [moved] = values.splice(from, 1);
+    values.splice(to, 0, moved);
+    try {
+      await state.persist(values);
+    } catch (_) { /* persist shows its own error */ }
+  });
+}
+
 // ---------------------------------------------------------------------------
 // Settings / Options — manage the dropdown option lists (DB-backed, shared per
 // level). Pick a level, pick which dropdown, then add / rename / delete /
@@ -1279,6 +1333,7 @@ async function renderSettingsOptions() {
   const addBtn = panel.querySelector("#opt-add");
   const msgEl = panel.querySelector("#opt-msg");
   const listEl = panel.querySelector("#opt-list");
+  const manageReorderRef = { values: () => [], persist: async () => {} };
 
   const scanBtn = panel.querySelector("#opt-scan");
   const scanLevelEl = panel.querySelector("#opt-scan-level");
@@ -1308,6 +1363,21 @@ async function renderSettingsOptions() {
 
   function renderList(level, name) {
     const values = opt(level, name);
+    manageReorderRef.values = () => opt(level, name).slice();
+    manageReorderRef.persist = async (orderedValues) => {
+      try {
+        await fetchJson(API + "/api/options/reorder", {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ level, name, orderedValues }),
+        });
+        await loadOptions();
+        renderList(level, name);
+      } catch (e) {
+        showMsg("Reorder failed: " + e.message, true);
+      }
+    };
+    installDragReorder(listEl, () => manageReorderRef);
     if (!values.length) {
       listEl.innerHTML = `<li class="opt-empty muted small">No options yet — add one above.</li>`;
       return;
@@ -1315,6 +1385,7 @@ async function renderSettingsOptions() {
     listEl.innerHTML = values
       .map((v, i) => `
         <li class="opt-item" data-value="${escapeHtml(v)}" data-idx="${i}">
+          <span class="opt-grip" draggable="true" title="Drag to reorder">⋮⋮</span>
           <button class="icon-btn opt-up" data-idx="${i}" title="Move up" ${i === 0 ? "disabled" : ""}>▲</button>
           <button class="icon-btn opt-down" data-idx="${i}" title="Move down" ${i === values.length - 1 ? "disabled" : ""}>▼</button>
           <span class="opt-value" data-idx="${i}" title="Click to rename">${escapeHtml(v)}</span>
@@ -1581,6 +1652,7 @@ async function renderSettingsOptions() {
 
   // --- Product type factory: per-type Fabric/Folding overrides ----------------
   const ptfProductEl = panel.querySelector("#ptf-product");
+  const ptfReorderRefs = {};
   const ptfProductTypes = opt("development", "product_type");
   ptfProductEl.innerHTML = ptfProductTypes
     .map((p) => `<option value="${escapeHtml(p)}">${escapeHtml(p)}</option>`)
@@ -1707,6 +1779,23 @@ async function renderSettingsOptions() {
     const product = ptfProductEl.value;
     const listEl = panel.querySelector(`[data-ptf-list="${cssEscape(kind)}"]`);
     if (!listEl) return;
+    ptfReorderRefs[kind] = {
+      values: () => ptfOrderedValues(kind),
+      persist: async (orderedValues) => {
+        try {
+          await fetchJson(API + "/api/product-type-factory/reorder", {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ product_type: product, kind, orderedValues }),
+          });
+          await loadProductTypeFactory();
+          ptfRenderList(kind);
+        } catch (e) {
+          ptfShowMsg(kind, "Reorder failed: " + (e.message || "unknown error"), true);
+        }
+      },
+    };
+    installDragReorder(listEl, () => ptfReorderRefs[kind]);
     const hintEl = panel.querySelector(`[data-ptf-hint="${cssEscape(kind)}"]`);
     const values = ptfValues(product, kind);
     const globalVals = opt("development", kind);
@@ -1717,6 +1806,7 @@ async function renderSettingsOptions() {
       listEl.innerHTML = values
         .map((v, i) => `
           <li class="opt-item" data-ptf-id="${v.id}" data-idx="${i}">
+            <span class="opt-grip" draggable="true" title="Drag to reorder">⋮⋮</span>
             <button class="icon-btn opt-up" data-idx="${i}" title="Move up" ${i === 0 ? "disabled" : ""}>▲</button>
             <button class="icon-btn opt-down" data-idx="${i}" title="Move down" ${i === values.length - 1 ? "disabled" : ""}>▼</button>
             <span class="opt-value" data-idx="${i}" title="Click to rename">${escapeHtml(v.value)}</span>

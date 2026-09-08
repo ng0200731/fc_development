@@ -1487,6 +1487,13 @@ select:focus-visible,
   box-shadow: var(--shadow-sm); }
 .opt-item .opt-value { flex: 1; cursor: pointer; font-weight: 500; color: var(--text-soft); }
 .opt-item .opt-value:hover { color: var(--accent); text-decoration: underline; }
+.opt-grip { cursor: grab; color: var(--muted); font-weight: 700; letter-spacing: 1px;
+  user-select: none; -webkit-user-select: none; touch-action: none; display: inline-flex;
+  padding: 2px 4px; border-radius: 4px; }
+.opt-grip:hover { color: var(--accent); background: var(--bg); }
+.opt-grip:active { cursor: grabbing; }
+.opt-item.dragging { opacity: .55; border-style: dashed; }
+.opt-item.drag-over { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
 .opt-empty { padding: 10px 12px; border: 1px dashed var(--border-strong); border-radius: var(--radius-sm);
   background: var(--bg); }
 .opt-rename-input { flex: 1; font: inherit; padding: 6px 8px; border: 1px solid var(--accent);
