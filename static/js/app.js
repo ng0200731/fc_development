@@ -6710,8 +6710,11 @@ function paintDevelopmentView() {
     const remarkArr = Array.isArray(r.remake) ? r.remake
       : (typeof r.remake === "string" && r.remake ? safeJsonParse(r.remake) : []) || [];
     const remarkCell = (remarkArr && remarkArr.length)
-      ? `<ul class="remake-list compact">` + remarkArr.map((n) =>
-          `<li>${escapeHtml(n)}</li>`).join("") + `</ul>`
+      ? `<ul class="remake-list compact">` + remarkArr.map((n) => {
+          const full = String(n || "");
+          const shown = full.length > 10 ? full.slice(0, 10) + "..." : full;
+          return `<li title="${escapeHtml(full)}">${escapeHtml(shown)}</li>`;
+        }).join("") + `</ul>`
       : `<span class="muted">—</span>`;
     return `
       <tr class="${checked ? "selected" : ""}">
@@ -6959,7 +6962,80 @@ async function deleteDevelopment(id) {
   );
 }
 
-// Clicking a Development status opens a two-column history popup: "Status" and
+// Printable report for the complete status history, from creation through the
+// latest follow-up. The generated HTML keeps document links clickable and can
+// be printed directly to PDF from the browser.
+function openStatusHistoryReport(rec, followups) {
+  const absolute = (path) => path ? new URL(path, window.location.href).href : "";
+  const list = (value) => Array.isArray(value) ? value : [];
+  const images = (value) => {
+    const items = list(value);
+    if (!items.length) return '<span class="muted">—</span>';
+    return items.map((name) => {
+      const src = absolute(assetUrl(name));
+      return src ? `<img class="history-image" src="${escapeHtml(src)}" alt="${escapeHtml(displayName(name))}" />` : "";
+    }).join("") || '<span class="muted">—</span>';
+  };
+  const documents = (value) => {
+    const items = list(value);
+    if (!items.length) return '<span class="muted">—</span>';
+    return items.map((name) => `<div><a href="${escapeHtml(absolute(docUrl(name)))}" target="_blank" rel="noopener" download>${escapeHtml(displayName(name))}</a></div>`).join("");
+  };
+  const rows = [{
+    team: rec.member_name || "—", status: "Created", time: rec.created_at || "—",
+    note: "", image_names: rec.image_names, doc_names: rec.doc_names,
+  }, ...(Array.isArray(followups) ? followups : []).map((f) => ({
+    team: rec.member_name || "—", status: f.category || "—", time: f.created_at || "—",
+    note: f.note || "", image_names: f.image_names, doc_names: f.doc_names,
+  }))];
+  const body = rows.map((row, i) => `<tr>
+    <td>${i + 1}</td><td>${escapeHtml(row.team)}</td><td>${escapeHtml(row.status)}</td>
+    <td>${escapeHtml(row.time)}</td><td>${row.note ? escapeHtml(row.note) : '<span class="muted">—</span>'}</td>
+    <td class="image-cell">${images(row.image_names)}</td><td>${documents(row.doc_names)}</td>
+  </tr>`).join("");
+  const title = `Status History — ${rec.item_name || "Development"}`;
+  const html = `<!doctype html><html lang="en"><head><meta charset="utf-8" />
+<title>${escapeHtml(title)}</title><style>
+*{box-sizing:border-box}body{margin:24px;color:#172033;font:14px/1.45 Arial,sans-serif}
+h1{margin:0 0 4px;font-size:22px}.meta{margin:0 0 16px;color:#5d687a}
+.toolbar{margin-bottom:14px}.print-btn{padding:7px 12px;border:1px solid #b8c3d5;border-radius:6px;background:#fff;cursor:pointer;font:inherit}
+table{width:100%;border-collapse:collapse;table-layout:fixed}th,td{border:1px solid #cbd3df;padding:7px 8px;text-align:left;vertical-align:top;overflow-wrap:anywhere}th{background:#eef2f7}
+th:nth-child(1){width:5%}th:nth-child(2){width:13%}th:nth-child(3){width:14%}th:nth-child(4){width:16%}th:nth-child(5){width:22%}th:nth-child(6){width:15%}th:nth-child(7){width:15%}
+.image-cell{display:flex;flex-wrap:wrap;gap:6px}.history-image{max-width:100px;max-height:72px;object-fit:contain;border:1px solid #d7deea;border-radius:3px;cursor:zoom-in}
+.img-overlay{position:fixed;inset:0;background:rgba(10,15,25,.74);display:flex;align-items:center;justify-content:center;z-index:1000}
+.img-overlay-box{position:relative;background:#fff;padding:10px;border-radius:7px;box-shadow:0 10px 40px rgba(0,0,0,.5);display:flex}
+.img-overlay-box img{max-width:88vw;max-height:88vh;object-fit:contain}
+.img-overlay-close{position:absolute;top:-14px;right:-14px;width:30px;height:30px;border-radius:50%;border:0;background:#fff;cursor:pointer;font-size:16px;line-height:1;box-shadow:0 2px 8px rgba(0,0,0,.4)}
+a{color:#185abc;text-decoration:underline}.muted{color:#7b8798}@media print{.no-print{display:none!important;}.img-overlay{display:none!important}body{margin:10mm}}
+</style></head><body><h1>${escapeHtml(title)}</h1>
+<p class="meta">Company: ${escapeHtml(rec.company_name || "—")} · Team: ${escapeHtml(rec.member_name || "—")}</p>
+<div class="toolbar no-print"><button class="print-btn" type="button" onclick="window.print()">🖨 Export PDF</button></div>
+<table><thead><tr><th>#</th><th>Team</th><th>Status</th><th>Created time</th><th>Note</th><th>Image</th><th>Document</th></tr></thead><tbody>${body}</tbody></table>
+<script>
+function reportImage(src, alt) {
+  var o = document.createElement('div');
+  o.className = 'img-overlay';
+  o.innerHTML = '<div class="img-overlay-box"><button class="img-overlay-close" type="button" title="Close">&#10005;</button><img src="' + src + '" alt="' + alt + '"/></div>';
+  document.body.appendChild(o);
+  o.querySelector('.img-overlay-close').addEventListener('click', function () { o.remove(); });
+}
+document.addEventListener('click', function (e) {
+  var t = e.target;
+  if (t && t.classList && t.classList.contains('history-image')) reportImage(t.src, t.alt || '');
+});
+</script>
+</body></html>`;
+  const report = window.open("", "_blank");
+  if (!report) {
+    openConfirmModal("Export blocked", "Allow pop-ups to open the printable status history report.", () => {});
+    return;
+  }
+  report.document.open();
+  report.document.write(html);
+  report.document.close();
+  report.focus();
+}
+
 // "Created time". The initial "Created" row and one row per Follow Up are
 // listed; clicking a Follow Up row opens the read-only detail popup.
 // The popup keeps a refresh hook (module-level) so the Edit/Save flow can
@@ -6995,6 +7071,7 @@ async function openFollowUpHistory(devId) {
         <tbody id="fu-history-body"></tbody>
       </table>
       <div class="actions modal-actions">
+        <button class="btn ghost" type="button" id="fu-history-export" title="Open a printable overview of the full status history">⬇ Overview</button>
         <button class="icon-btn" type="button" id="fu-history-followup" title="Follow Up" aria-label="Follow Up">📌</button>
         <button class="btn primary" type="button" id="fu-history-close">Close</button>
       </div>
@@ -7004,6 +7081,7 @@ async function openFollowUpHistory(devId) {
   const close = () => { if (fuHistoryRefresh === refresh) fuHistoryRefresh = null; overlay.remove(); };
   overlay.querySelector("#fu-history-close").addEventListener("click", close);
   overlay.querySelector("#fu-history-followup").addEventListener("click", () => openFollowUpModal(devId));
+  overlay.querySelector("#fu-history-export").addEventListener("click", () => openStatusHistoryReport(rec, followups));
 
   // Rows: the development's initial creation, then one per Follow Up.
   const render = () => {
