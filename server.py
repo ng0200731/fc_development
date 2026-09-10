@@ -1457,9 +1457,40 @@ def _color_details_summary(d):
     if sides and (sides.get("front") or sides.get("back")):
         for label in ("front", "back"):
             side = sides.get(label)
-            if not side:
+            if not isinstance(side, dict):
                 continue
-            n = side.get("no_of_color")
+            # Current split-color records store the shared color count and
+            # Pantone values in one entry per color way. Keep every way in the
+            # export instead of falling back to one deduplicated side summary.
+            ways = side.get("ways")
+            if isinstance(ways, str):
+                try:
+                    ways = json.loads(ways)
+                except (json.JSONDecodeError, TypeError):
+                    ways = None
+            if ways is None:
+                ways = side.get("colorWays")
+            if isinstance(ways, list) and ways:
+                for wi, way in enumerate(ways, start=1):
+                    if not isinstance(way, dict):
+                        continue
+                    n = way.get("noOfColor") or way.get("no_of_color")
+                    cols = [(p.get("value") if isinstance(p, dict) else p)
+                            for p in (way.get("pantones") or []) if p]
+                    if not n and not cols:
+                        continue
+                    try:
+                        plural = int(n or 0) > 1
+                    except (TypeError, ValueError):
+                        plural = False
+                    lines.append(
+                        f"{label.capitalize()} Way {wi}: {n or ''} color{'s' if plural else ''}"
+                        + (f" ({', '.join(str(c) for c in cols)})" if cols else "")
+                    )
+                continue
+
+            # Legacy split records used flat snake_case fields.
+            n = side.get("noOfColor") or side.get("no_of_color")
             cols = [(p.get("value") if isinstance(p, dict) else p)
                     for p in (side.get("pantones") or []) if p]
             if not n and not cols:

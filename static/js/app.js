@@ -8204,10 +8204,25 @@ async function openDevEditModal(id) {
       no_of_color: isSplitColorProduct(product_type) ? null : overlay.querySelector("#ed-nocolor").value || null,
       pantones: isSplitColorProduct(product_type) ? [] : (rec.pantones || []),
       color_ways: isSplitColorProduct(product_type) ? [] : (Array.isArray(rec.color_ways) ? rec.color_ways : []),
-      color_sides: isSplitColorProduct(product_type) ? {
-        front: { ...((rec.color_sides && rec.color_sides.front) || {}), noOfColor: overlay.querySelector("#ed-nocolor-front")?.value || "", pantones: (rec.color_sides && rec.color_sides.front && rec.color_sides.front.pantones) || [] },
-        back: { ...((rec.color_sides && rec.color_sides.back) || {}), noOfColor: overlay.querySelector("#ed-nocolor-back")?.value || "", pantones: (rec.color_sides && rec.color_sides.back && rec.color_sides.back.pantones) || [] },
-      } : null,
+      color_sides: isSplitColorProduct(product_type) ? (() => {
+        const existingSides = rec.color_sides || {};
+        const makeSide = (label, inputId) => {
+          const existing = existingSides[label] || {};
+          // The legacy edit modal has no controls for multiple color ways. If
+          // the saved record already has `ways`, preserve every way instead of
+          // replacing it with the old flat noOfColor/pantones fields.
+          if (Array.isArray(existing.ways)) return { ...existing };
+          return {
+            ...existing,
+            noOfColor: overlay.querySelector(inputId)?.value || "",
+            pantones: existing.pantones || [],
+          };
+        };
+        return {
+          front: makeSide("front", "#ed-nocolor-front"),
+          back: makeSide("back", "#ed-nocolor-back"),
+        };
+      })() : null,
       image_names: editImages.map((i) => i.name),
       doc_names: editDocs.map((d) => d.name),
       material: (isScreenPrintProduct(product_type) || hasProductTypeFactory(product_type) || usesFactoryOnlyMaterial(product_type)) ? {
