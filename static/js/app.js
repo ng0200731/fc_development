@@ -647,33 +647,51 @@ function renderColorSide(container, side, onChange) {
   };
   const syncWay = (way) => {
     const n = parseInt(way.noOfColor, 10);
-    if (n > 0) { while (way.pantones.length < n) way.pantones.push({value:"", color:"#000000"}); way.pantones.length = n; }
+    if (Number.isNaN(n)) return;                      // blank while typing — leave rows
+    if (n > 0) { while (way.pantones.length < n) way.pantones.push({value:"", color:"#000000"}); }
+    way.pantones.length = n;                          // also truncate (n=0 → clear rows)
   };
 
   const render = () => {
+    const hasColor = parseInt(ways[0] && ways[0].noOfColor, 10) > 0;
     container.innerHTML = `
-      <div class="field cs-way-count-field">
-        <label>No. of color way</label>
-        <input type="number" min="1" step="1" class="cs-way-count" value="${escapeHtml(String(ways.length || ""))}" autocomplete="off" />
+      <div class="field cs-count-field">
+        <label>No. of color</label>
+        <input type="number" min="0" step="1" class="cs-count" value="${escapeHtml((ways[0] && ways[0].noOfColor) || "")}" autocomplete="off" />
+      </div>
+      <div class="field cs-way-count-field ${hasColor ? "" : "dimmed"}">
+        <label># of color way</label>
+        <input type="number" min="1" step="1" class="cs-way-count" value="${escapeHtml(String(ways.length || 1))}" autocomplete="off" ${hasColor ? "" : "disabled"} />
       </div>
       ${ways.map((way, wi) => {
         syncWay(way);
         const rows = (parseInt(way.noOfColor, 10) > 0 ? way.pantones : []).map((p, i) => colorPantoneRowHtml(wi + "-" + i, i + 1, p, p.value ? matchSinglePantone(p.value) : null)).join("");
-        return `<div class="color-way" data-way="${wi}"><div class="field"><label>No. of color · Way ${wi + 1}</label><input type="number" min="1" step="1" class="cs-nocolor" value="${escapeHtml(way.noOfColor || "")}" /></div><div class="cs-pantone-wrap">${rows}</div></div>`;
+        return `<div class="color-way" data-way="${wi}"><h4 class="cs-way-title">Way ${wi + 1}</h4><div class="cs-pantone-wrap">${rows}</div></div>`;
       }).join("")}`;
 
+    // "No. of color" is the single shared color count for this side. It supports
+    // 0: when 0, collapse to one empty way and leave "# of color way" disabled.
+    const countEl = container.querySelector(".cs-count");
+    countEl.addEventListener("input", (e) => {
+      const v = e.target.value;
+      const isZero = !v || parseInt(v, 10) <= 0;
+      if (isZero) {
+        ways.length = 1;
+        ways[0].noOfColor = v || "";
+        ways[0].pantones = [];
+      } else {
+        ways.forEach((w) => { w.noOfColor = v; syncWay(w); });
+      }
+      render();
+      onChange && onChange();
+    });
+
+    // "# of color way" — how many Pantone blocks to create (only when colors exist).
     const nc = container.querySelector(".cs-way-count");
     nc.addEventListener("input", () => { setWays(nc.value); render(); onChange && onChange(); });
 
     container.querySelectorAll(".color-way").forEach((block, wi) => {
       const way = ways[wi];
-      block.querySelector(".cs-nocolor").addEventListener("input", e => {
-        // Every color way in a set uses the same number of colors. Keep the
-        // Pantone count and the visible No. of color inputs synchronized.
-        ways.forEach((w) => { w.noOfColor = e.target.value; });
-        render();
-        onChange && onChange();
-      });
       block.querySelectorAll(".pantone-input").forEach(inp => {
         const i = Number(inp.dataset.idx.split("-").pop());
         const match = inp.parentElement.querySelector(".pantone-match");
@@ -989,12 +1007,21 @@ const splitColorsValid = (sides) => {
   let allEnteredValid = true;
   for (const side of [sides.front, sides.back]) {
     if (!side) continue;
-    const n = parseInt(side.noOfColor, 10);
-    if (n > 0) total += n;
-    for (const p of (side.pantones || [])) {
-      const v = (p && (p.value || "") || "").trim().length;
-      // An entered stub (exactly 1 char) is invalid; empty rows are allowed.
-      if (v > 0 && v <= 1) allEnteredValid = false;
+    // Colors may be stored flat ({noOfColor, pantones}) or nested as color
+    // ways ({ways:[{noOfColor, pantones}]}). Mirror refreshDevColorsBadge and
+    // aggregate over whichever holds the data, so fresh split-product entries
+    // (which render the colors inside `ways`) still pass validation.
+    const groups = (Array.isArray(side.ways) && side.ways.length)
+      ? side.ways
+      : [{ noOfColor: side.noOfColor, pantones: side.pantones }];
+    for (const g of groups) {
+      const n = parseInt(g.noOfColor, 10);
+      if (n > 0) total += n;
+      for (const p of (g.pantones || [])) {
+        const v = (p && (p.value || "") || "").trim().length;
+        // An entered stub (exactly 1 char) is invalid; empty rows are allowed.
+        if (v > 0 && v <= 1) allEnteredValid = false;
+      }
     }
   }
   return total >= 1 && allEnteredValid;   // at least 1 color total
@@ -4972,12 +4999,13 @@ async function renderDevelopmentCreate() {
       <button class="btn ghost" id="dev-dummy" type="button">Dummy</button>
       <button class="btn primary" id="dev-save" type="button" disabled>Save</button>
     </div>
+    <div class="dev-save-hint" id="dev-save-hint" hidden></div>
 
     <div class="dev-2col">
       <div class="dev-col-left">
       <!-- Parts 1 + 2 + 3 stacked in one card -->
       <div class="dev-part" id="dev-main">
-        <h3 class="subhead part-head">
+        <h3 class="subhead part-head" id="dev-part1-head">
           1 · Company &amp; Member
           <button class="icon-btn" id="dev-refresh" type="button" title="Refresh customer database">⟳</button>
         </h3>
@@ -5008,7 +5036,7 @@ async function renderDevelopmentCreate() {
           </select>
         </div>
 
-        <h3 class="subhead">2 · Item &amp; Product Type</h3>
+        <h3 class="subhead" id="dev-part2-head">2 · Item &amp; Product Type</h3>
         <div class="dim-row">
           <div class="field">
             <label for="dev-item">Item name</label>
@@ -5037,7 +5065,7 @@ async function renderDevelopmentCreate() {
 
       <!-- 3 (colors) pill button, opened like Material -->
       <div class="dev-part dev-part-extra" id="dev-colors-part">
-        <h3 class="subhead part-head">3 · Colors / Pantone</h3>
+        <h3 class="subhead part-head" id="dev-part3-head">3 · Colors / Pantone</h3>
         <div class="field">
           <button type="button" class="pill-btn" id="dev-colors-btn">
             Color details <span class="pill-badge" id="dev-colors-badge">TBA</span>
@@ -5075,7 +5103,7 @@ async function renderDevelopmentCreate() {
       <div class="dev-col-right">
       <!-- 7th part: image + documents. -->
       <div class="dev-part" id="dev-part4">
-        <h3 class="subhead">7 · Image <span class="req-mark">required</span></h3>
+        <h3 class="subhead" id="dev-part7-head">7 · Image <span class="req-mark">required</span></h3>
 
         <div class="dropzone" id="dev-image-drop" tabindex="0">
           <div class="drop-region">
@@ -5419,18 +5447,9 @@ async function renderDevelopmentCreate() {
   //   • When No. of color >= 1, every Pantone row must have a code of length > 1
   //     (reject single-char stubs).
   const part3Valid = () => {
-    // Split-color products require BOTH Front and Back sides to be valid.
-    // Other product types keep the single No. of color + Pantone-row validation.
-    if (isSplitColorProduct(devState.product)) {
-      return splitColorsValid(devState.colorSides);
-    }
-
-    // Non-split: validate EVERY color way (not just the first). Each way must
-    // have no. of color >= 1 and every Pantone row filled with a code > 1 char.
-    const ways = (Array.isArray(devState.colorWays) && devState.colorWays.length)
-      ? devState.colorWays
-      : [{ noOfColor: devState.noOfColor, pantones: devState.pantones }];
-    return ways.every((way) => {
+    // Validate every color way (each way needs no. of color >= 1 and every
+    // Pantone row filled with a code > 1 char). Empty/stub codes reject.
+    const colorWaysValid = (ways) => ways.every((way) => {
       const n = parseInt(way.noOfColor, 10);
       if (!n || n < 1) return false;                       // no. of color required (>= 1)
       for (const p of (way.pantones || [])) {
@@ -5439,6 +5458,25 @@ async function renderDevelopmentCreate() {
       }
       return true;
     });
+
+    // Split-color products (screen print / printed / hang tag) validate the
+    // Front/Back color sides. Colors entered while the product type was not yet
+    // a split product may live in the flat colorWays instead — accept that too
+    // so Save is gated only on "does the record actually have valid colors", no
+    // matter which store the popup wrote to.
+    if (isSplitColorProduct(devState.product)) {
+      if (devState.colorSides) return splitColorsValid(devState.colorSides);
+      const ways = (Array.isArray(devState.colorWays) && devState.colorWays.length)
+        ? devState.colorWays
+        : [{ noOfColor: devState.noOfColor, pantones: devState.pantones }];
+      return colorWaysValid(ways);
+    }
+
+    // Non-split: validate EVERY color way (not just the first).
+    const ways = (Array.isArray(devState.colorWays) && devState.colorWays.length)
+      ? devState.colorWays
+      : [{ noOfColor: devState.noOfColor, pantones: devState.pantones }];
+    return colorWaysValid(ways);
   };
 
   // Build the current record signature (the meaningful editable fields) so we
@@ -5501,13 +5539,59 @@ async function renderDevelopmentCreate() {
     const hasImage = devState.images.length >= 1;
     const heightOk = !!(devState.height && !Number.isNaN(Number(devState.height)) && Number(devState.height) >= 0);
     const widthOk  = !!(devState.width  && !Number.isNaN(Number(devState.width))  && Number(devState.width)  >= 0);
+    const part3Good = part3Valid();
     const allFilled = hiddenEl.value !== "" && memberEl.value !== "" &&
                       devState.item && devState.product &&
                       heightOk && widthOk &&
-                      part3Valid() && hasImage;
+                      part3Good && hasImage;
     const canSave = allFilled;
     saveBtn.disabled = !canSave;
     saveBtn.classList.toggle("active", canSave);
+
+    // Copyable debug hint — lists exactly which required field is still unmet,
+    // so a locked Save button always explains itself. Only while Save is off.
+    const hint = panel.querySelector("#dev-save-hint");
+    if (hint) {
+      if (canSave) {
+        hint.hidden = true;
+      } else {
+        const unmet = [];
+        if (hiddenEl.value === "") unmet.push("company");
+        if (memberEl.value === "") unmet.push("member");
+        if (!devState.item) unmet.push("item name");
+        if (!devState.product) unmet.push("product type");
+        if (!heightOk) unmet.push("height");
+        if (!widthOk) unmet.push("width");
+        if (!part3Good) unmet.push("colors/Pantone (part 3)");
+        if (!hasImage) unmet.push("image (part 7)");
+        // Detailed Part 3 diagnostic so a locked Save can always explain itself.
+        const cs = devState.colorSides;
+        let p3 = "product=" + (devState.product || "(none)") +
+          " split=" + isSplitColorProduct(devState.product) +
+          " colorSides=" + (cs ? "yes" : "null") +
+          " front.noOfColor=" + (cs && cs.front && cs.front.noOfColor) +
+          " front.ways=" + (cs && cs.front && Array.isArray(cs.front.ways) ? cs.front.ways.length : "none") +
+          " back.noOfColor=" + (cs && cs.back && cs.back.noOfColor) +
+          " back.ways=" + (cs && cs.back && Array.isArray(cs.back.ways) ? cs.back.ways.length : "none") +
+          " colorWays=" + (Array.isArray(devState.colorWays) ? devState.colorWays.length : "n/a") +
+          " part3Valid=" + part3Good;
+        hint.textContent = "Save disabled — missing required: " +
+          (unmet.length ? unmet.join(", ") : "unknown") +
+          ". " + p3 + ".";
+        hint.hidden = false;
+      }
+    }
+
+    // Highlight (red) each required Part heading whose content is still missing.
+    // Part 4 Material, Part 5 Special, Part 6 Remark are optional — never flagged.
+    const setPartWarn = (id, on) => {
+      const h = id && panel.querySelector(id);
+      if (h) h.classList.toggle("part-req-missing", !!on);
+    };
+    setPartWarn("#dev-part1-head", hiddenEl.value === "" || memberEl.value === "");
+    setPartWarn("#dev-part2-head", !devState.item || !devState.product || !heightOk || !widthOk);
+    setPartWarn("#dev-part3-head", !part3Good);
+    setPartWarn("#dev-part7-head", !hasImage);
   };
 
   // initial unlock check (covers restored state on tab switch)
@@ -5821,7 +5905,7 @@ async function renderDevelopmentEdit() {
           </select>
         </div>
 
-        <h3 class="subhead">2 · Item &amp; Product Type</h3>
+        <h3 class="subhead" id="dev-part2-head">2 · Item &amp; Product Type</h3>
         <div class="dim-row">
           <div class="field">
             <label for="dev-item">Item name</label>
@@ -5850,7 +5934,7 @@ async function renderDevelopmentEdit() {
 
       <!-- 3 (colors) pill button, opened like Material -->
       <div class="dev-part dev-part-extra" id="dev-colors-part">
-        <h3 class="subhead part-head">3 · Colors / Pantone</h3>
+        <h3 class="subhead part-head" id="dev-part3-head">3 · Colors / Pantone</h3>
         <div class="field">
           <button type="button" class="pill-btn" id="dev-colors-btn">
             Color details <span class="pill-badge" id="dev-colors-badge">TBA</span>
@@ -5888,7 +5972,7 @@ async function renderDevelopmentEdit() {
       <div class="dev-col-right">
       <!-- 7th part: image + documents. -->
       <div class="dev-part" id="dev-part4">
-        <h3 class="subhead">7 · Image <span class="req-mark">required</span></h3>
+        <h3 class="subhead" id="dev-part7-head">7 · Image <span class="req-mark">required</span></h3>
 
         <div class="dropzone" id="dev-image-drop" tabindex="0">
           <div class="drop-region">
@@ -6210,9 +6294,21 @@ async function renderDevelopmentEdit() {
   //   • When No. of color >= 1, every Pantone row must have a code of length > 1
   //     (reject single-char stubs).
   const part3Valid = () => {
-    // Split-color products require BOTH Front and Back sides to be valid.
+    // Split-color products require both Front/Back sides (or a flat colorWays
+    // fallback if the colors were entered before the product resolved to split).
     if (isSplitColorProduct(devState.product)) {
-      return splitColorsValid(devState.colorSides);
+      if (devState.colorSides) return splitColorsValid(devState.colorSides);
+      const ways = (Array.isArray(devState.colorWays) && devState.colorWays.length)
+        ? devState.colorWays
+        : [{ noOfColor: devState.noOfColor, pantones: devState.pantones }];
+      return ways.every((way) => {
+        const wn = parseInt(way.noOfColor, 10);
+        if (!wn || wn < 1) return false;
+        for (const p of (way.pantones || [])) {
+          if (((p && (p.value || "")) || "").trim().length <= 1) return false;
+        }
+        return true;
+      });
     }
 
     const n = parseInt(devState.noOfColor, 10);

@@ -497,6 +497,13 @@ select:focus-visible,
   font-size: 14px;
   flex: 0 0 auto;
 }
+/* Part heading whose required content is still missing (Save locked) */
+.dev-part .subhead.part-req-missing {
+  color: var(--destructive);
+}
+.dev-part .subhead.part-req-missing .icon-btn {
+  color: inherit;
+}
 /* "required" / "optional" markers on part headings */
 .req-mark {
   font-size: 10px;
@@ -1355,6 +1362,11 @@ select:focus-visible,
 .color-way .cs-pantone-wrap { margin-top: 4px; }
 .cs-way-count-field label { font-weight: 600; }
 .cs-way-count-field input { width: 120px; }
+.cs-count-field label { font-weight: 600; }
+.cs-count-field input { width: 120px; }
+.cs-way-title { font-size: 13px; font-weight: 600; color: var(--text-soft); margin: 0 0 6px; }
+.cs-way-count-field.dimmed { opacity: .45; }
+.cs-way-count-field.dimmed input { cursor: not-allowed; }
 .color-way .cs-nocolor { width: 90px; }
 @media (max-width: 560px) {
   .color-sides { grid-template-columns: 1fr; }
