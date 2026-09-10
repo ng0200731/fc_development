@@ -3111,108 +3111,110 @@ async function fillDummyEnquiry(ctx) {
 // Wire the Part 4 (Material) / Part 5 (Special) popup buttons and the Part 6
 // (Remark) list editor. `state` is the active devState (Create or Edit);
 // `updateSaveState` re-evaluates Save/Update gating after a remark change.
-function wireExtraParts(root, state, updateSaveState) {
-  // Build the extra-list (non fabric/folding) <select> blocks for a product type.
-  // `cur` is the saved material object; `cur.lists` holds selections by list name.
-  function materialExtraListFields(product, cur) {
-    const extra = listsForProduct(product).filter((k) => k !== "fabric" && k !== "folding");
-    if (!extra.length) return "";
-    const lists = (cur && cur.lists) || {};
-    return extra.map((kind) => {
-      const value = lists[kind] || "";
-      // Use the RAW kind as the DOM id/name value (an HTML id may contain
-      // spaces). cssEscape() is only for building CSS selectors — if it's baked
-      // into the id attribute itself, the backslash it inserts for spaces/other
-      // chars never round-trips through querySelector, so multi-word list names
-      // (e.g. "Raised Height") could never be read back. Selectors are escaped
-      // separately in materialExtraListValues below.
-      const id = "mat-" + kind;
-      const idAttr = escapeHtml(id);
-      const label = escapeHtml(kind[0].toUpperCase() + kind.slice(1));
-      const type = listKindInputType(product, kind);
-      if (type === "radio") {
-        const opts = listOptionsFor(product, kind, value);
-        if (!opts.length) {
-          // No options configured for this radio kind — fall back to a free-
-          // text input so the field is still usable until options are added.
-          return `
-            <div class="field">
-              <label for="${idAttr}">${label}</label>
-              <input id="${idAttr}" type="text" autocomplete="off" value="${escapeHtml(value)}" placeholder="(add options in Settings)"/>
-            </div>`;
-        }
-        return `
-          <div class="field">
-            <label class="radio-label">${label}</label>
-            <div class="radio-row" id="${escapeHtml(id + "-row")}">
-              ${opts.map((o) => `
-                <label class="radio-opt">
-                  <input type="radio" name="${idAttr}" value="${escapeHtml(o)}" ${value === o ? "checked" : ""}/> ${escapeHtml(o)}
-                </label>`).join("")}
-            </div>
-          </div>`;
-      }
-      if (type === "textarea") {
+// Build the extra-list (non fabric/folding) <select> blocks for a product type.
+// `cur` is the saved material object; `cur.lists` holds selections by list
+// name. Module-level so both the Create/Edit wiring and the Development / View
+// mass-update modal share exactly the same product-type-aware Material form.
+function materialExtraListFields(product, cur) {
+  const extra = listsForProduct(product).filter((k) => k !== "fabric" && k !== "folding");
+  if (!extra.length) return "";
+  const lists = (cur && cur.lists) || {};
+  return extra.map((kind) => {
+    const value = lists[kind] || "";
+    // Use the RAW kind as the DOM id/name value (an HTML id may contain
+    // spaces). cssEscape() is only for building CSS selectors — if it's baked
+    // into the id attribute itself, the backslash it inserts for spaces/other
+    // chars never round-trips through querySelector, so multi-word list names
+    // (e.g. "Raised Height") could never be read back. Selectors are escaped
+    // in materialExtraListValues below.
+    const id = "mat-" + kind;
+    const idAttr = escapeHtml(id);
+    const label = escapeHtml(kind[0].toUpperCase() + kind.slice(1));
+    const type = listKindInputType(product, kind);
+    if (type === "radio") {
+      const opts = listOptionsFor(product, kind, value);
+      if (!opts.length) {
+        // No options configured for this radio kind — fall back to a free-
+        // text input so the field is still usable until options are added.
         return `
           <div class="field">
             <label for="${idAttr}">${label}</label>
-            <textarea id="${idAttr}" rows="3" placeholder="…">${escapeHtml(value)}</textarea>
+            <input id="${idAttr}" type="text" autocomplete="off" value="${escapeHtml(value)}" placeholder="(add options in Settings)"/>
           </div>`;
       }
-      if (type === "text") {
-        return `
-          <div class="field">
-            <label for="${idAttr}">${label}</label>
-            <input id="${idAttr}" type="text" autocomplete="off" value="${escapeHtml(value)}" placeholder="…"/>
-          </div>`;
-      }
-      // default: dropdown (existing behavior)
+      return `
+        <div class="field">
+          <label class="radio-label">${label}</label>
+          <div class="radio-row" id="${escapeHtml(id + "-row")}">
+            ${opts.map((o) => `
+              <label class="radio-opt">
+                <input type="radio" name="${idAttr}" value="${escapeHtml(o)}" ${value === o ? "checked" : ""}/> ${escapeHtml(o)}
+              </label>`).join("")}
+          </div>
+        </div>`;
+    }
+    if (type === "textarea") {
       return `
         <div class="field">
           <label for="${idAttr}">${label}</label>
-          <select id="${idAttr}">
-            <option value="">— select —</option>
-            ${listOptionsFor(product, kind, value).map((f) =>
-              `<option value="${escapeHtml(f)}" ${value === f ? "selected" : ""}>${escapeHtml(f)}</option>`).join("")}
-          </select>
+          <textarea id="${idAttr}" rows="3" placeholder="…">${escapeHtml(value)}</textarea>
         </div>`;
-    }).join("");
-  }
-
-  function materialExtraListValues(overlay, product, cur) {
-    const extra = listsForProduct(product).filter((k) => k !== "fabric" && k !== "folding");
-    if (!extra.length) return undefined;
-    const lists = {};
-    for (const kind of extra) {
-      // The rendered HTML attribute holds the RAW id (spaces and all); read it
-      // back via the DOM property, never via a CSS selector, so list names with
-      // spaces/punctuation are matched literally.
-      const id = "mat-" + kind;
-      const type = listKindInputType(product, kind);
-      let v = null;
-      if (type === "radio") {
-        // Match the DOM property directly so list names containing spaces or
-        // punctuation cannot be altered by CSS selector parsing.
-        const checked = [...overlay.querySelectorAll("input[type=radio]:checked")]
-          .find((el) => el.name === id);
-        v = checked ? (checked.value || null) : null;
-      } else if (type === "text" || type === "textarea") {
-        const el = [...overlay.querySelectorAll("input, textarea, select")]
-          .find((candidate) => candidate.id === id);
-        const raw = el ? (el.value || "") : "";
-        v = raw.trim() || null;
-      } else {
-        // dropdown
-        const sel = [...overlay.querySelectorAll("input, textarea, select")]
-          .find((candidate) => candidate.id === id);
-        v = sel ? (sel.value || null) : null;
-      }
-      if (!v && cur && cur.lists) v = cur.lists[kind] || null;
-      if (v) lists[kind] = v;
     }
-    return lists;
-  }
+    if (type === "text") {
+      return `
+        <div class="field">
+          <label for="${idAttr}">${label}</label>
+          <input id="${idAttr}" type="text" autocomplete="off" value="${escapeHtml(value)}" placeholder="…"/>
+        </div>`;
+    }
+    // default: dropdown (existing behavior)
+    return `
+      <div class="field">
+        <label for="${idAttr}">${label}</label>
+        <select id="${idAttr}">
+          <option value="">— select —</option>
+          ${listOptionsFor(product, kind, value).map((f) =>
+            `<option value="${escapeHtml(f)}" ${value === f ? "selected" : ""}>${escapeHtml(f)}</option>`).join("")}
+        </select>
+      </div>`;
+  }).join("");
+}
 
+function materialExtraListValues(overlay, product, cur) {
+  const extra = listsForProduct(product).filter((k) => k !== "fabric" && k !== "folding");
+  if (!extra.length) return undefined;
+  const lists = {};
+  for (const kind of extra) {
+    // The rendered HTML attribute holds the RAW id (spaces and all); read it
+    // back via the DOM property, never via a CSS selector, so list names with
+    // spaces/punctuation are matched literally.
+    const id = "mat-" + kind;
+    const type = listKindInputType(product, kind);
+    let v = null;
+    if (type === "radio") {
+      // Match the DOM property directly so list names containing spaces or
+      // punctuation cannot be altered by CSS selector parsing.
+      const checked = [...overlay.querySelectorAll("input[type=radio]:checked")]
+        .find((el) => el.name === id);
+      v = checked ? (checked.value || null) : null;
+    } else if (type === "text" || type === "textarea") {
+      const el = [...overlay.querySelectorAll("input, textarea, select")]
+        .find((candidate) => candidate.id === id);
+      const raw = el ? (el.value || "") : "";
+      v = raw.trim() || null;
+    } else {
+      // dropdown
+      const sel = [...overlay.querySelectorAll("input, textarea, select")]
+        .find((candidate) => candidate.id === id);
+      v = sel ? (sel.value || null) : null;
+    }
+    if (!v && cur && cur.lists) v = cur.lists[kind] || null;
+    if (v) lists[kind] = v;
+  }
+  return lists;
+}
+
+function wireExtraParts(root, state, updateSaveState) {
   // --- Material & Special popups ---
   const openMaterialPopup = async () => {
     // Always re-pull the factory map so Part 4 reflects the latest Settings /
@@ -6762,6 +6764,7 @@ function paintDevelopmentView() {
       </label>
       <span class="muted batch-count" id="batch-count">${devViewSelected.size} selected</span>
       <button class="btn ghost" id="batch-update" type="button" disabled>Batch update</button>
+      <button class="btn ghost" id="batch-mass" type="button" disabled>Mass update</button>
       <button class="btn danger" id="batch-delete" type="button" disabled>Delete selected</button>
     </div>
 
@@ -6843,12 +6846,14 @@ function paintDevelopmentView() {
   const selectAll = panel.querySelector("#select-all");
   const batchDelete = panel.querySelector("#batch-delete");
   const batchUpdate = panel.querySelector("#batch-update");
+  const batchMass = panel.querySelector("#batch-mass");
   const batchCount = panel.querySelector("#batch-count");
 
   const syncBatchUI = () => {
     batchCount.textContent = devViewSelected.size + " selected";
     batchDelete.disabled = devViewSelected.size === 0;
     batchUpdate.disabled = devViewSelected.size === 0;
+    batchMass.disabled = devViewSelected.size === 0;
     selectAll.checked = allKeys.length > 0 && allKeys.every((k) => devViewSelected.has(k));
   };
 
@@ -6889,6 +6894,7 @@ function paintDevelopmentView() {
 
   batchDelete.addEventListener("click", batchDeleteDevelopments);
   batchUpdate.addEventListener("click", batchUpdateDevelopments);
+  batchMass.addEventListener("click", () => openMassUpdateModal(selectedDevelopmentIds()));
 
   panel.querySelectorAll("[data-followup]").forEach((b) => {
     b.addEventListener("click", () => openFollowUpModal(Number(b.dataset.followup)));
@@ -6910,13 +6916,137 @@ function paintDevelopmentView() {
   });
 }
 
-async function batchUpdateDevelopments() {
-  const ids = [...devViewSelected]
+function selectedDevelopmentIds() {
+  return [...devViewSelected]
     .filter((k) => k.startsWith("d:"))
     .map((k) => Number(k.slice(2)))
     .filter((id) => Number.isFinite(id));
+}
+
+async function batchUpdateDevelopments() {
+  const ids = selectedDevelopmentIds();
   if (!ids.length) return;
   openFollowUpModal(ids[0], null, ids);
+}
+
+async function openMassUpdateModal(ids) {
+  if (!ids.length) return;
+  const records = ids.map((id) => devViewData.find((r) => Number(r.id) === id)).filter(Boolean);
+  if (records.length !== ids.length) {
+    showToast("Some selected developments are no longer available. Refresh and try again.", true);
+    return;
+  }
+  const productTypes = [...new Set(records.map((r) => (r.product_type || "").trim()))];
+  const productType = productTypes.length === 1 ? productTypes[0] : null;
+  const overlay = document.createElement("div");
+  overlay.className = "modal-overlay";
+  overlay.innerHTML = `
+    <div class="modal" role="dialog" aria-modal="true" style="max-width:520px">
+      <h3>Mass update</h3>
+      <p class="muted">Replace one field on ${ids.length} selected development${ids.length === 1 ? "" : "s"}.</p>
+      <div class="field">
+        <label class="radio-label">Field to replace</label>
+        <div class="radio-row" id="mass-field-row">
+          <label class="radio-opt"><input type="radio" name="mass-field" value="material" /> Material</label>
+          <label class="radio-opt"><input type="radio" name="mass-field" value="special" /> Special</label>
+          <label class="radio-opt"><input type="radio" name="mass-field" value="remark" /> Remark</label>
+        </div>
+      </div>
+      <div id="mass-editor"></div>
+      <div class="actions modal-actions">
+        <button class="btn ghost" id="mass-cancel" type="button">Cancel</button>
+        <button class="btn primary" id="mass-save" type="button" disabled>Save</button>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+
+  const editor = overlay.querySelector("#mass-editor");
+  const save = overlay.querySelector("#mass-save");
+  let selectedField = null;
+  let remarks = [];
+
+  const renderEditor = async (field) => {
+    selectedField = field;
+    save.disabled = true;
+    if ((field === "material" || field === "special") && !productType) {
+      editor.innerHTML = `<p class="empty">Material and Special mass updates require all selected rows to share one product type. Selected rows have different product types.</p>`;
+      return;
+    }
+    if (field === "material") {
+      await loadProductTypeFactory();
+      const cur = {};
+      const factoryOnly = !isScreenPrintProduct(productType);
+      const extra = materialExtraListFields(productType, cur);
+      const standardFields = factoryOnly ? "" : [
+        `<div class="field"><label class="radio-label">Recycle</label><div class="radio-row">
+          <label class="radio-opt"><input type="radio" name="mass-mat-recycle" value="recycle" /> recycle</label>
+          <label class="radio-opt"><input type="radio" name="mass-mat-recycle" value="non-recycle" /> non recycle</label>
+        </div></div>`,
+        `<div class="field"><label for="mass-mat-fabric">Fabric</label><select id="mass-mat-fabric"><option value="">— select —</option>${fabricOptionsFor(productType, null).map((v) => `<option value="${escapeHtml(v)}">${escapeHtml(v)}</option>`).join("")}</select></div>`,
+        `<div class="field"><label class="radio-label">Edge</label><div class="radio-row">
+          <label class="radio-opt"><input type="radio" name="mass-mat-edge" value="slit" /> slit edge</label>
+          <label class="radio-opt"><input type="radio" name="mass-mat-edge" value="woven" /> woven edge</label>
+        </div></div>`,
+        `<div class="field"><label for="mass-mat-folding">Folding</label><select id="mass-mat-folding"><option value="">— select —</option>${foldingOptionsFor(productType, null).map((v) => `<option value="${escapeHtml(v)}">${escapeHtml(v)}</option>`).join("")}</select></div>`,
+      ].join("");
+      editor.innerHTML = standardFields + extra;
+      save.disabled = false;
+      return;
+    }
+    if (field === "special") {
+      editor.innerHTML = `<div class="field"><label class="radio-label">Variable</label><div class="radio-row">
+        <label class="radio-opt"><input type="radio" name="mass-special-variable" value="variable" /> variable</label>
+        <label class="radio-opt"><input type="radio" name="mass-special-variable" value="non-variable" /> non variable</label>
+      </div></div>`;
+      save.disabled = false;
+      return;
+    }
+    remarks = [];
+    editor.innerHTML = `<div class="field"><label for="mass-remark-input">Remarks</label>
+      <div class="remake-input-row"><input id="mass-remark-input" type="text" placeholder="Type a remark…" autocomplete="off" /><button class="btn ghost" id="mass-remark-add" type="button">＋ Add</button></div>
+      <ul class="remake-list" id="mass-remark-list"></ul></div>`;
+    const list = editor.querySelector("#mass-remark-list");
+    const input = editor.querySelector("#mass-remark-input");
+    const paint = () => { list.innerHTML = remarks.length ? remarks.map((v, i) => `<li class="remake-item"><span class="remake-text">${escapeHtml(v)}</span><button type="button" class="icon-btn danger" data-remove="${i}" title="Remove">✕</button></li>`).join("") : `<li class="remake-empty muted small">No remarks</li>`; list.querySelectorAll("[data-remove]").forEach((b) => b.addEventListener("click", () => { remarks.splice(Number(b.dataset.remove), 1); paint(); })); };
+    const add = () => { const v = input.value.trim(); if (v) { remarks.push(v); input.value = ""; paint(); } };
+    editor.querySelector("#mass-remark-add").addEventListener("click", add);
+    input.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); add(); } });
+    paint();
+    save.disabled = false;
+  };
+
+  overlay.querySelectorAll('input[name="mass-field"]').forEach((radio) => radio.addEventListener("change", () => renderEditor(radio.value)));
+  overlay.querySelector("#mass-cancel").addEventListener("click", () => overlay.remove());
+  save.addEventListener("click", async () => {
+    if (!selectedField || save.disabled) return;
+    let value;
+    if (selectedField === "material") {
+      const factoryOnly = !isScreenPrintProduct(productType);
+      const lists = materialExtraListValues(editor, productType, {});
+      value = factoryOnly ? { lists: lists || {} } : {
+        recycle: editor.querySelector('input[name="mass-mat-recycle"]:checked')?.value || null,
+        fabric: editor.querySelector("#mass-mat-fabric")?.value || null,
+        edge: editor.querySelector('input[name="mass-mat-edge"]:checked')?.value || null,
+        folding: editor.querySelector("#mass-mat-folding")?.value || null,
+      };
+      if (lists) value.lists = lists;
+    } else if (selectedField === "special") {
+      value = { variable: editor.querySelector('input[name="mass-special-variable"]:checked')?.value || null };
+    } else value = remarks.slice();
+    save.disabled = true;
+    save.textContent = "Saving…";
+    try {
+      await fetchJson(withWorkspace(API + "/api/developments/mass-update"), { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ids, field: selectedField, value }) });
+      overlay.remove();
+      devViewSelected.clear();
+      showToast(`Updated ${ids.length} development${ids.length === 1 ? "" : "s"}.`);
+      await renderDevelopmentView();
+    } catch (err) {
+      save.disabled = false;
+      save.textContent = "Save";
+      showToast("Mass update failed: " + err.message, true);
+    }
+  });
 }
 
 async function batchDeleteDevelopments() {
@@ -6988,6 +7118,9 @@ function openStatusHistoryReport(rec, followups) {
     team: rec.member_name || "—", status: f.category || "—", time: f.created_at || "—",
     note: f.note || "", image_names: f.image_names, doc_names: f.doc_names,
   }))];
+  // Sort by created time, newest first.
+  const timeVal = (t) => { const d = Date.parse(t || ""); return Number.isNaN(d) ? 0 : d; };
+  rows.sort((a, b) => timeVal(b.time) - timeVal(a.time));
   const body = rows.map((row, i) => `<tr>
     <td>${i + 1}</td><td>${escapeHtml(row.team)}</td><td>${escapeHtml(row.status)}</td>
     <td>${escapeHtml(row.time)}</td><td>${row.note ? escapeHtml(row.note) : '<span class="muted">—</span>'}</td>
@@ -7084,9 +7217,12 @@ async function openFollowUpHistory(devId) {
   overlay.querySelector("#fu-history-export").addEventListener("click", () => openStatusHistoryReport(rec, followups));
 
   // Rows: the development's initial creation, then one per Follow Up.
+  // Sorted by created time, newest first.
+  const timeVal = (t) => { const d = Date.parse(t || ""); return Number.isNaN(d) ? 0 : d; };
   const render = () => {
     const rows = [{ status: "Created", time: rec.created_at || "", followup: null }];
     (followups || []).forEach((f) => rows.push({ status: f.category || "—", time: f.created_at || "", followup: f }));
+    rows.sort((a, b) => timeVal(b.time) - timeVal(a.time));
     tbody.innerHTML = rows.map((row) => `
       <tr class="${row.followup ? "fu-history-clickable" : "fu-history-plain"}">
         <td>${row.followup

@@ -1151,7 +1151,7 @@ def _scope_sql(sql, params):
     if not wid or not isinstance(sql, str): return sql, params
     op, table = _business_sql_target(sql)
     if not op or not table or table.lower() not in _BUSINESS_TABLES: return sql, params
-    params = list(params) if not isinstance(params, list) else params
+    params = list(params)
     if op == "insert":
         cm = re.search(r"insert\s+into\s+" + re.escape(table) + r"\s*\(([^)]*)\)\s*values\s*\(([^)]*)\)", sql, re.I|re.S)
         if cm and "workspace_id" not in cm.group(1).lower():
@@ -2456,6 +2456,77 @@ def api_delete_development(handler, did):
     return json_response(handler, {"ok": True, "id": did}, 200)
 
 
+_MASS_UPDATE_FIELDS = {"material", "special", "remark"}
+
+
+def api_mass_update_developments(handler):
+    """Apply a single Material / Special / Remark replacement to many
+    developments at once (same value written to every selected row). All rows
+    are scoped to the current request workspace by _scope_sql, and status /
+    follow-up history is intentionally left untouched. The whole batch commits
+    or rolls back together."""
+    data = read_json_body(handler)
+    raw_ids = data.get("ids")
+    field = data.get("field")
+    value = data.get("value")
+
+    if not isinstance(raw_ids, list) or not raw_ids:
+        return json_response(handler, {"error": "ids (non-empty array) is required"}, 400)
+    ids = []
+    for raw in raw_ids:
+        try:
+            ids.append(int(raw))
+        except (TypeError, ValueError):
+            return json_response(handler, {"error": f"invalid development id: {raw!r}"}, 400)
+    ids = list(dict.fromkeys(ids))  # de-duplicate, keep order
+
+    if field not in _MASS_UPDATE_FIELDS:
+        return json_response(handler, {"error": "field must be one of material, special, remark"}, 400)
+
+    # material / special are JSON objects; remark is an array of free-text.
+    if field in ("material", "special"):
+        if value is not None and not isinstance(value, dict):
+            return json_response(handler, {"error": f"{field} must be an object or null"}, 400)
+    else:  # remark
+        if not isinstance(value, list):
+            return json_response(handler, {"error": "remark must be an array"}, 400)
+        value = [str(v) for v in value]
+
+    conn = db()
+    try:
+        placeholders = ",".join("?" for _ in ids)
+        # Confirm every requested id exists inside the current workspace before
+        # touching anything, so we fail fast rather than partially applying.
+        existing = conn.execute(
+            f"SELECT id FROM developments WHERE id IN ({placeholders})", ids
+        ).fetchall()
+        found = {int(r["id"]) for r in existing}
+        missing = [i for i in ids if i not in found]
+        if missing:
+            conn.rollback()
+            return json_response(handler, {"error": "not found", "missing_ids": missing}, 404)
+
+        if value is None:
+            stored = None
+        else:
+            stored = json.dumps(value, ensure_ascii=False)
+
+        # The UI/API uses the user-facing name `remark`; the legacy database
+        # column is `remake`.
+        col = "remake" if field == "remark" else field
+        conn.execute(
+            f"UPDATE developments SET {col} = ?, updated_at = ? WHERE id IN ({placeholders})",
+            [stored, now_iso()] + ids,
+        )
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        conn.close()
+        raise
+    conn.close()
+    return json_response(handler, {"ok": True, "field": field, "ids": ids}, 200)
+
+
 # --- Development follow-up handlers -------------------------------------
 
 def _followup_row_to_payload(row):
@@ -2911,6 +2982,8 @@ class Handler(SimpleHTTPRequestHandler):
         if path.startswith("/api/developments/"):
             rest = path[len("/api/developments/"):]
             parts = rest.split("/")
+            if rest == "mass-update" and method == "POST":
+                api_mass_update_developments(self); return True
             if len(parts) == 3 and parts[0].isdigit() and parts[1] == "followups" and parts[2].isdigit():
                 did = int(parts[0])
                 fid = int(parts[2])
