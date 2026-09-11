@@ -4088,11 +4088,14 @@ async function renderEnquiryCreate() {
     imageDrop.classList.add("has-items");
     imageThumbs.innerHTML = images.map((img) => `
       <div class="thumb" data-id="${img.id}">
-        <img src="${img.url}" alt="${escapeHtml(img.name)}" />
+        <img class="create-thumb-img" src="${img.url}" alt="${escapeHtml(img.name)}" data-full="${escapeHtml(img.url)}" data-name="${escapeHtml(img.name)}" />
         <div class="thumb-name">${escapeHtml(img.name)}</div>
         ${img.uploading ? '<span class="thumb-badge uploading">uploading…</span>' : ''}
         <button class="icon-btn danger thumb-rm" data-rm="${img.id}" title="Remove">✕</button>
       </div>`).join("");
+    imageThumbs.querySelectorAll(".create-thumb-img").forEach((im) => {
+      im.addEventListener("click", () => openImageLightbox(im.dataset.full, im.dataset.name));
+    });
     imageThumbs.querySelectorAll("[data-rm]").forEach((b) => {
       b.addEventListener("click", () => {
         const id = b.dataset.rm;
@@ -4684,11 +4687,14 @@ async function renderEnquiryEdit() {
     imageDrop.classList.add("has-items");
     imageThumbs.innerHTML = images.map((img) => `
       <div class="thumb" data-id="${img.id}">
-        <img src="${img.url}" alt="${escapeHtml(img.name)}" />
+        <img class="create-thumb-img" src="${img.url}" alt="${escapeHtml(img.name)}" data-full="${escapeHtml(img.url)}" data-name="${escapeHtml(img.name)}" />
         <div class="thumb-name">${escapeHtml(img.name)}</div>
         ${img.uploading ? '<span class="thumb-badge uploading">uploading…</span>' : ''}
         <button class="icon-btn danger thumb-rm" data-rm="${img.id}" title="Remove">✕</button>
       </div>`).join("");
+    imageThumbs.querySelectorAll(".create-thumb-img").forEach((im) => {
+      im.addEventListener("click", () => openImageLightbox(im.dataset.full, im.dataset.name));
+    });
     imageThumbs.querySelectorAll("[data-rm]").forEach((b) => {
       b.addEventListener("click", () => {
         const id = b.dataset.rm;
@@ -8341,7 +8347,7 @@ function paintEnquiryView() {
     const imgs = (r.image_names || []).slice(0, 3);
     const thumbs = imgs.length
       ? `<div class="dev-thumbs">` + imgs.map((n) =>
-          `<img class="dev-thumb-sm" src="${assetUrl(n)}" alt="${escapeHtml(n)}" title="${escapeHtml(n)}" />`).join("") + `</div>`
+          `<img class="dev-thumb-sm dev-view-thumb" src="${assetUrl(n)}" alt="${escapeHtml(n)}" title="${escapeHtml(n)}" data-full="${escapeHtml(assetUrl(n))}" data-name="${escapeHtml(n)}" />`).join("") + `</div>`
       : `<span class="muted">—</span>`;
     const docs = (r.doc_names || []).map((n) =>
       `<a class="doc-tag" href="${docUrl(n)}" target="_blank" rel="noopener" download title="${escapeHtml(n)}">📄 ${escapeHtml(displayName(n))}</a>`).join("");
@@ -8487,6 +8493,16 @@ function paintEnquiryView() {
   panel.querySelectorAll("[data-del]").forEach((b) => {
     b.addEventListener("click", () => deleteEnquiry(Number(b.dataset.del)));
   });
+
+  // Click any thumbnail in the Image column to open it in the centered lightbox.
+  // (Only the thumbnail itself triggers the popup — the row-select checkbox in
+  // the same cell must keep working on click.)
+  panel.querySelectorAll(".dev-view-thumb").forEach((img) => {
+    img.addEventListener("click", (e) => {
+      e.stopPropagation();
+      openImageLightbox(img.dataset.full, img.dataset.name);
+    });
+  });
 }
 
 async function batchDeleteEnquiries() {
@@ -8580,6 +8596,11 @@ async function editEnquiryInEdit(id) {
     name,
     file: null,
   }));
+
+  // notes — seed from the record so the dirty-check baseline matches. Without
+  // this the pristine comparison sees notes:"" vs the saved notes and wrongly
+  // reports the form as changed, leaving Update/Reset active on load.
+  s.notes = rec.notes || "";
 
   enquiryEditMode = true;
   enquiryEditId = rec.id;

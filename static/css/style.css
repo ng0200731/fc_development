@@ -400,6 +400,9 @@ select:focus-visible,
 }
 /* pushes Reset to the right edge of the action row (same level as Back/Dummy/Update) */
 .create-actions .dev-reset-spacer { margin-left: auto; }
+/* Enquiry / Create + Edit — same right-aligned Reset, kept away from Update
+   so it isn't clicked by accident. */
+.create-actions .enq-reset-spacer { margin-left: auto; }
 
 /* ---- Development / Create ---- */
 .combobox { position: relative; }
