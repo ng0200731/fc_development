@@ -3482,7 +3482,6 @@ function wireExtraParts(root, state, updateSaveState) {
     overlay.innerHTML = `
       <div class="modal" role="dialog" aria-modal="true" style="max-width:480px">
         <h3>Original Sample</h3>
-        <p class="muted small">Required — select one option. This must be answered before the record can be saved.</p>
         <div class="field">
           <label class="radio-label">Is this an original sample?</label>
           <div class="radio-row" id="orig-answer-row">
@@ -6757,6 +6756,7 @@ async function renderDevelopmentEdit() {
           s.docs = (devOriginal.doc_names || []).map((name, i) => ({ id: "edoc-" + devEditId + "-" + i, name, file: null }));
           s.material = devOriginal.material != null ? devOriginal.material : null;
           s.special = devOriginal.special != null ? devOriginal.special : null;
+          s.originalSample = devOriginal.original_sample != null ? devOriginal.original_sample : null;
           s.remake = Array.isArray(devOriginal.remake) ? devOriginal.remake.slice() : [];
           renderDevelopmentEdit();   // re-render with restored data
         }
