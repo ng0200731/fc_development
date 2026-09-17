@@ -7333,13 +7333,17 @@ async function duplicateDevelopment(id) {
           original_sample: rec.original_sample || null,
           remake: Array.isArray(rec.remake) ? rec.remake : [],
         };
-        await fetchJson(API + "/api/developments", {
+        const created = await fetchJson(API + "/api/developments", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(payload),
         });
         showToast(`Duplicated "${label}".`);
         await renderDevelopmentView();
+        // Open the freshly created copy in the Edit tab so the user can review /
+        // adjust it right away. Server returns { id } for the new record.
+        const newId = created && created.id;
+        if (newId != null) await editDevelopmentInCreate(Number(newId));
       } catch (err) {
         openConfirmModal("Duplicate failed", err.message, () => {});
       }
