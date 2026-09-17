@@ -310,12 +310,20 @@ function specialSummary(spec) {
   return "";
 }
 
+// Short label for the Original Sample (Part 2) choice — "Yes" / "No", or "" if
+// the required field hasn't been answered yet.
+function originalSampleSummary(os) {
+  if (!os || !os.answer) return "";
+  return os.answer === "yes" ? "Yes" : (os.answer === "no" ? "No" : "");
+}
+
 // Refresh the Material (part 4) badge + hint line and the Special (part 5) badge
 // directly from devState. Uses document.querySelector so it works from any panel
 // (only one dev panel is mounted at a time) and is independent of closure scope.
 function refreshDevExtras() {
   const matBadge = document.querySelector("#dev-material-badge");
   const specBadge = document.querySelector("#dev-special-badge");
+  const origBadge = document.querySelector("#dev-original-badge");
 
   if (matBadge) {
     const ms = materialSummary(devState.material);
@@ -326,6 +334,11 @@ function refreshDevExtras() {
     const ss = specialSummary(devState.special);
     specBadge.textContent = ss ? ss : "TBA";
     specBadge.classList.toggle("filled", !!ss);
+  }
+  if (origBadge) {
+    const os = originalSampleSummary(devState.originalSample);
+    origBadge.textContent = os ? os : "TBA";
+    origBadge.classList.toggle("filled", !!os);
   }
 }
 
@@ -2636,6 +2649,8 @@ function blankDevState() {
     // `null` means "not applicable"; an object means the product uses the split layout.
     colorSides: null,   // legacy { front: { noOfColor, pantones }, back: { noOfColor, pantones } }
     colorWays: [],      // [{ noOfColor, pantones }] (or {front:[], back:[]} for split products)
+    // Part 2 original sample (TBA until configured in Settings / Options)
+    originalSample: null,
     // Part 4 material / Part 5 special (TBA — popup details, stored as JSON)
     material: null, // [{ ... }]  (placeholder structure, TBA)
     special: null,  // [{ ... }]  (placeholder structure, TBA)
@@ -2815,6 +2830,7 @@ function resetDevState() {
   s.colorSides = null;
   s.material = null;   // Part 4 (TBA)
   s.special = null;    // Part 5 (TBA)
+  s.originalSample = null;  // Part 2 (Original Sample) — must be yes/no to save
   s.remake = [];       // Part 6 (array of strings)
   s.images = [];
   s.docs = [];
@@ -2854,6 +2870,7 @@ function buildDevelopmentPayload() {
     doc_names: devState.docs.map((d) => d.name),
     material: devState.material,
     special: devState.special,
+    original_sample: devState.originalSample,
     remake: devState.remake,
   };
 }
@@ -3017,7 +3034,11 @@ async function fillDummyDevelopment(ctx) {
     renderDevImageThumbs();  // draws the single image thumbnail
     // Reflect all seeded popups in the badges immediately (green words appear in
     // the panel, not just inside the popup after clicking Save):
+    if (!devState.originalSample || !devState.originalSample.answer) {
+      devState.originalSample = { answer: Math.random() < 0.5 ? "yes" : "no" };
+    }
     seedScreenPrintDefaults();   // dummy Material/Special for screen print / printed label
+    refreshDevExtras();          // Original Sample (part 2) + Material/Special badges
     refreshDevColorsBadge();     // Part 3 colors
     refreshDevRemarks();         // Part 6 remark list
     updateSaveState();           // enables Save (>=1 image)
@@ -3447,6 +3468,66 @@ function wireExtraParts(root, state, updateSaveState) {
   }
   if (specBtn) {
     specBtn.addEventListener("click", openSpecialPopup);
+  }
+
+  // --- Original Sample (Part 2) — required popup: Yes / No radio, neither chosen
+  // by default on open. One of the two must be selected before Save, so the
+  // Save button only unlocks once an answer is picked.
+  const openOriginalSamplePopup = () => {
+    const cur = devState.originalSample && devState.originalSample.answer
+      ? devState.originalSample.answer
+      : "";
+    const overlay = document.createElement("div");
+    overlay.className = "modal-overlay";
+    overlay.innerHTML = `
+      <div class="modal" role="dialog" aria-modal="true" style="max-width:480px">
+        <h3>Original Sample</h3>
+        <p class="muted small">Required — select one option. This must be answered before the record can be saved.</p>
+        <div class="field">
+          <label class="radio-label">Is this an original sample?</label>
+          <div class="radio-row" id="orig-answer-row">
+            <label class="radio-opt"><input type="radio" name="orig-answer" value="yes" ${cur === "yes" ? "checked" : ""}/> Yes</label>
+            <label class="radio-opt"><input type="radio" name="orig-answer" value="no" ${cur === "no" ? "checked" : ""}/> No</label>
+          </div>
+        </div>
+        <div class="actions modal-actions">
+          <button class="btn ghost" id="orig-clear" type="button">Clear</button>
+          <button class="btn primary" id="orig-save" type="button">Save</button>
+        </div>
+      </div>`;
+    document.body.appendChild(overlay);
+    // Highlight Save once a radio is chosen, so "must field" is visually clear.
+    const saveEl = overlay.querySelector("#orig-save");
+    const syncSave = () => {
+      saveEl.classList.toggle("active", !!overlay.querySelector('input[name="orig-answer"]:checked'));
+    };
+    overlay.querySelectorAll('input[name="orig-answer"]').forEach((r) => {
+      r.addEventListener("change", syncSave);
+    });
+    syncSave();
+    overlay.querySelector("#orig-save").addEventListener("click", () => {
+      const answer = overlay.querySelector('input[name="orig-answer"]:checked')?.value || "";
+      if (!answer) {
+        showToast("Please select Yes or No to continue.", true);
+        return;
+      }
+      devState.originalSample = { answer };
+      refreshDevExtras();
+      if (typeof updateSaveState === "function") updateSaveState();
+      overlay.remove();
+    });
+    overlay.querySelector("#orig-clear").addEventListener("click", () => {
+      devState.originalSample = null;
+      refreshDevExtras();
+      if (typeof updateSaveState === "function") updateSaveState();
+      overlay.remove();
+    });
+  };
+
+  const origBtn = root.querySelector("#dev-original-btn");
+  if (origBtn) {
+    origBtn.addEventListener("click", openOriginalSamplePopup);
+    refreshDevExtras();   // reflect a saved answer in the badge as soon as this panel mounts
   }
 
   // --- Colors / Pantone popup (Part 3) — editable like Material ---
@@ -5042,7 +5123,7 @@ async function renderDevelopmentCreate() {
           </select>
         </div>
 
-        <h3 class="subhead" id="dev-part2-head">2 · Item &amp; Product Type</h3>
+        <h3 class="subhead" id="dev-part2-head">Item &amp; Product Type</h3>
         <div class="dim-row">
           <div class="field">
             <label for="dev-item">Item name</label>
@@ -5065,6 +5146,13 @@ async function renderDevelopmentCreate() {
             <label for="dev-width">Width (mm) <span class="req-mark">required</span></label>
             <input id="dev-width" type="number" min="0" step="0.1" placeholder="0.0" autocomplete="off" />
           </div>
+        </div>
+
+        <h3 class="subhead part-head" id="dev-original-head">2 · Original Sample</h3>
+        <div class="field">
+          <button type="button" class="pill-btn" id="dev-original-btn">
+            Original sample details <span class="pill-badge" id="dev-original-badge">TBA</span>
+          </button>
         </div>
 
       </div>
@@ -5546,9 +5634,10 @@ async function renderDevelopmentCreate() {
     const heightOk = !!(devState.height && !Number.isNaN(Number(devState.height)) && Number(devState.height) >= 0);
     const widthOk  = !!(devState.width  && !Number.isNaN(Number(devState.width))  && Number(devState.width)  >= 0);
     const part3Good = part3Valid();
+    const originalSampleOk = !!(devState.originalSample && devState.originalSample.answer);
     const allFilled = hiddenEl.value !== "" && memberEl.value !== "" &&
                       devState.item && devState.product &&
-                      heightOk && widthOk &&
+                      originalSampleOk && heightOk && widthOk &&
                       part3Good && hasImage;
     const canSave = allFilled;
     saveBtn.disabled = !canSave;
@@ -5566,6 +5655,7 @@ async function renderDevelopmentCreate() {
         if (memberEl.value === "") unmet.push("member");
         if (!devState.item) unmet.push("item name");
         if (!devState.product) unmet.push("product type");
+        if (!originalSampleOk) unmet.push("original sample (part 2)");
         if (!heightOk) unmet.push("height");
         if (!widthOk) unmet.push("width");
         if (!part3Good) unmet.push("colors/Pantone (part 3)");
@@ -5596,6 +5686,7 @@ async function renderDevelopmentCreate() {
     };
     setPartWarn("#dev-part1-head", hiddenEl.value === "" || memberEl.value === "");
     setPartWarn("#dev-part2-head", !devState.item || !devState.product || !heightOk || !widthOk);
+    setPartWarn("#dev-original-head", !originalSampleOk);
     setPartWarn("#dev-part3-head", !part3Good);
     setPartWarn("#dev-part7-head", !hasImage);
   };
@@ -5911,7 +6002,7 @@ async function renderDevelopmentEdit() {
           </select>
         </div>
 
-        <h3 class="subhead" id="dev-part2-head">2 · Item &amp; Product Type</h3>
+        <h3 class="subhead" id="dev-part2-head">Item &amp; Product Type</h3>
         <div class="dim-row">
           <div class="field">
             <label for="dev-item">Item name</label>
@@ -5934,6 +6025,13 @@ async function renderDevelopmentEdit() {
             <label for="dev-width">Width (mm) <span class="req-mark">required</span></label>
             <input id="dev-width" type="number" min="0" step="0.1" placeholder="0.0" autocomplete="off" />
           </div>
+        </div>
+
+        <h3 class="subhead part-head" id="dev-original-head">2 · Original Sample</h3>
+        <div class="field">
+          <button type="button" class="pill-btn" id="dev-original-btn">
+            Original sample details <span class="pill-badge" id="dev-original-badge">TBA</span>
+          </button>
         </div>
 
       </div>
@@ -6351,6 +6449,7 @@ async function renderDevelopmentEdit() {
     doc_names: devState.docs.map((d) => d.name).sort(),
     material: devState.material,
     special: devState.special,
+    original_sample: devState.originalSample,
     remake: devState.remake.slice().sort(),
   });
 
@@ -6377,6 +6476,7 @@ async function renderDevelopmentEdit() {
     doc_names: (devOriginal.doc_names || []).slice().sort(),
     material: devOriginal.material,
     special: devOriginal.special,
+    original_sample: devOriginal.original_sample,
     remake: (devOriginal.remake || []).slice().sort(),
   });
 
@@ -6391,7 +6491,7 @@ async function renderDevelopmentEdit() {
     const widthOk  = !!(devState.width  && !Number.isNaN(Number(devState.width))  && Number(devState.width)  >= 0);
     const allFilled = hiddenEl.value !== "" && memberEl.value !== "" &&
                       devState.item && devState.product &&
-                      heightOk && widthOk &&
+                      !!(devState.originalSample && devState.originalSample.answer) && heightOk && widthOk &&
                       part3Valid() && hasImage;
     const dirty = isDirty();
     const canSave = allFilled && dirty;
@@ -7776,6 +7876,8 @@ async function editDevelopmentInCreate(id) {
   // Part 4/5/6 — material & special (TBA structures) + remark (array of strings).
   s.material = rec.material != null ? rec.material : null;
   s.special = rec.special != null ? rec.special : null;
+  // Part 2 — Original Sample (required yes/no), persisted as { answer }.
+  s.originalSample = rec.original_sample != null ? rec.original_sample : null;
   s.remake = Array.isArray(rec.remake) ? rec.remake.slice() : [];
 
   // images — resolve each saved name to its servable URL (sample or upload).
@@ -8244,6 +8346,7 @@ async function openDevEditModal(id) {
       special: {
         variable: overlay.querySelector('input[name="ed-spec-variable"]:checked')?.value || null,
       },
+      original_sample: rec.original_sample != null ? rec.original_sample : null,
       remake: editRemarks.slice().sort(),
     };
     const saveBtn = overlay.querySelector("#ed-save");
@@ -8683,7 +8786,8 @@ function paintView() {
   const rows = [];
   viewCustomers.forEach((c) => {
     const members = c.members && c.members.length ? c.members : [null];
-    const shipTo = (c.ship_to || []).map((s) => s.address).join(" | ");
+    const defaultShip = (c.ship_to || []).find((s) => s.is_default);
+    const shipTo = defaultShip ? defaultShip.address : "";
     const projects = (c.projects || []).map((p) => p.name).join(", ");
     members.forEach((m) => {
       rows.push({

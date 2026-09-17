@@ -341,6 +341,7 @@ _DEV_MISSING_COLUMNS = {
     "color_sides": "TEXT",
     "color_ways": "TEXT",
     "status": "TEXT",
+    "original_sample": "TEXT",
 }
 
 
@@ -2274,8 +2275,7 @@ def _dev_row_to_payload(row):
     out = dict(row)
     for k in ("pantones", "image_names", "doc_names", "color_ways"):
         if out.get(k):
-            try:
-                out[k] = json.loads(out[k])
+            try:                out[k] = json.loads(out[k])
             except (json.JSONDecodeError, TypeError):
                 out[k] = []
         else:
@@ -2295,6 +2295,13 @@ def _dev_row_to_payload(row):
             out["color_sides"] = None
     else:
         out["color_sides"] = None
+    if out.get("original_sample"):
+        try:
+            out["original_sample"] = json.loads(out["original_sample"])
+        except (json.JSONDecodeError, TypeError):
+            out["original_sample"] = out["original_sample"]
+    else:
+        out["original_sample"] = None
     return out
 
 
@@ -2376,6 +2383,9 @@ def _dev_insert_or_update(conn, did, data):
     color_ways = data.get("color_ways")
     if isinstance(color_ways, (list, dict)):
         color_ways = json.dumps(color_ways, ensure_ascii=False)
+    original_sample = data.get("original_sample")
+    if isinstance(original_sample, (list, dict)):
+        original_sample = json.dumps(original_sample, ensure_ascii=False)
     # A new development starts with status "Created" unless the payload says
     # otherwise. Updates never touch status (it is driven by Follow Ups).
     status_val = (data.get("status") or "").strip() or "Created"
@@ -2400,6 +2410,7 @@ def _dev_insert_or_update(conn, did, data):
         remake,
         color_sides,
         color_ways,
+        original_sample,
     )
     if did is None:
         cur = conn.cursor()
@@ -2407,8 +2418,8 @@ def _dev_insert_or_update(conn, did, data):
             "INSERT INTO developments "
             "(company_id, company_name, member_id, member_name, project_id, project_name, "
             "item_name, product_type, height, width, raised_height, no_of_color, pantones, "
-            "image_names, doc_names, material, special, remake, color_sides, color_ways, status, created_at, updated_at) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "image_names, doc_names, material, special, remake, color_sides, color_ways, original_sample, status, created_at, updated_at) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             vals + (status_val, now_iso(), now_iso()),
         )
         return cur.lastrowid
@@ -2416,7 +2427,7 @@ def _dev_insert_or_update(conn, did, data):
         "UPDATE developments SET "
         "company_id=?, company_name=?, member_id=?, member_name=?, project_id=?, project_name=?, "
         "item_name=?, product_type=?, height=?, width=?, raised_height=?, no_of_color=?, "
-        "pantones=?, image_names=?, doc_names=?, material=?, special=?, remake=?, color_sides=?, color_ways=?, updated_at=? WHERE id=?",
+        "pantones=?, image_names=?, doc_names=?, material=?, special=?, remake=?, color_sides=?, color_ways=?, original_sample=?, updated_at=? WHERE id=?",
         vals + (now_iso(), did),
     )
     return did
