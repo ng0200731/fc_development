@@ -6944,6 +6944,7 @@ function paintDevelopmentView() {
         <td class="details-cell"><button type="button" class="link-btn dev-details-btn" data-details="${r.id}" title="View color &amp; Pantone details">${escapeHtml(devDetailsSummary(r))}</button></td>
         <td class="row-actions">
           <button class="icon-btn" data-followup="${r.id}" title="Follow Up">📌</button>
+          <button class="icon-btn" data-dup="${r.id}" title="Duplicate">⧉</button>
           <button class="icon-btn" data-edit="${r.id}" title="Edit">✎</button>
           <button class="icon-btn danger" data-del="${r.id}" title="Delete">🗑</button>
         </td>
@@ -7103,6 +7104,9 @@ function paintDevelopmentView() {
   });
   panel.querySelectorAll("[data-status]").forEach((b) => {
     b.addEventListener("click", () => openFollowUpHistory(Number(b.dataset.status)));
+  });
+  panel.querySelectorAll("[data-dup]").forEach((b) => {
+    b.addEventListener("click", () => duplicateDevelopment(Number(b.dataset.dup)));
   });
   panel.querySelectorAll("[data-edit]").forEach((b) => {
     b.addEventListener("click", () => editDevelopmentInCreate(Number(b.dataset.edit)));
@@ -7291,6 +7295,55 @@ async function deleteDevelopment(id) {
       }
     },
     { danger: true }
+  );
+}
+
+// Duplicate a development row in full: create a brand-new record (fresh id +
+// timestamps) that copies every field of the source record. Images and documents
+// are shared by name, so the copy points at the same files without re-uploading.
+async function duplicateDevelopment(id) {
+  const rec = devViewData.find((r) => r.id === id);
+  if (!rec) return;
+  const label = `${rec.company_name} / ${rec.item_name}`;
+  openConfirmModal(
+    "Duplicate development?",
+    `Create a complete copy of "${label}"?`,
+    async () => {
+      try {
+        const payload = {
+          company_id: rec.company_id != null ? Number(rec.company_id) : null,
+          company_name: rec.company_name || "",
+          member_id: rec.member_id != null ? Number(rec.member_id) : null,
+          member_name: rec.member_name || null,
+          project_id: rec.project_id != null ? Number(rec.project_id) : null,
+          project_name: rec.project_name || null,
+          item_name: rec.item_name || "",
+          product_type: rec.product_type || "",
+          height: rec.height != null ? rec.height : null,
+          width: rec.width != null ? rec.width : null,
+          raised_height: rec.raised_height != null ? rec.raised_height : null,
+          no_of_color: rec.no_of_color != null ? Number(rec.no_of_color) : null,
+          pantones: Array.isArray(rec.pantones) ? rec.pantones : [],
+          color_sides: rec.color_sides || null,
+          color_ways: Array.isArray(rec.color_ways) ? rec.color_ways : [],
+          image_names: Array.isArray(rec.image_names) ? rec.image_names : [],
+          doc_names: Array.isArray(rec.doc_names) ? rec.doc_names : [],
+          material: rec.material || null,
+          special: rec.special || null,
+          original_sample: rec.original_sample || null,
+          remake: Array.isArray(rec.remake) ? rec.remake : [],
+        };
+        await fetchJson(API + "/api/developments", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+        showToast(`Duplicated "${label}".`);
+        await renderDevelopmentView();
+      } catch (err) {
+        openConfirmModal("Duplicate failed", err.message, () => {});
+      }
+    }
   );
 }
 
