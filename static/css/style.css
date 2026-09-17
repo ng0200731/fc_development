@@ -188,6 +188,7 @@ select:focus-visible,
   flex: 1;
   padding: 24px;
   overflow-y: auto;
+  overflow-x: auto;   /* let wide tables scroll here so sticky columns can freeze */
   background: var(--bg);
 }
 
@@ -1226,6 +1227,53 @@ select:focus-visible,
 }
 .followup-frame .dropzone { margin-top: 4px; }
 .dev-grid .actions-th { width: 132px; }
+
+/* Freeze the Actions column in the Development / View table: it stays pinned to
+   the right edge while the rest of the wide table scrolls left/right. Uses
+   border-collapse: separate (Chrome ignores sticky cells under collapse). The
+   `.panel` is the horizontal scroll container. */
+#development-grid {
+  border-collapse: separate;
+  border-spacing: 0;
+  overflow: visible;
+}
+#development-grid thead .head-row th.actions-th,
+#development-grid thead .search-row th.actions-th,
+#development-grid tbody td.row-actions {
+  position: sticky;
+  right: 0;
+}
+#development-grid thead .head-row th.actions-th,
+#development-grid thead .search-row th.actions-th {
+  z-index: 999999;
+  isolation: isolate;
+}
+#development-grid thead .head-row th.actions-th,
+#development-grid thead .search-row th.actions-th,
+#development-grid tbody td.row-actions {
+  background: #ffffff !important;
+}
+#development-grid tbody td.row-actions {
+  z-index: 999999;
+  isolation: isolate;
+  box-shadow: -1px 0 0 var(--border);
+  /* Keep it a real table cell (not flex) so its z-index reliably beats the
+     scrolling cells; lay the icons out inline with margins instead. */
+  display: table-cell;
+  vertical-align: middle;
+}
+#development-grid tbody td.row-actions .icon-btn { margin-right: 6px; }
+#development-grid tbody td.row-actions .icon-btn:last-child { margin-right: 0; }
+/* Force the sticky column onto its own composited layer so no scrolling cell can
+   ever be painted above it — this is the fix for "see-through" sticky columns. */
+#development-grid thead .head-row th.actions-th,
+#development-grid thead .search-row th.actions-th,
+#development-grid tbody td.row-actions {
+  will-change: transform;
+  transform: translateZ(0);
+}
+#development-grid tbody tr:hover td.row-actions { background: #ffffff !important; }
+
 .followup-status-btn {
   display: inline-flex;
   align-items: center;
