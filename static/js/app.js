@@ -6997,7 +6997,6 @@ function paintDevelopmentView() {
     <div class="view-head">
       <h2>Development / View</h2>
       <div class="view-actions">
-        <button class="btn ghost" id="dev-refresh" type="button" title="Refresh all customer database">⟳ Refresh</button>
         <button class="btn ghost" id="dev-export" type="button">Export Excel</button>
       </div>
     </div>
@@ -7064,28 +7063,6 @@ function paintDevelopmentView() {
       openConfirmModal("Export failed", err.message, () => {});
     }
   });
-
-  const refreshBtn = panel.querySelector("#dev-refresh");
-  if (refreshBtn) {
-    refreshBtn.addEventListener("click", async () => {
-      const btn = refreshBtn;
-      btn.disabled = true;
-      btn.classList.add("spinning");
-      try {
-        // refresh the company master list cache so the Create screen's data is
-        // also current on next open
-        devCompaniesCache = await fetchJson(API + "/api/companies");
-        viewCustomers = await fetchJson(API + "/api/customers");
-        devViewData = await fetchJson(API + "/api/developments");
-        paintDevelopmentView();
-      } catch (err) {
-        openConfirmModal("Refresh failed", err.message, () => {});
-      } finally {
-        btn.disabled = false;
-        btn.classList.remove("spinning");
-      }
-    });
-  }
 
   // --- batch selection ---
   const selectAll = panel.querySelector("#select-all");

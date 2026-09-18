@@ -1398,18 +1398,42 @@ def _send_xlsx(handler, wb, filename):
     handler.wfile.write(data)
 
 
+def _original_sample_summary(d):
+    """Part 2 Original Sample → readable "Yes"/"No".
+
+    Stored as {"answer": "yes"|"no"} (current form) or a plain "yes"/"no"
+    string (legacy). Returns "" when not answered so the export cell stays blank.
+    """
+    os = d.get("original_sample")
+    if isinstance(os, dict):
+        ans = os.get("answer")
+        if ans == "yes":
+            return "Yes"
+        if ans == "no":
+            return "No"
+        return ""
+    if isinstance(os, str):
+        s = os.strip().lower()
+        if s in ("yes", "true", "y", "1"):
+            return "Yes"
+        if s in ("no", "false", "n", "0"):
+            return "No"
+        return os
+    return ""
+
+
 def _dev_record_to_xlsx(d):
     """Flat (headers, cells, image_names) for one development/enquiry row.
 
     Column order mirrors the Development / View grid exactly:
-    Company, Member, Item, Product Type, Image, Documents, Material, Special,
-    Height (mm), Width (mm), Remark, Created, Updated, Details.
+    Company, Member, Item, Product Type, 2 · Original Sample, Image, Documents,
+    Material, Special, Height (mm), Width (mm), Remark, Created, Updated, Details.
     `cells` has exactly one entry per header, in order.
     """
     images = d.get("image_names") or []
     docs = d.get("doc_names") or []
-    headers = ["Company", "Member", "Item", "Product Type", "Image",
-               "Documents", "Material", "Special",
+    headers = ["Company", "Member", "Item", "Product Type", "2 · Original Sample",
+               "Image", "Documents", "Material", "Special",
                "Height (mm)", "Width (mm)", "Color Details", "Remark",
                "Created", "Updated", "Details"]
     material = d.get("material")
@@ -1431,6 +1455,7 @@ def _dev_record_to_xlsx(d):
         d.get("member_name") or "",
         d.get("item_name") or "",
         d.get("product_type") or "",
+        _original_sample_summary(d), # Part 2 Original Sample
         "",                              # Image column: holds the embedded thumbnail
         _docs_summary(docs),
         _material_summary(material),
