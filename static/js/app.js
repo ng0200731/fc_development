@@ -2898,6 +2898,48 @@ function openConfirmModal(title, message, onConfirm, opts) {
   });
 }
 
+// Destructive-delete confirmation that requires the user to retype an exact
+// run number (01–99) before Delete is enabled. A fresh 2-digit code is
+// generated each time the modal opens, so an accidental click can't delete.
+function openDeleteConfirmModal(title, message, onConfirm) {
+  const code = String(Math.floor(Math.random() * 99) + 1).padStart(2, "0");
+  const overlay = document.createElement("div");
+  overlay.className = "modal-overlay";
+  overlay.innerHTML = `
+    <div class="modal" role="dialog" aria-modal="true" style="max-width:440px">
+      <h3>${escapeHtml(title)}</h3>
+      <p class="muted">${escapeHtml(message)}</p>
+      <p class="muted">To confirm, type this run number exactly:</p>
+      <div class="delete-confirm-code">${escapeHtml(code)}</div>
+      <div class="field">
+        <input id="dc-code" type="text" inputmode="numeric" maxlength="2"
+               placeholder="01–99" autocomplete="off" aria-label="Type the run number" />
+      </div>
+      <div class="actions modal-actions">
+        <button class="btn ghost" id="dc-cancel" type="button">Cancel</button>
+        <button class="btn danger" id="dc-ok" type="button" disabled>Delete</button>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+  const input = overlay.querySelector("#dc-code");
+  const ok = overlay.querySelector("#dc-ok");
+  // Delete stays disabled until the retyped run number matches exactly.
+  const refresh = () => { ok.disabled = input.value.trim() !== code; };
+  input.addEventListener("input", refresh);
+  // Must genuinely type it — block paste so the exact match is a deliberate retype.
+  input.addEventListener("paste", (e) => e.preventDefault());
+  input.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") { e.preventDefault(); if (!ok.disabled) ok.click(); }
+  });
+  input.focus();
+  overlay.querySelector("#dc-cancel").addEventListener("click", () => overlay.remove());
+  ok.addEventListener("click", () => {
+    if (ok.disabled) return;
+    overlay.remove();
+    onConfirm();
+  });
+}
+
 function showToast(message, isError) {
   const el = document.createElement("div");
   el.className = "toast" + (isError ? " toast-error" : "");
@@ -7260,7 +7302,7 @@ async function batchDeleteDevelopments() {
   if (!keys.length) return;
   const ids = keys.filter((k) => k.startsWith("d:")).map((k) => Number(k.slice(2)));
   if (!ids.length) return;
-  openConfirmModal(
+  openDeleteConfirmModal(
     "Delete developments?",
     `Delete ${ids.length} development${ids.length === 1 ? "" : "s"} permanently?`,
     async () => {
@@ -7274,15 +7316,14 @@ async function batchDeleteDevelopments() {
       if (failed) openConfirmModal("Partial failure", `${failed} deletion(s) failed.`, () => {});
       devViewSelected.clear();
       await renderDevelopmentView();
-    },
-    { danger: true }
+    }
   );
 }
 
 async function deleteDevelopment(id) {
   const rec = devViewData.find((r) => r.id === id);
   const label = rec ? `${rec.company_name} / ${rec.item_name}` : `#${id}`;
-  openConfirmModal(
+  openDeleteConfirmModal(
     "Delete development?",
     `Delete "${label}" permanently?`,
     async () => {
@@ -7293,8 +7334,7 @@ async function deleteDevelopment(id) {
       } catch (err) {
         openConfirmModal("Delete failed", err.message, () => {});
       }
-    },
-    { danger: true }
+    }
   );
 }
 

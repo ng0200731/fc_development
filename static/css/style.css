@@ -571,6 +571,23 @@ select:focus-visible,
   color: #15803d;
 }
 
+/* Run-number the user must retype exactly to confirm a destructive delete. */
+.delete-confirm-code {
+  margin: 10px 0 14px;
+  padding: 12px;
+  text-align: center;
+  font-size: 30px;
+  font-weight: 800;
+  letter-spacing: .18em;
+  color: var(--destructive, #dc2626);
+  background: var(--destructive-weak, #fee2e2);
+  border: 1px dashed var(--destructive, #dc2626);
+  border-radius: var(--radius-sm);
+  user-select: all;
+}
+.delete-confirm-code + .field { margin-top: 0; }
+#dc-code { text-align: center; letter-spacing: .3em; font-weight: 700; font-size: 18px; }
+
 /* Filled variant for the Material hint line (replaces the TBA sentence). */
 .muted.small.filled {
   display: inline-block;
@@ -1244,6 +1261,11 @@ select:focus-visible,
   right: 0;
 }
 #development-grid thead .head-row th.actions-th,
+#development-grid thead .search-row th.actions-th,
+#development-grid tbody td.row-actions {
+  border-left: 1px solid #000000;
+}
+#development-grid thead .head-row th.actions-th,
 #development-grid thead .search-row th.actions-th {
   z-index: 999999;
   isolation: isolate;
@@ -1256,7 +1278,6 @@ select:focus-visible,
 #development-grid tbody td.row-actions {
   z-index: 999999;
   isolation: isolate;
-  box-shadow: -1px 0 0 var(--border);
   /* Keep it a real table cell (not flex) so its z-index reliably beats the
      scrolling cells; lay the icons out inline with margins instead. */
   display: table-cell;
