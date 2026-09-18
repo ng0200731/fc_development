@@ -6994,6 +6994,7 @@ function paintDevelopmentView() {
   }).join("") || `<tr><td colspan="17" class="muted">No matches.</td></tr>`;
 
   panel.innerHTML = `
+    <div class="dev-view">
     <div class="view-head">
       <h2>Development / View</h2>
       <div class="view-actions">
@@ -7023,7 +7024,19 @@ function paintDevelopmentView() {
       </thead>
       <tbody>${body}</tbody>
     </table>
+    </div>
   `;
+
+  // Freeze the header block (title bar, batch bar, table header) while the rows
+  // scroll. Read the measured heights on each paint and expose them as CSS vars
+  // so each sticky layer sits exactly one taller than the last, regardless of
+  // font/font-size changes.
+  const devHead = panel.querySelector(".dev-view .view-head");
+  const devBar = panel.querySelector(".dev-view .batch-bar");
+  if (devHead && devBar) {
+    panel.style.setProperty("--devview-vh", devHead.offsetHeight + "px");
+    panel.style.setProperty("--devview-vv", (devHead.offsetHeight + devBar.offsetHeight) + "px");
+  }
 
   // per-column fuzzy search
   panel.querySelectorAll(".col-search").forEach((inp) => {

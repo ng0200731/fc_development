@@ -1295,6 +1295,16 @@ select:focus-visible,
 }
 #development-grid tbody tr:hover td.row-actions { background: #ffffff !important; }
 
+/* Freeze the Development / View header block (title bar, batch bar, table
+   header) vertically while the row area scrolls down. The `.panel` is the
+   vertical scroll container; each layer sticks at an offset one taller than
+   the previous, set from measured heights in paintDevelopmentView() via the
+   --devview-vh / --devview-vv vars. Their z-index sits ABOVE the frozen Actions
+   column (999999) so rows scroll cleanly underneath. */
+.dev-view .view-head { position: sticky; top: 0; z-index: 9999998; background: var(--bg); }
+.dev-view .batch-bar { position: sticky; top: var(--devview-vh, 40px); z-index: 9999999; }
+.dev-view #development-grid thead { position: sticky; top: var(--devview-vv, 100px); z-index: 10000000; }
+
 .followup-status-btn {
   display: inline-flex;
   align-items: center;
