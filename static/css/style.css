@@ -1178,7 +1178,7 @@ select:focus-visible,
   justify-content: center;
   padding: 40px 16px;
   overflow-y: auto;
-  z-index: 50;
+  z-index: 20000000; /* above the frozen Dev-view header (10000000) so popups win */
 }
 .modal {
   background: var(--surface);
@@ -1465,7 +1465,7 @@ select:focus-visible,
   border-radius: 8px;
   font-size: 13px;
   box-shadow: 0 8px 24px rgba(0,0,0,.25);
-  z-index: 60;
+  z-index: 22000000; /* above the frozen Dev-view header */
   max-width: 80vw;
 }
 .toast-error { background: #dc2626; color: #fff; }
@@ -1485,7 +1485,7 @@ select:focus-visible,
 .workspace-overlay {
   position: fixed;
   inset: 0;
-  z-index: 1000;
+  z-index: 21000000; /* above the frozen Dev-view header */
   display: flex;
   align-items: center;
   justify-content: center;
