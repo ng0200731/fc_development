@@ -29,6 +29,8 @@ import hmac
 import secrets
 from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler
 from urllib.parse import urlparse, unquote, quote, parse_qs
+import urllib.request
+from urllib.error import HTTPError, URLError
 from openpyxl import Workbook
 from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
 from openpyxl.drawing.image import Image as XLImage
@@ -342,6 +344,8 @@ _DEV_MISSING_COLUMNS = {
     "color_ways": "TEXT",
     "status": "TEXT",
     "original_sample": "TEXT",
+    "due_date": "TEXT",
+    "priority": "TEXT",
 }
 
 
@@ -409,6 +413,7 @@ _OPTION_GROUP_SEED = {
             "loop fold", "end fold", "straight cut", "mitre fold", "Manhattan Fold", "Asymmetrical Fold",
         ]},
         {"name": "follow_up", "label": "Follow up", "seed": ["TBA"]},
+        {"name": "priority", "label": "Priority", "seed": ["Low", "Normal", "High", "Urgent"]},
     ],
     "enquiry": [
         # Enquiry / Create has no dropdowns (only Company & Member + Images).
@@ -2346,6 +2351,170 @@ def api_get_development(handler, did):
     return json_response(handler, _dev_row_to_payload(row))
 
 
+# --- TypeSafe urgency ranking ----------------------------------------------
+
+_TYPESAFE_URL = "https://api.typesafe.ai/v1/systemone"
+_RANK_BATCH = 25      # developments per HTTP request (bounded latency/cost)
+_RANK_CAP = 50        # max developments ranked per call
+
+
+class TypeSafeError(Exception):
+    def __init__(self, message, status=502):
+        super().__init__(message)
+        self.status = status
+
+
+def _typesafe_api_key():
+    """Read the TypeSafe API key from the TYPESAFE_API_KEY env var, falling back
+    to the first non-comment line of data/typesafe_key.txt (gitignored)."""
+    k = os.environ.get("TYPESAFE_API_KEY", "").strip()
+    if k:
+        return k
+    p = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "typesafe_key.txt")
+    try:
+        if os.path.isfile(p):
+            with open(p, encoding="utf-8") as fh:
+                for line in fh:
+                    line = line.strip()
+                    if line and not line.startswith("#"):
+                        return line
+    except OSError:
+        pass
+    return ""
+
+
+def _typesafe_call(key, payload):
+    body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+    req = urllib.request.Request(
+        _TYPESAFE_URL, data=body, method="POST",
+        headers={"Authorization": "Bearer " + key, "Content-Type": "application/json"},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=60) as resp:
+            return json.loads(resp.read().decode("utf-8"))
+    except HTTPError as e:
+        detail = ""
+        try:
+            detail = " " + e.read().decode("utf-8", "replace")[:300]
+        except Exception:
+            pass
+        code = e.code
+        if code in (401, 403):
+            msg = "TypeSafe authentication failed (%d). Check the API key.%s" % (code, detail)
+        elif code == 429:
+            msg = "TypeSafe rate limit exceeded (429). Try again shortly."
+        elif code == 529:
+            msg = "TypeSafe is temporarily overloaded (529). Try again shortly."
+        else:
+            msg = "TypeSafe API error %d.%s" % (code, detail)
+        raise TypeSafeError(msg, code)
+    except (URLError, TimeoutError, OSError, ValueError) as e:
+        raise TypeSafeError("Could not reach TypeSafe: %s" % (e,), 502)
+
+
+def _days_since(iso_str):
+    if not iso_str:
+        return None
+    try:
+        dt = datetime.datetime.fromisoformat(iso_str)
+    except (TypeError, ValueError):
+        return None
+    return max(0, (datetime.datetime.now() - dt).days)
+
+
+def _rank_state_item(row, followup_counts):
+    remake_len = None
+    if row["remake"]:
+        try:
+            remake_len = len(json.loads(row["remake"]))
+        except (json.JSONDecodeError, TypeError):
+            remake_len = 0
+    return {
+        "id": row["id"],
+        "item_name": row["item_name"],
+        "product_type": row["product_type"],
+        "priority": row["priority"],
+        "due_date": row["due_date"],
+        "remake_count": remake_len,
+        "followup_count": followup_counts.get(row["id"], 0),
+        "days_since_created": _days_since(row["created_at"]),
+    }
+
+
+def api_rank_developments(handler):
+    """POST /api/developments/rank  body: {"ids": [12, 5, 99]}
+    Returns {"scores": {"<id>": {"score": 2.3, "confidence": 0.9}}, "error": null}.
+    Higher score = more urgent (0-based across the 5 score levels)."""
+    data = read_json_body(handler)
+    ids = data.get("ids") if isinstance(data, dict) else None
+    if not isinstance(ids, list):
+        ids = []
+    ids = [int(x) for x in ids if isinstance(x, int) or str(x).isdigit()][:_RANK_CAP]
+    if not ids:
+        return json_response(handler, {"error": "no development ids provided"}, 400)
+    key = _typesafe_api_key()
+    if not key:
+        return json_response(handler, {
+            "error": "TypeSafe API key is not configured. Set the TYPESAFE_API_KEY env var "
+                     "or create data/typesafe_key.txt with the key on its first line."
+        }, 503)
+    conn = db()
+    placeholders = ",".join("?" * len(ids))
+    rows = conn.execute(
+        "SELECT * FROM developments WHERE id IN (%s)" % placeholders, ids
+    ).fetchall()
+    followup_counts = {}
+    for r in conn.execute(
+        "SELECT development_id, COUNT(*) FROM followups "
+        "WHERE development_id IN (%s) GROUP BY development_id" % placeholders, ids
+    ).fetchall():
+        followup_counts[r[0]] = r[1]
+    conn.close()
+    if not rows:
+        return json_response(handler, {"error": "no developments found for the given ids"}, 404)
+    state_items = [_rank_state_item(r, followup_counts) for r in rows]
+    scores = {}
+    try:
+        for i in range(0, len(state_items), _RANK_BATCH):
+            batch = state_items[i:i + _RANK_BATCH]
+            payload = {
+                "state": {"developments": batch},
+                "model": "jev-latest",
+                "questions": {
+                    "u_%s" % it["id"]: {
+                        "type": "score",
+                        "instructions": (
+                            "How urgent is this development? Judge it from `state.developments[%d]`: "
+                            "overdue or soon-due dates, High/Urgent priority, many remake notes "
+                            "(sign of rework/risk), and heavy follow-up activity all raise urgency. "
+                            "Pick the best level." % idx
+                        ),
+                        "criteria": [
+                            "Routine: no pressure, well ahead of due, low priority",
+                            "Low: some time to spare, normal priority",
+                            "Medium: worth watching, approaching due or moderate rework",
+                            "High: act soon, near due or notable rework/follow-ups",
+                            "Critical: overdue or blocked, high priority, repeated rework",
+                        ],
+                    }
+                    for idx, it in enumerate(batch)
+                },
+            }
+            resp = _typesafe_call(key, payload)
+            answers = resp.get("answers") or {}
+            for it in batch:
+                a = answers.get("u_%s" % it["id"])
+                if a:
+                    scores[str(it["id"])] = {
+                        "score": round(float(a.get("score", 0)), 3),
+                        "confidence": round(float(a.get("confidence", 0)), 3),
+                    }
+    except TypeSafeError as e:
+        return json_response(handler, {"error": str(e)}, e.status)
+    return json_response(handler, {"scores": scores, "error": None})
+
+
+
 def _dev_validate(data):
     return (data.get("company_name") or "").strip() and \
            (data.get("item_name") or "").strip() and \
@@ -2414,6 +2583,8 @@ def _dev_insert_or_update(conn, did, data):
     # A new development starts with status "Created" unless the payload says
     # otherwise. Updates never touch status (it is driven by Follow Ups).
     status_val = (data.get("status") or "").strip() or "Created"
+    due_date = (data.get("due_date") or "").strip() or None
+    priority = (data.get("priority") or "").strip() or None
     vals = (
         data.get("company_id") if did is None else (data.get("company_id") if data.get("company_id") is not None else None),
         company_name,
@@ -2436,6 +2607,8 @@ def _dev_insert_or_update(conn, did, data):
         color_sides,
         color_ways,
         original_sample,
+        due_date,
+        priority,
     )
     if did is None:
         cur = conn.cursor()
@@ -2443,17 +2616,30 @@ def _dev_insert_or_update(conn, did, data):
             "INSERT INTO developments "
             "(company_id, company_name, member_id, member_name, project_id, project_name, "
             "item_name, product_type, height, width, raised_height, no_of_color, pantones, "
-            "image_names, doc_names, material, special, remake, color_sides, color_ways, original_sample, status, created_at, updated_at) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "image_names, doc_names, material, special, remake, color_sides, color_ways, original_sample, due_date, priority, status, created_at, updated_at) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             vals + (status_val, now_iso(), now_iso()),
         )
         return cur.lastrowid
+    # Updates normally never touch status (it is driven by Follow Ups). The one
+    # exception is the Draft lifecycle: completing a draft flips it back to
+    # "Created", and re-saving an incomplete record keeps/flags it "Draft". We
+    # only write status here when the frontend explicitly sends one AND it's a
+    # Draft transition — otherwise a follow-up-driven status is preserved.
+    in_status = (data.get("status") or "").strip()
+    if in_status == "Draft":
+        upd_status = "Draft"
+    else:
+        cur = conn.execute("SELECT status FROM developments WHERE id = ?", (did,)).fetchone()
+        cur_status = cur["status"] if cur else "Created"
+        upd_status = ("Created" if in_status == "Created" and cur_status == "Draft" else cur_status)
+
     conn.execute(
         "UPDATE developments SET "
         "company_id=?, company_name=?, member_id=?, member_name=?, project_id=?, project_name=?, "
         "item_name=?, product_type=?, height=?, width=?, raised_height=?, no_of_color=?, "
-        "pantones=?, image_names=?, doc_names=?, material=?, special=?, remake=?, color_sides=?, color_ways=?, original_sample=?, updated_at=? WHERE id=?",
-        vals + (now_iso(), did),
+        "pantones=?, image_names=?, doc_names=?, material=?, special=?, remake=?, color_sides=?, color_ways=?, original_sample=?, due_date=?, priority=?, status=?, updated_at=? WHERE id=?",
+        vals + (upd_status, now_iso(), did),
     )
     return did
 
@@ -3007,12 +3193,12 @@ class Handler(SimpleHTTPRequestHandler):
                     api_list_ship_to(self, cid); return True
                 if method == "POST":
                     api_add_ship_to(self, cid); return True
+                if method == "DELETE":
+                    api_delete_ship_to(self, cid); return True
             elif len(parts) == 2 and parts[0].isdigit():
                 sid = int(parts[0])
                 if parts[1] == "default" and method == "PUT":
                     api_set_default_ship_to(self, sid); return True
-                if method == "DELETE":
-                    api_delete_ship_to(self, sid); return True
             return False
 
         if path.startswith("/api/projects/"):
@@ -3024,6 +3210,8 @@ class Handler(SimpleHTTPRequestHandler):
                     api_list_projects(self, cid); return True
                 if method == "POST":
                     api_add_project(self, cid); return True
+                if method == "DELETE":
+                    api_delete_project(self, cid); return True
             elif len(parts) == 2 and parts[0].isdigit() and method == "DELETE":
                 pid = int(parts[0])
                 api_delete_project(self, pid); return True
@@ -3051,6 +3239,8 @@ class Handler(SimpleHTTPRequestHandler):
             parts = rest.split("/")
             if rest == "mass-update" and method == "POST":
                 api_mass_update_developments(self); return True
+            if rest == "rank" and method == "POST":
+                api_rank_developments(self); return True
             if len(parts) == 3 and parts[0].isdigit() and parts[1] == "followups" and parts[2].isdigit():
                 did = int(parts[0])
                 fid = int(parts[2])

@@ -2656,6 +2656,9 @@ function blankDevState() {
     special: null,  // [{ ... }]  (placeholder structure, TBA)
     // Part 6 remark — array of free-text strings (stored in DB `remake` column)
     remake: [],     // ["note 1", "note 2"]
+    // Arrangement / planning fields (user-set)
+    dueDate: "",    // "YYYY-MM-DD" or "" (stored in DB `due_date` column)
+    priority: "",   // from development:priority options (Low/Normal/High/Urgent)
     images: [],   // [{ id, name, url }]
     docs: [],     // [{ id, name, file }]
   };
@@ -2837,14 +2840,18 @@ function resetDevState() {
 }
 
 // Build the development payload from current devState + DOM inputs.
-function buildDevelopmentPayload() {
+function buildDevelopmentPayload(allowPartial, status) {
   const itemEl = panel.querySelector("#dev-item");
   const productEl = panel.querySelector("#dev-product");
   const memberEl = panel.querySelector("#dev-member");
   const companyName = devState.companyName;
   const item = (itemEl ? itemEl.value.trim() : devState.item) || devState.item;
   const product = (productEl ? productEl.value : devState.product) || devState.product;
-  if (!companyName || !item || !product) return null;
+  // Required core (company + item + product) must ALWAYS be present — the API
+  // rejects rows missing them, even for a Draft. `allowPartial` only skips this
+  // local guard so an incomplete (draft) record can still be saved with whatever
+  // else is filled; the callers gate the Draft button on this core being present.
+  if (!allowPartial && (!companyName || !item || !product)) return null;
   // Part 4 image is REQUIRED to save/update on both Create and Edit (enforced
   // by updateSaveState). Documents remain optional and never block Save/Update.
   const memberName = memberEl && memberEl.value
@@ -2872,6 +2879,9 @@ function buildDevelopmentPayload() {
     special: devState.special,
     original_sample: devState.originalSample,
     remake: devState.remake,
+    due_date: devState.dueDate || null,
+    priority: devState.priority || null,
+    status: status || null,
   };
 }
 
@@ -5125,6 +5135,7 @@ async function renderDevelopmentCreate() {
 
     <div class="actions create-actions">
       <button class="btn ghost" id="dev-dummy" type="button">Dummy</button>
+      <button class="btn ghost" id="dev-draft" type="button" disabled>Draft</button>
       <button class="btn primary" id="dev-save" type="button" disabled>Save</button>
     </div>
     <div class="dev-save-hint" id="dev-save-hint" hidden></div>
@@ -5272,8 +5283,11 @@ async function renderDevelopmentCreate() {
   const itemEl = panel.querySelector("#dev-item");
   const heightEl = panel.querySelector("#dev-height");
   const widthEl = panel.querySelector("#dev-width");
+  const dueEl = panel.querySelector("#dev-due");
+  const priorityEl = panel.querySelector("#dev-priority");
   const saveBtn = panel.querySelector("#dev-save");
   const dummyBtn = panel.querySelector("#dev-dummy");
+  const draftBtn = panel.querySelector("#dev-draft");
 
   // --- Part 4 unlock when part 1 AND part 2 are complete ---
   const part3Body = null;
@@ -5314,6 +5328,8 @@ async function renderDevelopmentCreate() {
   if (devState.item) itemEl.value = devState.item;
   if (heightEl && devState.height) heightEl.value = devState.height;
   if (widthEl && devState.width) widthEl.value = devState.width;
+  if (dueEl && devState.dueDate) dueEl.value = devState.dueDate;
+  if (priorityEl && devState.priority) priorityEl.value = devState.priority;
 
   // refresh the Colors badge from restored state (runs after the panel mounts)
   refreshDevColorsBadge();
@@ -5393,6 +5409,18 @@ async function renderDevelopmentCreate() {
   if (widthEl) {
     widthEl.addEventListener("input", () => {
       devState.width = widthEl.value;
+      updateSaveState();
+    });
+  }
+  if (dueEl) {
+    dueEl.addEventListener("change", () => {
+      devState.dueDate = dueEl.value;
+      updateSaveState();
+    });
+  }
+  if (priorityEl) {
+    priorityEl.addEventListener("change", () => {
+      devState.priority = priorityEl.value;
       updateSaveState();
     });
   }
@@ -5684,6 +5712,14 @@ async function renderDevelopmentCreate() {
     saveBtn.disabled = !canSave;
     saveBtn.classList.toggle("active", canSave);
 
+    // Draft: offered while the record isn't complete enough to Save. It still
+    // requires the API's mandatory core (company + item + product), so the
+    // partial payload the server will accept is guaranteed present.
+    const hasServerBase = hiddenEl.value !== "" && !!devState.item && !!devState.product;
+    const canDraft = !canSave && hasServerBase;
+    draftBtn.disabled = !canDraft;
+    draftBtn.classList.toggle("active", canDraft);
+
     // Copyable debug hint — lists exactly which required field is still unmet,
     // so a locked Save button always explains itself. Only while Save is off.
     const hint = panel.querySelector("#dev-save-hint");
@@ -5714,7 +5750,8 @@ async function renderDevelopmentCreate() {
           " part3Valid=" + part3Good;
         hint.textContent = "Save disabled — missing required: " +
           (unmet.length ? unmet.join(", ") : "unknown") +
-          ". " + p3 + ".";
+          ". " + p3 + "." +
+          (hasServerBase ? " You can save as a Draft." : " Fill company, item name & product type first to enable Draft.");
         hint.hidden = false;
       }
     }
@@ -5961,7 +5998,7 @@ async function renderDevelopmentCreate() {
 
   saveBtn.addEventListener("click", async () => {
     if (saveBtn.disabled) return;
-    const payload = buildDevelopmentPayload();
+    const payload = buildDevelopmentPayload(false, "Created");
     if (!payload) {
       openConfirmModal("Cannot save", "Please fill company, member, item, product type, Height (mm), and Width (mm).", () => {});
       return;
@@ -5980,6 +6017,33 @@ async function renderDevelopmentCreate() {
       saveBtn.textContent = "Save";
       saveBtn.disabled = false;
       openConfirmModal("Save failed", "Could not save development: " + err.message, () => {});
+    }
+  });
+
+  draftBtn.addEventListener("click", async () => {
+    if (draftBtn.disabled) return;
+    // A Draft saves whatever is currently filled, even with required fields
+    // still missing — but it still needs the API's mandatory core (company +
+    // item + product) to be accepted.
+    const payload = buildDevelopmentPayload(true, "Draft");
+    if (!payload) {
+      openConfirmModal("Cannot save draft", "Please fill company, item name, and product type to save a draft.", () => {});
+      return;
+    }
+    draftBtn.disabled = true;
+    draftBtn.textContent = "Saving…";
+    try {
+      await fetchJson(API + "/api/developments", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      draftBtn.textContent = "Draft";
+      openPostSaveModal();
+    } catch (err) {
+      draftBtn.textContent = "Draft";
+      draftBtn.disabled = false;
+      openConfirmModal("Draft save failed", "Could not save development: " + err.message, () => {});
     }
   });
 
@@ -6005,6 +6069,7 @@ async function renderDevelopmentEdit() {
     <div class="actions create-actions">
       <button class="btn ghost" id="dev-back" type="button">← Back</button>
       <button class="btn ghost" id="dev-dummy" type="button">Dummy</button>
+      <button class="btn ghost" id="dev-draft" type="button" disabled>Draft</button>
       <button class="btn primary" id="dev-save" type="button" disabled>Update</button>
       <button class="btn primary dev-reset-spacer" id="dev-reset" type="button" disabled>Reset</button>
     </div>
@@ -6065,6 +6130,19 @@ async function renderDevelopmentEdit() {
           <div class="field">
             <label for="dev-width">Width (mm) <span class="req-mark">required</span></label>
             <input id="dev-width" type="number" min="0" step="0.1" placeholder="0.0" autocomplete="off" />
+          </div>
+        </div>
+        <div class="dim-row">
+          <div class="field">
+            <label for="dev-due">Due date</label>
+            <input id="dev-due" type="date" autocomplete="off" />
+          </div>
+          <div class="field">
+            <label for="dev-priority">Priority</label>
+            <select id="dev-priority">
+              <option value="">— select —</option>
+              ${opt("development","priority").map((p) => `<option value="${escapeHtml(p)}">${escapeHtml(p)}</option>`).join("")}
+            </select>
           </div>
         </div>
 
@@ -6151,8 +6229,11 @@ async function renderDevelopmentEdit() {
   const itemEl = panel.querySelector("#dev-item");
   const heightEl = panel.querySelector("#dev-height");
   const widthEl = panel.querySelector("#dev-width");
+  const dueEl = panel.querySelector("#dev-due");
+  const priorityEl = panel.querySelector("#dev-priority");
   const saveBtn = panel.querySelector("#dev-save");
   const dummyBtn = panel.querySelector("#dev-dummy");
+  const draftBtn = panel.querySelector("#dev-draft");
   const resetBtn = panel.querySelector("#dev-reset");
 
   const part3Body = null;
@@ -6188,6 +6269,8 @@ async function renderDevelopmentEdit() {
   if (devState.item) itemEl.value = devState.item;
   if (heightEl && devState.height) heightEl.value = devState.height;
   if (widthEl && devState.width) widthEl.value = devState.width;
+  if (dueEl && devState.dueDate) dueEl.value = devState.dueDate;
+  if (priorityEl && devState.priority) priorityEl.value = devState.priority;
 
   // refresh the Colors badge from the loaded record (runs after the panel mounts)
   refreshDevColorsBadge();
@@ -6258,6 +6341,18 @@ async function renderDevelopmentEdit() {
   if (widthEl) {
     widthEl.addEventListener("input", () => {
       devState.width = widthEl.value;
+      updateSaveState();
+    });
+  }
+  if (dueEl) {
+    dueEl.addEventListener("change", () => {
+      devState.dueDate = dueEl.value;
+      updateSaveState();
+    });
+  }
+  if (priorityEl) {
+    priorityEl.addEventListener("change", () => {
+      devState.priority = priorityEl.value;
       updateSaveState();
     });
   }
@@ -6538,6 +6633,14 @@ async function renderDevelopmentEdit() {
     const canSave = allFilled && dirty;
     saveBtn.disabled = !canSave;
     saveBtn.classList.toggle("active", canSave);
+    // Draft: while the record is still incomplete (not all required fields are
+    // filled) the edit can be saved back as a Draft. Once every field is filled
+    // the Draft button disables and Update takes over. It still requires the
+    // API's mandatory core (company + item + product) and a real change.
+    const hasServerBase = hiddenEl.value !== "" && !!devState.item && !!devState.product;
+    const canDraft = !allFilled && hasServerBase && dirty;
+    draftBtn.disabled = !canDraft;
+    draftBtn.classList.toggle("active", canDraft);
     // Header Reset is always available while editing — it restores the record
     // to its originally-loaded state (reverting even a product-type change).
     resetBtn.disabled = !devOriginal;
@@ -6808,7 +6911,7 @@ async function renderDevelopmentEdit() {
 
   saveBtn.addEventListener("click", async () => {
     if (saveBtn.disabled) return;
-    const payload = buildDevelopmentPayload();
+    const payload = buildDevelopmentPayload(false, "Created");
     if (!payload) {
       openConfirmModal("Cannot save", "Please fill company, member, item, product type, Height (mm), and Width (mm).", () => {});
       return;
@@ -6836,6 +6939,33 @@ async function renderDevelopmentEdit() {
     }
   });
 
+  // Draft: save the current (still incomplete) edit back as a Draft. Stays in
+  // the edit screen and re-seeds from the DB so the dirty state resets and the
+  // form keeps accepting more edits.
+  draftBtn.addEventListener("click", async () => {
+    if (draftBtn.disabled) return;
+    const payload = buildDevelopmentPayload(true, "Draft");
+    if (!payload) {
+      openConfirmModal("Cannot save draft", "Please fill company, item name, and product type to save a draft.", () => {});
+      return;
+    }
+    draftBtn.disabled = true;
+    draftBtn.textContent = "Saving…";
+    try {
+      await fetchJson(API + `/api/developments/${devEditId}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      showToast("Draft saved");
+      await editDevelopmentInCreate(devEditId);
+    } catch (err) {
+      draftBtn.textContent = "Draft";
+      draftBtn.disabled = false;
+      openConfirmModal("Draft save failed", "Could not save development: " + err.message, () => {});
+    }
+  });
+
 }
 
 // ---------------------------------------------------------------------------
@@ -6845,6 +6975,80 @@ async function renderDevelopmentEdit() {
 let devViewData = [];        // raw rows from /api/developments
 let devViewFilters = {};      // {company, member, item, product, ...}
 let devViewSelected = new Set(); // selected keys: "d:<id>"
+let rankScores = {};           // { <id>: { score, confidence } } from TypeSafe urgency ranking
+let rankActive = false;        // when true, the View is sorted by urgency score (desc)
+
+// True when a "YYYY-MM-DD" due date is before today (i.e. overdue).
+function isOverdue(dueStr) {
+  if (!dueStr) return false;
+  const d = new Date(dueStr + "T00:00:00");
+  if (isNaN(d.getTime())) return false;
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  return d < today;
+}
+
+// Map a 0-4 urgency score to a display tone class (green -> red).
+function urgencyTone(score) {
+  if (score >= 3.5) return "high";
+  if (score >= 2.5) return "medium";
+  if (score >= 1.5) return "low";
+  return "none";
+}
+
+// Rank the currently-shown developments by TypeSafe urgency score. On success
+// fills rankScores and re-sorts; on failure leaves order as-is and returns the
+// error string so the caller can show a copyable banner.
+async function rankDevelopmentUrgency() {
+  const ids = devViewData.map((r) => r.id);
+  if (!ids.length) return null;
+  let res;
+  try {
+    res = await fetch(withWorkspace(API + "/api/developments/rank"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ids }),
+    });
+  } catch (err) {
+    return "Failed to reach server for ranking: " + err.message;
+  }
+  let resp = null;
+  try { resp = await res.json(); } catch (_) { resp = null; }
+  if (!res.ok || (resp && resp.error)) {
+    return (resp && resp.error) || ("server returned " + res.status + " " + res.statusText);
+  }
+  const sc = (resp && resp.scores) || {};
+  rankScores = {};
+  for (const k of Object.keys(sc)) rankScores[k] = sc[k];
+  rankActive = true;
+  paintDevelopmentView();
+  return null;
+}
+
+// Copyable inline error banner for ranking failures. Not a popup: it sits in
+// the page as selectable text with an explicit close button (never dismisses
+// on an outside click), per the project's no-alert / no-backdrop-close rules.
+function clearRankError() {
+  const el = document.getElementById("rank-error");
+  if (el && el.parentNode) el.parentNode.removeChild(el);
+}
+function showRankError(message) {
+  clearRankError();
+  const wrap = panel.querySelector(".dev-view");
+  if (!wrap) return;
+  const div = document.createElement("div");
+  div.id = "rank-error";
+  div.className = "rank-error banner";
+  div.innerHTML =
+    `<div class="rank-error-head"><strong>Urgency ranking failed</strong>` +
+    `<button type="button" class="link-btn" id="rank-error-close">✕ close</button></div>` +
+    `<pre class="rank-error-text">${escapeHtml(message)}</pre>`;
+  const head = wrap.querySelector(".view-head");
+  if (head && head.nextSibling) wrap.insertBefore(div, head.nextSibling);
+  else wrap.appendChild(div);
+  const close = div.querySelector("#rank-error-close");
+  if (close) close.addEventListener("click", () => (div.parentNode ? div.parentNode.removeChild(div) : null));
+}
 
 // Build a short Part-3 details summary for the View's Details column.
 function devDetailsSummary(d) {
@@ -6900,6 +7104,9 @@ function paintDevelopmentView() {
     { key: "member_name", label: "Member" },
     { key: "item_name", label: "Item" },
     { key: "product_type", label: "Product Type" },
+    { key: "priority", label: "Priority" },
+    { key: "due_date", label: "Due" },
+    { key: "urgency", label: "Urgency" },
     { key: "status", label: "Status" },
     { key: "image", label: "Image" },
     { key: "documents", label: "Documents" },
@@ -6914,13 +7121,19 @@ function paintDevelopmentView() {
   ];
 
   // image / documents / details / material / special / remark are rendered
-  // specially and not column-searched
-  const specialKeys = new Set(["image", "documents", "details", "material", "special", "remark"]);
+  // specially and not column-searched. urgency is AI-derived, not a DB field.
+  const specialKeys = new Set(["image", "documents", "details", "material", "special", "remark", "urgency"]);
   const searchCols = cols.filter((c) => !specialKeys.has(c.key));
 
   const shown = devViewData.filter((r) =>
     searchCols.every((c) => fuzzyMatch(r[c.key], devViewFilters[c.key]))
   );
+  // When the user asked for urgency ranking, put the highest-scoring (most
+  // urgent) developments first; ties fall back to the newest first.
+  if (rankActive) {
+    shown.sort((a, b) => (rankScores[b.id] ? rankScores[b.id].score : -1) -
+                          (rankScores[a.id] ? rankScores[a.id].score : -1));
+  }
 
   const allKeys = shown.map((r) => "d:" + r.id);
   const allChecked = allKeys.length > 0 && allKeys.every((k) => devViewSelected.has(k));
@@ -6973,7 +7186,12 @@ function paintDevelopmentView() {
         <td>${escapeHtml(r.member_name || "—")}</td>
         <td>${escapeHtml(r.item_name)}</td>
         <td>${escapeHtml(r.product_type)}</td>
-        <td><button type="button" class="link-btn followup-status-btn" data-status="${r.id}" title="View follow-up history">${escapeHtml(r.status || "Created")}</button></td>
+        <td>${r.priority ? `<span class="pill-badge priority-${escapeHtml(r.priority.toLowerCase())}">${escapeHtml(r.priority)}</span>` : `<span class="muted">—</span>`}</td>
+        <td>${r.due_date ? `<span class="due-cell${isOverdue(r.due_date) ? " overdue" : ""}">${escapeHtml(r.due_date)}</span>` : `<span class="muted">—</span>`}</td>
+        <td class="urgency-cell">${rankScores[r.id] ? `<span class="pill-badge urgency-${urgencyTone(rankScores[r.id].score)}" title="confidence ${Math.round(rankScores[r.id].confidence * 100)}%">${rankScores[r.id].score.toFixed(1)}</span>` : `<span class="muted">—</span>`}</td>
+        <td>${r.status === "Draft"
+          ? `<span class="pill-badge draft-badge" title="Incomplete — draft">Draft</span>`
+          : `<button type="button" class="link-btn followup-status-btn" data-status="${r.id}" title="View follow-up history">${escapeHtml(r.status || "Created")}</button>`}</td>
         <td class="cell-imgs">${thumbs}</td>
         <td class="cell-docs">${docLinks}</td>
         <td>${materialCell}</td>
@@ -6991,13 +7209,14 @@ function paintDevelopmentView() {
           <button class="icon-btn danger" data-del="${r.id}" title="Delete">🗑</button>
         </td>
       </tr>`;
-  }).join("") || `<tr><td colspan="17" class="muted">No matches.</td></tr>`;
+  }).join("") || `<tr><td colspan="20" class="muted">No matches.</td></tr>`;
 
   panel.innerHTML = `
     <div class="dev-view">
     <div class="view-head">
       <h2>Development / View</h2>
       <div class="view-actions">
+        <button class="btn ghost" id="dev-rank-urgency" type="button">⚡ Rank by urgency</button>
         <button class="btn ghost" id="dev-export" type="button">Export Excel</button>
       </div>
     </div>
@@ -7047,6 +7266,18 @@ function paintDevelopmentView() {
       const same = panel.querySelector(`.col-search[data-key="${inp.dataset.key}"]`);
       if (same) { same.focus(); same.setSelectionRange(cursor, cursor); }
     });
+  });
+
+  panel.querySelector("#dev-rank-urgency").addEventListener("click", async () => {
+    const btn = panel.querySelector("#dev-rank-urgency");
+    const oldText = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = "Ranking…";
+    const err = await rankDevelopmentUrgency();
+    btn.disabled = false;
+    btn.textContent = oldText;
+    if (err) showRankError(err);
+    else clearRankError();
   });
 
   panel.querySelector("#dev-export").addEventListener("click", async () => {
@@ -7966,6 +8197,8 @@ async function editDevelopmentInCreate(id) {
   // Part 2 — Original Sample (required yes/no), persisted as { answer }.
   s.originalSample = rec.original_sample != null ? rec.original_sample : null;
   s.remake = Array.isArray(rec.remake) ? rec.remake.slice() : [];
+  s.dueDate = rec.due_date || "";
+  s.priority = rec.priority || "";
 
   // images — resolve each saved name to its servable URL (sample or upload).
   s.images = (rec.image_names || []).map((n) => ({
