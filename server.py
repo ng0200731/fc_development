@@ -32,7 +32,10 @@ from urllib.parse import urlparse, unquote, quote, parse_qs
 from openpyxl import Workbook
 from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
 from openpyxl.drawing.image import Image as XLImage
+from openpyxl.drawing.spreadsheet_drawing import OneCellAnchor, AnchorMarker
+from openpyxl.drawing.xdr import XDRPositiveSize2D
 from openpyxl.utils import get_column_letter
+from openpyxl.utils.units import pixels_to_EMU
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.path.join(BASE_DIR, "data", "fc.db")
@@ -1255,6 +1258,7 @@ def api_create_workspace(handler):
 
 IMG_THUMB_W = 110  # px, exported image width (height scaled to keep ratio)
 IMG_THUMB_H = 80   # px, exported image height (used for row height + grid)
+PT_EMU = 12700     # EMUs in one point (1/72 inch) — used for the image inset
 
 
 def display_name(name):
@@ -1292,8 +1296,12 @@ def _resolve_image_path(name):
     return cand if os.path.isfile(cand) else None
 
 
-def _embed_thumbnail(ws, cell, name):
-    """Embed an image (scaled to a thumbnail) into `cell`. Returns True on success."""
+def _embed_thumbnail(ws, col, row, name):
+    """Embed an image (scaled to a thumbnail) into the cell at (col,row).
+
+    The picture is anchored 1 pt (PT_EMU) in from the top and left so it never
+    touches the cell borders/edges of the sheet. Returns True on success.
+    """
     path = _resolve_image_path(name)
     if not path:
         return False
@@ -1308,7 +1316,12 @@ def _embed_thumbnail(ws, cell, name):
     scale = min(IMG_THUMB_W / w, IMG_THUMB_H / h, 1.0)
     img.width = int(w * scale)
     img.height = int(h * scale)
-    ws.add_image(img, cell)
+    # OneCellAnchor with a 1 pt top+left offset, so the image sits inset.
+    img.anchor = OneCellAnchor(
+        _from=AnchorMarker(col=col - 1, colOff=PT_EMU, row=row - 1, rowOff=PT_EMU),
+        ext=XDRPositiveSize2D(cx=pixels_to_EMU(img.width), cy=pixels_to_EMU(img.height)),
+    )
+    ws.add_image(img)
     return True
 
 
@@ -1381,7 +1394,7 @@ def _build_workbook(records, sheet_title):
             c.border = THIN_BORDER
         if img_col is not None and image_names:
             ws.row_dimensions[ri].height = IMG_THUMB_H + 6
-            _embed_thumbnail(ws, f"{get_column_letter(img_col)}{ri}", image_names[0])
+            _embed_thumbnail(ws, img_col, ri, image_names[0])
 
     # Lock the Image column width to the thumbnail so the picture fits the cell.
     if img_col is not None:
@@ -1440,7 +1453,7 @@ def _dev_record_to_xlsx(d):
 
     Column order mirrors the Development / View grid exactly:
     Company, Member, Item, Product Type, Original Sample, Image, Documents,
-    Material, Special, Unit, Height, Width, Remark, Created, Updated, Details.
+    Material, Special, Unit, Height, Width, Remark, Created, Updated.
     `cells` has exactly one entry per header, in order.
     """
     images = d.get("image_names") or []
@@ -1448,7 +1461,7 @@ def _dev_record_to_xlsx(d):
     headers = ["Company", "Member", "Item", "Product Type", "Original Sample",
                "Image", "Documents", "Material", "Special",
                "Unit", "Height", "Width", "Color Details", "Remark",
-               "Created", "Updated", "Details"]
+               "Created", "Updated"]
     material = d.get("material")
     special = d.get("special")
     height = d.get("height")
@@ -1480,7 +1493,6 @@ def _dev_record_to_xlsx(d):
         "\n".join(remake),           # Part 6 remarks
         d.get("created_at") or "",
         d.get("updated_at") or "",
-        dev_details_summary(d),          # Details: size / colors summary
     ]
     return headers, cells, images
 
