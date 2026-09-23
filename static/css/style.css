@@ -186,7 +186,7 @@ select:focus-visible,
 
 .panel {
   flex: 1;
-  padding: 24px;
+  padding: 0px;
   overflow-y: auto;
   overflow-x: auto;   /* let wide tables scroll here so sticky columns can freeze */
   background: var(--bg);
@@ -583,53 +583,6 @@ select:focus-visible,
   color: #b45309;
 }
 
-/* Priority pill colors (Low / Normal / High / Urgent). */
-.pill-badge.priority-low    { background: #eef2f6; color: #475569; }
-.pill-badge.priority-normal { background: #e0ecff; color: #2563eb; }
-.pill-badge.priority-high   { background: #fef3c7; color: #b45309; }
-.pill-badge.priority-urgent { background: #fee2e2; color: #b91c1c; }
-
-/* Due-date cell: normal text, red + bold once overdue. */
-.due-cell.overdue {
-  color: #b91c1c;
-  font-weight: 700;
-}
-
-/* AI urgency score pill tones (green -> red across the 0-4 scale). */
-.pill-badge.urgency-none   { background: #eef2f6; color: #475569; }
-.pill-badge.urgency-low    { background: #dcfce7; color: #15803d; }
-.pill-badge.urgency-medium { background: #fef3c7; color: #b45309; }
-.pill-badge.urgency-high   { background: #fee2e2; color: #b91c1c; }
-
-/* Copyable inline banner shown when urgency ranking fails. */
-.rank-error {
-  margin: 8px 0;
-  border: 1px solid #fecaca;
-  background: #fef2f2;
-  color: #b91c1c;
-  border-radius: 8px;
-  padding: 8px 12px;
-}
-.rank-error-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-}
-.rank-error-text {
-  margin: 6px 0 0;
-  white-space: pre-wrap;
-  word-break: break-word;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  font-size: 12px;
-  line-height: 1.4;
-  background: #fff;
-  border: 1px solid #fecaca;
-  border-radius: 6px;
-  padding: 8px;
-  user-select: text;
-}
-
 /* Run-number the user must retype exactly to confirm a destructive delete. */
 .delete-confirm-code {
   margin: 10px 0 14px;
@@ -739,6 +692,11 @@ select:focus-visible,
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 14px;
+}
+
+/* Three-across dimension row (Unit + Height + Width) */
+.dim-row.tri {
+  grid-template-columns: 1fr 1fr 1fr;
 }
 
 /* Part 1: Company + Member side by side (2 columns) */
