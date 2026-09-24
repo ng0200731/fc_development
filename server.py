@@ -32,10 +32,8 @@ from urllib.parse import urlparse, unquote, quote, parse_qs
 from openpyxl import Workbook
 from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
 from openpyxl.drawing.image import Image as XLImage
-from openpyxl.drawing.spreadsheet_drawing import OneCellAnchor, AnchorMarker
-from openpyxl.drawing.xdr import XDRPositiveSize2D
+from openpyxl.drawing.spreadsheet_drawing import TwoCellAnchor, AnchorMarker
 from openpyxl.utils import get_column_letter
-from openpyxl.utils.units import pixels_to_EMU
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.path.join(BASE_DIR, "data", "fc.db")
@@ -1258,7 +1256,7 @@ def api_create_workspace(handler):
 
 IMG_THUMB_W = 110  # px, exported image width (height scaled to keep ratio)
 IMG_THUMB_H = 80   # px, exported image height (used for row height + grid)
-PT_EMU = 12700     # EMUs in one point (1/72 inch) — used for the image inset
+IMG_INSET = 12700  # 1 pt in EMU — margin between the image and each cell edge
 
 
 def display_name(name):
@@ -1297,10 +1295,9 @@ def _resolve_image_path(name):
 
 
 def _embed_thumbnail(ws, col, row, name):
-    """Embed an image (scaled to a thumbnail) into the cell at (col,row).
-
-    The picture is anchored 1 pt (PT_EMU) in from the top and left so it never
-    touches the cell borders/edges of the sheet. Returns True on success.
+    """Embed an image into the single cell at (col,row), inset 1 pt from every
+    edge, so it is centered, fully contained, and never touches the cell borders.
+    Returns True on success.
     """
     path = _resolve_image_path(name)
     if not path:
@@ -1316,10 +1313,14 @@ def _embed_thumbnail(ws, col, row, name):
     scale = min(IMG_THUMB_W / w, IMG_THUMB_H / h, 1.0)
     img.width = int(w * scale)
     img.height = int(h * scale)
-    # OneCellAnchor with a 1 pt top+left offset, so the image sits inset.
-    img.anchor = OneCellAnchor(
-        _from=AnchorMarker(col=col - 1, colOff=PT_EMU, row=row - 1, rowOff=PT_EMU),
-        ext=XDRPositiveSize2D(cx=pixels_to_EMU(img.width), cy=pixels_to_EMU(img.height)),
+
+    # TwoCellAnchor pins the picture's top-left and bottom-right markers inside
+    # this ONE cell, each inset by IMG_INSET. Excel fills the picture into that
+    # box, so the image always renders within its own cell and clears every edge.
+    img.anchor = TwoCellAnchor(
+        editAs="oneCell",
+        _from=AnchorMarker(col=col - 1, colOff=IMG_INSET, row=row - 1, rowOff=IMG_INSET),
+        to=AnchorMarker(col=col, colOff=-IMG_INSET, row=row, rowOff=-IMG_INSET),
     )
     ws.add_image(img)
     return True
@@ -1453,13 +1454,13 @@ def _dev_record_to_xlsx(d):
 
     Column order mirrors the Development / View grid exactly:
     Company, Member, Item, Product Type, Original Sample, Image, Documents,
-    Material, Special, Unit, Height, Width, Remark, Created, Updated.
+    Material, Variable, Unit, Height, Width, Remark, Created, Updated.
     `cells` has exactly one entry per header, in order.
     """
     images = d.get("image_names") or []
     docs = d.get("doc_names") or []
     headers = ["Company", "Member", "Item", "Product Type", "Original Sample",
-               "Image", "Documents", "Material", "Special",
+               "Image", "Documents", "Material", "Variable",
                "Unit", "Height", "Width", "Color Details", "Remark",
                "Created", "Updated"]
     material = d.get("material")
