@@ -1094,6 +1094,13 @@ select:focus-visible,
   margin-bottom: 12px;
 }
 .view-head h2 { margin: 0; }
+.view-head .head-count {
+  margin: 0 12px;
+  font-weight: 600;
+  font-size: 13px;
+  color: var(--accent);
+  white-space: nowrap;
+}
 .view-actions { display: flex; gap: 10px; }
 
 .batch-bar {

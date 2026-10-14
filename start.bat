@@ -1,41 +1,59 @@
 @echo off
 REM ============================================================
-REM  Start the FC web app
-REM  Serves d:\project\fc on port 8088 (frontend + SQLite API).
-REM  This PC  : http://localhost:8088
-REM  LAN users: http://%COMPUTERNAME%:8088  (or your LAN IP)
-REM ============================================================
+REM  Start the FC web app (auto-picks a free port)
+REM  The Project A app is on :4500 - do NOT use that port.
 REM
-REM  Modified: killed both stale processes and started ONE fresh server.
-REM  Verified against the live port:
-REM    real-img: 200 image/png
-REM    nxb-doc:  200 application/pdf
-REM    index:    200
+REM  Windows (Hyper-V/WSL) reserves shifting TCP ranges each boot,
+REM  so a fixed port can be refused (WinError 10013) even when it
+REM  looks free. server.py therefore tries 8099, then a spread of
+REM  fallback ports, and writes the winner to data\port.txt.
+REM  This script waits for that file and opens the browser on the
+REM  real port. Check exclusions with:
+REM    netsh interface ipv4 show excludedportrange protocol=tcp
 REM
-REM  NOTE: never run two server.py instances on :8088 - a second listener
-REM  splits /uploads/ traffic between the old (crashing) and new server,
-REM  leaving half the images broken. Only one python.exe should hold :8088.
+REM  NOTE: never run two server.py instances at once - a second
+REM  listener splits /uploads/ traffic between the old (crashing)
+REM  and new server, leaving half the images broken. Only one
+REM  python.exe should hold the port.
 REM ============================================================
-set PORT=8088
 set PYTHON="C:\Users\ng\AppData\Local\Programs\Python\Python311\python.exe"
 
-echo Starting FC server on port %PORT% (the Project A app is on :4500, do NOT use that) ...
-echo This PC  : http://localhost:8088
-echo LAN users: http://%COMPUTERNAME%:8088
-echo (others can also use your LAN IP, e.g. http://192.168.31.31:8088)
-echo.
-echo Press CTRL+C to stop.
+echo Starting FC server (Project A is on :4500, do NOT use that) ...
 echo.
 
-REM Start server in background, wait for it to boot, then open browser
+REM Remove yesterday's port file so we never read a stale value
+if exist "%~dp0data\port.txt" del "%~dp0data\port.txt"
+
+REM Start server in background (it picks the port and writes data\port.txt)
 start "" /B %PYTHON% "%~dp0server.py"
 
-REM Give the server a moment to start listening
-timeout /t 2 /nobreak >nul
+REM Poll for data\port.txt for up to ~6 seconds
+set PORT=
+for /L %%i in (1,1,30) do (
+  if not defined PORT (
+    if exist "%~dp0data\port.txt" (
+      set /p PORT=<"%~dp0data\port.txt"
+    ) else (
+      ping -n 2 127.0.0.1 >nul
+    )
+  )
+)
 
-REM Explicitly open the FC app (NOT the other project on :4500).
-start "" "http://localhost:8088"
+if not defined PORT (
+  echo.
+  echo [ERROR] The server did not start. Read the Python traceback above.
+  echo         Likely cause: every candidate port is in a Windows-excluded
+  echo         range. Check:  netsh interface ipv4 show excludedportrange
+  pause >nul
+  exit /b 1
+)
 
-REM Keep this window open (server runs in background above)
-echo Server is running. Close this window or press CTRL+C to stop.
+echo Server is running on port %PORT%.
+echo   This PC  : http://localhost:%PORT%
+echo   LAN users: http://%COMPUTERNAME%:%PORT%
+echo.
+
+start "" "http://localhost:%PORT%"
+
+echo Close this window or press CTRL+C to stop.
 pause >nul

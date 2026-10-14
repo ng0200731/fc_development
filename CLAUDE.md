@@ -1,12 +1,12 @@
 # FC Project
 
-A small Python web app (frontend + SQLite API) served by `server.py` on port 8088.
+A small Python web app (frontend + SQLite API) served by `server.py` on port 8099.
 
 ## Project layout (the hierarchy)
 ```
 fc/
 ├── server.py        # main web server: serves static/ frontend + SQLite REST API
-├── start.bat        # launches server on :8088 and opens the browser
+├── start.bat        # launches server on :8099 and opens the browser
 ├── .gitignore
 ├── static/          # the web frontend (this is what the browser loads)
 │   ├── index.html
@@ -28,7 +28,10 @@ Any scratch/test `.py` file (ad-hoc debugging scripts) is **temporary**.
 - If a test script turns out to be genuinely useful long-term, convert it into a proper module under a clear name and intent, or move it out of the project root.
 
 ## Running
-Use `start.bat` to start the server (Windows). The server runs in the background and opens `http://localhost:8088`.
+Use `start.bat` to start the server (Windows). It prefers port 8099 but
+auto-falls-back to a free port if Windows has that one excluded (Hyper-V/WSL
+reserve shifting TCP ranges, giving WinError 10013), then opens the browser on
+whatever port it got.
 
 ## Don't test unless explicitly asked
 I (Claude) should **focus on coding, not testing**. The user tests the app themselves in their own browser.

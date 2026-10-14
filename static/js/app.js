@@ -2100,6 +2100,7 @@ function renderCustomerCreate() {
       <button class="subtab locked" data-step="member" role="tab" disabled>Member</button>
       <button class="subtab locked" data-step="shipto" role="tab" disabled>Ship to</button>
       <button class="subtab locked" data-step="project" role="tab" disabled>Project</button>
+      <button class="subtab locked" data-step="special" role="tab" disabled>Special Request</button>
     </div>
 
     <!-- COMPANY STEP -->
@@ -2191,7 +2192,7 @@ function showMemberStep(companyName, emailSuffix, currency, paymentTerm, shipmen
   // the project tab is freely accessible once the company exists; the ship-to
   // tab is also unlocked, but a modal only appears after a ship-to save.
   const unlockLaterTabs = () => {
-    ["shipto", "project"].forEach((step) => {
+    ["shipto", "project", "special"].forEach((step) => {
       const tab = subtabs.querySelector(`[data-step="${step}"]`);
       if (tab) { tab.classList.remove("locked"); tab.disabled = false; }
     });
@@ -2333,6 +2334,7 @@ function showMemberStep(companyName, emailSuffix, currency, paymentTerm, shipmen
         unlockLaterTabs();
         showShipToStep(company.id, companyName, emailSuffix);
         showProjectStep(company.id, companyName, emailSuffix);
+        showSpecialStep(company.id, companyName, emailSuffix);
         nextBtn.textContent = "Created ✓";
         // After creating the company, jump straight to the Ship to tab
         // (no post-save modal). The modal appears once a ship-to address is saved.
@@ -2375,15 +2377,15 @@ function switchCreateTab(step) {
       // Company -> always; Member -> company filled; Ship to / Project -> company created.
       const target = t.dataset.step;
       if (target === "member" && !panel.dataset.cmpName) return;
-      if ((target === "shipto" || target === "project") && !panel.dataset.cmpId) return;
+      if ((target === "shipto" || target === "project" || target === "special") && !panel.dataset.cmpId) return;
       subtabs.querySelectorAll(".subtab").forEach((x) => x.classList.toggle("active", x === t));
-      ["company", "member", "shipto", "project"].forEach((s) => {
+      ["company", "member", "shipto", "project", "special"].forEach((s) => {
         const sec = panel.querySelector("#step-" + s);
         if (sec) sec.style.display = t.dataset.step === s ? "" : "none";
       });
     };
   });
-  ["company", "member", "shipto", "project"].forEach((s) => {
+  ["company", "member", "shipto", "project", "special"].forEach((s) => {
     const sec = panel.querySelector("#step-" + s);
     if (sec) sec.style.display = step === s ? "" : "none";
   });
@@ -2520,7 +2522,7 @@ function showProjectStep(companyId, companyName, emailSuffix) {
     </div>
     <div class="actions create-final">
       <button class="btn ghost" id="proj-back" type="button">Back</button>
-      <button class="btn primary" id="proj-done" type="button">Created ✓</button>
+      <button class="btn primary" id="proj-done" type="button">Next</button>
     </div>
   `;
   panel.querySelector("#step-shipto").after(sec);
@@ -2529,33 +2531,8 @@ function showProjectStep(companyId, companyName, emailSuffix) {
     switchCreateTab("shipto");
   });
   sec.querySelector("#proj-done").addEventListener("click", () => {
-    openCustomerPostSaveModal();
+    switchCreateTab("special");
   });
-
-  // Project step is optional — but the modal helper needs to exist. Reuse the
-  // post-create modal (the only one removed earlier) by re-adding it here.
-  function openCustomerPostSaveModal() {
-    const overlay = document.createElement("div");
-    overlay.className = "modal-overlay";
-    overlay.innerHTML = `
-      <div class="modal" role="dialog" aria-modal="true" style="max-width:440px">
-        <h3>Customer created</h3>
-        <p class="muted">What would you like to do next?</p>
-        <div class="actions modal-actions">
-          <button class="btn ghost" id="cps-keep" type="button">Keep creating new customer</button>
-          <button class="btn primary" id="cps-view" type="button">Go to Customer / View</button>
-        </div>
-      </div>`;
-    document.body.appendChild(overlay);
-    overlay.querySelector("#cps-view").addEventListener("click", () => {
-      overlay.remove();
-      openTab("customer-view");
-    });
-    overlay.querySelector("#cps-keep").addEventListener("click", () => {
-      overlay.remove();
-      renderCustomerCreate();
-    });
-  }
 
   const listEl = sec.querySelector("#proj-list");
   const nameEl = sec.querySelector("#proj-name");
@@ -2614,6 +2591,122 @@ function showProjectStep(companyId, companyName, emailSuffix) {
   fetchJson(API + `/api/projects/${companyId}`)
     .then(renderProjList)
     .catch(() => renderProjList([]));
+}
+
+// Post-create modal shown from the final step (Special Request). Also reached
+// from Project via "Next". Modal persists until an explicit in-modal choice.
+function openCustomerPostSaveModal() {
+  const overlay = document.createElement("div");
+  overlay.className = "modal-overlay";
+  overlay.innerHTML = `
+    <div class="modal" role="dialog" aria-modal="true" style="max-width:440px">
+      <h3>Customer created</h3>
+      <p class="muted">What would you like to do next?</p>
+      <div class="actions modal-actions">
+        <button class="btn ghost" id="cps-keep" type="button">Keep creating new customer</button>
+        <button class="btn primary" id="cps-view" type="button">Go to Customer / View</button>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+  overlay.querySelector("#cps-view").addEventListener("click", () => {
+    overlay.remove();
+    openTab("customer-view");
+  });
+  overlay.querySelector("#cps-keep").addEventListener("click", () => {
+    overlay.remove();
+    renderCustomerCreate();
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Customer / Create — Special Request step (multiple free-text lines)
+// ---------------------------------------------------------------------------
+
+function showSpecialStep(companyId, companyName, emailSuffix) {
+  let sec = panel.querySelector("#step-special");
+  if (sec) return; // already built
+  sec = document.createElement("div");
+  sec.className = "subpanel";
+  sec.id = "step-special";
+  sec.style.display = "none";
+  sec.innerHTML = `
+    <p class="ctx">Company: <strong>${escapeHtml(companyName)}</strong>
+       (email suffix <strong>@${escapeHtml(emailSuffix)}</strong>)</p>
+    <div class="ship-list" id="spr-list"></div>
+    <div class="member-form">
+      <h3 class="subhead">Add special request</h3>
+      <div class="field">
+        <label for="spr-text">Request</label>
+        <textarea id="spr-text" rows="2" placeholder="e.g. send linen guilder swatches…" autocomplete="off"></textarea>
+      </div>
+      <div class="actions">
+        <button class="btn" id="spr-add" type="button" disabled>Add request</button>
+      </div>
+    </div>
+    <div class="actions create-final">
+      <button class="btn ghost" id="spr-back" type="button">Back</button>
+      <button class="btn primary" id="spr-done" type="button">Created ✓</button>
+    </div>
+  `;
+  panel.querySelector("#step-project").after(sec);
+
+  sec.querySelector("#spr-back").addEventListener("click", () => {
+    switchCreateTab("project");
+  });
+  sec.querySelector("#spr-done").addEventListener("click", () => {
+    openCustomerPostSaveModal();
+  });
+
+  const listEl = sec.querySelector("#spr-list");
+  const textEl = sec.querySelector("#spr-text");
+  const addBtn = sec.querySelector("#spr-add");
+
+  const rendersprList = (rows) => {
+    if (!rows.length) {
+      listEl.innerHTML = '<p class="muted small">No special requests yet.</p>';
+      return;
+    }
+    listEl.innerHTML = rows.map((s) => `
+      <div class="member-row">
+        <span><strong>${escapeHtml(s.text)}</strong></span>
+        <span class="muted">
+          <button class="icon-btn danger" data-rm="${s.id}" title="Remove">✕</button>
+        </span>
+      </div>`).join("");
+    listEl.querySelectorAll("[data-rm]").forEach((b) => {
+      b.addEventListener("click", async () => {
+        try {
+          await fetchJson(API + `/api/special-requests/${b.dataset.rm}`, { method: "DELETE" });
+          const rows = await fetchJson(API + `/api/special-requests/${companyId}`);
+          rendersprList(rows);
+        } catch (err) { alert("Remove failed: " + err.message); }
+      });
+    });
+  };
+
+  textEl.addEventListener("input", () => {
+    addBtn.disabled = !textEl.value.trim();
+  });
+
+  addBtn.addEventListener("click", async () => {
+    if (addBtn.disabled) return;
+    const text = textEl.value.trim();
+    try {
+      await fetchJson(API + `/api/special-requests/${companyId}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text }),
+      });
+      textEl.value = "";
+      addBtn.disabled = true;
+      const rows = await fetchJson(API + `/api/special-requests/${companyId}`);
+      rendersprList(rows);
+    } catch (err) { alert("Add failed: " + err.message); }
+  });
+
+  fetchJson(API + `/api/special-requests/${companyId}`)
+    .then(rendersprList)
+    .catch(() => rendersprList([]));
 }
 
 // ---------------------------------------------------------------------------
@@ -5356,7 +5449,13 @@ async function renderDevelopmentCreate() {
     loadMembers(Number(devState.companyId), devState.memberId, devState.projectId);
   }
 
-  // refresh = re-fetch latest companies + members from the customer database
+  // refresh = re-fetch the latest companies, members AND projects from the
+  // customer database, so every customer dropdown re-syncs with the latest data.
+  // The member/project lists only refresh when a company is active. A company is
+  // active either when it is confirmed in the hidden id field, or when the name
+  // still shown in the search box matches a company (the input handler clears the
+  // hidden id on any typing, so a selected company often loses its confirmed id
+  // while its name — and the project list — stay visible).
   panel.querySelector("#dev-refresh").addEventListener("click", async (e) => {
     const btn = e.currentTarget;
     btn.disabled = true;
@@ -5365,13 +5464,31 @@ async function renderDevelopmentCreate() {
     try {
       companies = await fetchJson(API + "/api/companies");
       devCompaniesCache = companies;
-      // if a company was chosen, reload its members so the list is current
-      if (prevId !== "") {
-        const stillThere = companies.some((c) => String(c.id) === String(prevId));
+      // resolve which company the dropdowns should reflect: the confirmed hidden
+      // id, or (if the hidden id was cleared by typing) the company whose name
+      // still matches the search box text.
+      let activeId = prevId;
+      if (activeId === "") {
+        const text = searchEl.value.trim().toLowerCase();
+        const hit = companies.find((c) => String(c.name).toLowerCase() === text);
+        if (hit) {
+          activeId = hit.id;
+          // re-confirm the company so the hidden id, devState and Save gating all
+          // agree with the member/project lists that refresh is about to fill in.
+          hiddenEl.value = String(hit.id);
+          searchEl.value = hit.name;
+          devState.companyId = String(hit.id);
+          devState.companyName = hit.name;
+        }
+      }
+      // if a company is active, reload its members + projects so the lists are
+      // current against the latest customer database
+      if (activeId !== "") {
+        const stillThere = companies.some((c) => String(c.id) === String(activeId));
         if (stillThere) {
           // keep the currently-selected member if it still exists in the
           // customer database (don't reset it on refresh)
-          await loadMembers(Number(prevId), devState.memberId || undefined, devState.projectId || undefined);
+          await loadMembers(Number(activeId), devState.memberId || undefined, devState.projectId || undefined);
         } else {
           resetCompanySelection();
         }
@@ -5536,6 +5653,11 @@ async function renderDevelopmentCreate() {
     memberEl.value = "";
     memberEl.disabled = true;
     memberEl.innerHTML = `<option value="">— select a company first —</option>`;
+    // Unselecting the company also clears the project list — otherwise the
+    // previous company's projects would keep showing against the new search text.
+    projectEl.value = "";
+    projectEl.disabled = true;
+    projectEl.innerHTML = `<option value="">No project</option>`;
     devState.companyId = "";
     devState.companyName = "";
     devState.memberId = "";
@@ -6274,6 +6396,13 @@ async function renderDevelopmentEdit() {
     loadMembers(Number(devState.companyId), devState.memberId, devState.projectId);
   }
 
+  // refresh = re-fetch the latest companies, members AND projects from the
+  // customer database, so every customer dropdown re-syncs with the latest data.
+  // The member/project lists only refresh when a company is active. A company is
+  // active either when it is confirmed in the hidden id field, or when the name
+  // still shown in the search box matches a company (the input handler clears the
+  // hidden id on any typing, so a selected company often loses its confirmed id
+  // while its name — and the project list — stay visible).
   panel.querySelector("#dev-refresh").addEventListener("click", async (e) => {
     const btn = e.currentTarget;
     btn.disabled = true;
@@ -6282,10 +6411,31 @@ async function renderDevelopmentEdit() {
     try {
       companies = await fetchJson(API + "/api/companies");
       devCompaniesCache = companies;
-      if (prevId !== "") {
-        const stillThere = companies.some((c) => String(c.id) === String(prevId));
+      // resolve which company the dropdowns should reflect: the confirmed hidden
+      // id, or (if the hidden id was cleared by typing) the company whose name
+      // still matches the search box text.
+      let activeId = prevId;
+      if (activeId === "") {
+        const text = searchEl.value.trim().toLowerCase();
+        const hit = companies.find((c) => String(c.name).toLowerCase() === text);
+        if (hit) {
+          activeId = hit.id;
+          // re-confirm the company so the hidden id, devState and Save gating all
+          // agree with the member/project lists that refresh is about to fill in.
+          hiddenEl.value = String(hit.id);
+          searchEl.value = hit.name;
+          devState.companyId = String(hit.id);
+          devState.companyName = hit.name;
+        }
+      }
+      // if a company is active, reload its members + projects so the lists are
+      // current against the latest customer database
+      if (activeId !== "") {
+        const stillThere = companies.some((c) => String(c.id) === String(activeId));
         if (stillThere) {
-          await loadMembers(Number(prevId), devState.memberId || undefined, devState.projectId || undefined);
+          // keep the currently-selected member if it still exists in the
+          // customer database (don't reset it on refresh)
+          await loadMembers(Number(activeId), devState.memberId || undefined, devState.projectId || undefined);
         } else {
           resetCompanySelection();
         }
@@ -6440,6 +6590,11 @@ async function renderDevelopmentEdit() {
     memberEl.value = "";
     memberEl.disabled = true;
     memberEl.innerHTML = `<option value="">— select a company first —</option>`;
+    // Unselecting the company also clears the project list — otherwise the
+    // previous company's projects would keep showing against the new search text.
+    projectEl.value = "";
+    projectEl.disabled = true;
+    projectEl.innerHTML = `<option value="">No project</option>`;
     devState.companyId = "";
     devState.companyName = "";
     devState.memberId = "";
@@ -7110,6 +7265,7 @@ function paintDevelopmentView() {
     <div class="dev-view">
     <div class="view-head">
       <h2>Development / View</h2>
+      <span class="muted head-count" id="dev-head-count"></span>
       <div class="view-actions">
         <button class="btn ghost" id="dev-export" type="button">Export Excel</button>
       </div>
@@ -7196,9 +7352,12 @@ function paintDevelopmentView() {
   const batchUpdate = panel.querySelector("#batch-update");
   const batchMass = panel.querySelector("#batch-mass");
   const batchCount = panel.querySelector("#batch-count");
+  const headCount = panel.querySelector("#dev-head-count");
 
   const syncBatchUI = () => {
     batchCount.textContent = devViewSelected.size + " selected";
+    // live count in the top page header — only shown once something is ticked
+    if (headCount) headCount.textContent = devViewSelected.size ? devViewSelected.size + " selected" : "";
     batchDelete.disabled = devViewSelected.size === 0;
     batchUpdate.disabled = devViewSelected.size === 0;
     batchMass.disabled = devViewSelected.size === 0;
@@ -9224,6 +9383,7 @@ async function openCustomerEdit(companyId) {
     members: (rec.members || []).map((m) => ({ ...m })),
     ship_to: (rec.ship_to || []).map((s) => ({ ...s })),
     projects: (rec.projects || []).map((p) => ({ ...p })),
+    special: (rec.special_requests || []).map((s) => ({ ...s })),
   };
   seedCustEditFromOriginal();
   custEditMode = true;
@@ -9242,6 +9402,7 @@ function seedCustEditFromOriginal() {
     members: custOriginal.members.map((m) => ({ id: m.id, name: m.name, email_prefix: m.email_prefix, title: m.title, tel: m.tel })),
     shipTo: custOriginal.ship_to.map((s) => ({ id: s.id, address: s.address, is_default: !!s.is_default })),
     projects: custOriginal.projects.map((p) => ({ id: p.id, name: p.name })),
+    special: custOriginal.special.map((s) => ({ id: s.id, text: s.text })),
   };
 }
 
@@ -9263,21 +9424,24 @@ async function renderCustomerEdit() {
       <button class="subtab" data-step="member" role="tab">Member</button>
       <button class="subtab" data-step="shipto" role="tab">Ship to</button>
       <button class="subtab" data-step="project" role="tab">Project</button>
+      <button class="subtab" data-step="special" role="tab">Special Request</button>
     </div>
 
     <div class="subpanel" id="cust-company"></div>
     <div class="subpanel" id="cust-member" style="display:none"></div>
     <div class="subpanel" id="cust-shipto" style="display:none"></div>
     <div class="subpanel" id="cust-project" style="display:none"></div>
+    <div class="subpanel" id="cust-special" style="display:none"></div>
   `;
 
   const subtabs = panel.querySelector("#custSubtabs");
   const switchTab = (step) => {
     subtabs.querySelectorAll(".subtab").forEach((t) =>
       t.classList.toggle("active", t.dataset.step === step));
-    ["company", "member", "shipto", "project"].forEach((s) => {
+    ["company", "member", "shipto", "project", "special"].forEach((s) => {
       const sec = panel.querySelector("#cust-" + s);
       if (sec) sec.style.display = s === step ? "" : "none";
+      if (s === "special" && step === "special") renderCustSpecialSection(companyId);
     });
   };
   subtabs.querySelectorAll(".subtab").forEach((t) => {
@@ -9288,6 +9452,7 @@ async function renderCustomerEdit() {
   renderCustMemberSection(companyId);
   renderCustShipToSection(companyId);
   renderCustProjectSection(companyId);
+  renderCustSpecialSection(companyId);
 
   switchTab("company");
 }
@@ -9860,6 +10025,134 @@ function renderCustProjectSection(companyId) {
   });
 
   renderProjList();
+}
+
+// --- Special Request section -------------------------------------------------
+function renderCustSpecialSection(companyId) {
+  const sec = panel.querySelector("#cust-special");
+  if (!sec) return;
+
+  const refreshState = () => {
+    const cur = custEdit.special.map((s) => `${s.id}:${s.text}`).join(";");
+    const orig = custOriginal.special.map((s) => `${s.id}:${s.text}`).join(";");
+    const dirty = cur !== orig ||
+      custEdit.special.length !== custOriginal.special.length ||
+      custEdit.special.some((s) => typeof s.id === "string" && s.id.startsWith("new-"));
+    sec.querySelector("#cesp-update").disabled = !dirty;
+    sec.querySelector("#cesp-reset").disabled = !dirty;
+  };
+
+  const renderSprList = () => {
+    const listEl = sec.querySelector("#cesp-list");
+    if (!custEdit.special.length) {
+      listEl.innerHTML = '<p class="muted small">No special requests yet.</p>';
+    } else {
+      listEl.innerHTML = custEdit.special.map((s, i) => `
+        <div class="member-row">
+          <span><strong data-i="${i}">${escapeHtml(s.text)}</strong></span>
+          <span class="muted">
+            <button class="icon-btn danger" data-rm="${i}" title="Remove">✕</button>
+          </span>
+        </div>`).join("");
+      listEl.querySelectorAll("[data-rm]").forEach((b) => {
+        b.addEventListener("click", () => {
+          const i = Number(b.dataset.rm);
+          const s = custEdit.special[i];
+          const doRemove = () => { custEdit.special.splice(i, 1); renderSprList(); refreshState(); };
+          if (typeof s.id === "number" || (typeof s.id !== "string" || !s.id.startsWith("new-"))) {
+            openConfirmModal("Remove request?", "Remove this special request from the company?", doRemove);
+          } else {
+            doRemove();
+          }
+        });
+      });
+      listEl.querySelectorAll("strong[data-i]").forEach((el) => {
+        el.addEventListener("click", () => {
+          const i = Number(el.dataset.i);
+          openInlineEdit(el, custEdit.special[i].text, (val) => {
+            const v = val.trim();
+            if (v) custEdit.special[i].text = v;
+            renderSprList();
+          });
+        });
+      });
+    }
+    refreshState();
+  };
+
+  sec.innerHTML = `
+    <div class="ship-list" id="cesp-list"></div>
+    <div class="member-form">
+      <h3 class="subhead">Add special request</h3>
+      <div class="field">
+        <label for="cesp-text">Request</label>
+        <textarea id="cesp-text" rows="4" placeholder="e.g. send linen guilder swatches…" autocomplete="off"></textarea>
+      </div>
+      <div class="actions">
+        <button class="btn" id="cesp-add" type="button" disabled>Add request</button>
+      </div>
+    </div>
+    <div class="actions create-final">
+      <button class="btn ghost" id="cesp-reset" type="button">Reset</button>
+      <button class="btn primary" id="cesp-update" type="button">Update</button>
+    </div>
+  `;
+
+  const textEl = sec.querySelector("#cesp-text");
+  const addBtn = sec.querySelector("#cesp-add");
+  textEl.addEventListener("input", () => { addBtn.disabled = !textEl.value.trim(); });
+
+  addBtn.addEventListener("click", () => {
+    if (addBtn.disabled) return;
+    const text = textEl.value.trim();
+    addBtn.disabled = true;
+    textEl.value = "";
+    custEdit.special.push({ id: "new-" + Date.now(), text });
+    renderSprList();
+  });
+
+  sec.querySelector("#cesp-reset").addEventListener("click", () => {
+    custEdit.special = custOriginal.special.map((s) => ({ id: s.id, text: s.text }));
+    textEl.value = "";
+    addBtn.disabled = true;
+    renderSprList();
+  });
+
+  sec.querySelector("#cesp-update").addEventListener("click", async () => {
+    const btn = sec.querySelector("#cesp-update");
+    if (btn.disabled) return;
+    btn.disabled = true;
+    btn.textContent = "Updating…";
+    try {
+      const origIds = custOriginal.special.filter((s) => typeof s.id === "number").map((s) => s.id);
+      const curIds = custEdit.special.filter((s) => typeof s.id === "number").map((s) => s.id);
+      for (const id of origIds) {
+        if (!curIds.includes(id)) {
+          await fetchJson(API + `/api/special-requests/${id}`, { method: "DELETE" });
+        }
+      }
+      for (const s of custEdit.special) {
+        if (typeof s.id === "string" && s.id.startsWith("new-")) {
+          const created = await fetchJson(API + `/api/special-requests/${companyId}`, {
+            method: "POST", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ text: s.text }),
+          });
+          s.id = created.id != null ? created.id : created;
+        }
+      }
+      const fresh = await fetchJson(API + `/api/companies/${companyId}`);
+      custOriginal.special = (fresh.special_requests || []).map((s) => ({ ...s }));
+      custEdit.special = custOriginal.special.map((s) => ({ id: s.id, text: s.text }));
+      btn.textContent = "Updated ✓";
+      renderSprList();
+    } catch (err) {
+      btn.textContent = "Update";
+      btn.disabled = false;
+      openConfirmModal("Update failed", err.message, () => {});
+    }
+  });
+
+  renderSprList();
 }
 
 async function removeMember(memberId) {

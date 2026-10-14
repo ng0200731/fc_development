@@ -13,7 +13,7 @@ PUT    /api/members/<id>      body: {name, email_prefix, title, tel}-> edit memb
 DELETE /api/members/<id>      -> remove member
 GET    /api/customers         -> flat list (company + its members) for the View page
 
-Run:  python server.py   (default port 8088)
+Run:  python server.py   (default port 8099; auto-falls-back if Windows blocks it)
 """
 
 import io
@@ -39,7 +39,12 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.path.join(BASE_DIR, "data", "fc.db")
 STATIC_DIR = os.path.join(BASE_DIR, "static")
 UPLOADS_DIR = os.path.join(BASE_DIR, "data", "uploads")
-PORT = int(os.environ.get("PORT", "8088"))
+PORT = int(os.environ.get("PORT", "8099"))
+# Windows (Hyper-V/WSL) reserves shifting TCP ranges each boot, so a hardcoded
+# port can be refused with WinError 10013 even though it looks free. If PORT
+# won't bind, we walk this spread of fallbacks (past and far from the common
+# dynamic-reservation zone) and finally let the OS pick an ephemeral port (0).
+PORT_FALLBACKS = (9000, 10080, 18080, 28888, 38080, 48080, 0)
 
 
 def _load_env_secret():
@@ -214,6 +219,17 @@ def init_db():
             name        TEXT NOT NULL,
             created_at  TEXT NOT NULL,
             UNIQUE(company_id, name)
+        )
+        """
+    )
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS special_requests (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            workspace_id  INTEGER NOT NULL DEFAULT 1,
+            company_id  INTEGER NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+            text        TEXT NOT NULL,
+            created_at  TEXT NOT NULL
         )
         """
     )
@@ -2037,11 +2053,15 @@ def api_get_company(handler, cid):
     projects = conn.execute(
         "SELECT * FROM projects WHERE company_id = ? ORDER BY id", (cid,)
     ).fetchall()
+    special_requests = conn.execute(
+        "SELECT * FROM special_requests WHERE company_id = ? ORDER BY id", (cid,)
+    ).fetchall()
     conn.close()
     out = dict(comp)
     out["members"] = [dict(m) for m in members]
     out["ship_to"] = [dict(s) for s in ship_to]
     out["projects"] = [dict(p) for p in projects]
+    out["special_requests"] = [dict(s) for s in special_requests]
     return json_response(handler, out)
 
 
@@ -2147,6 +2167,7 @@ def api_delete_company(handler, cid):
     conn.execute("DELETE FROM members WHERE company_id = ?", (cid,))
     conn.execute("DELETE FROM ship_to WHERE company_id = ?", (cid,))
     conn.execute("DELETE FROM projects WHERE company_id = ?", (cid,))
+    conn.execute("DELETE FROM special_requests WHERE company_id = ?", (cid,))
     conn.execute("DELETE FROM developments WHERE company_id = ?", (cid,))
     conn.execute("DELETE FROM enquiries WHERE company_id = ?", (cid,))
     conn.execute("DELETE FROM companies WHERE id = ?", (cid,))
@@ -2182,10 +2203,14 @@ def api_list_customers(handler):
         projects = conn.execute(
             "SELECT * FROM projects WHERE company_id = ? ORDER BY id", (c["id"],)
         ).fetchall()
+        special_requests = conn.execute(
+            "SELECT * FROM special_requests WHERE company_id = ? ORDER BY id", (c["id"],)
+        ).fetchall()
         item = dict(c)
         item["members"] = [dict(m) for m in members]
         item["ship_to"] = [dict(s) for s in ship_to]
         item["projects"] = [dict(p) for p in projects]
+        item["special_requests"] = [dict(s) for s in special_requests]
         out.append(item)
     conn.close()
     return json_response(handler, out)
@@ -2319,6 +2344,51 @@ def api_delete_project(handler, pid):
     conn.commit()
     conn.close()
     return json_response(handler, {"ok": True, "id": pid}, 200)
+
+
+# --- Special request handlers ----------------------------------------------
+
+def api_list_special_requests(handler, cid):
+    conn = db()
+    rows = conn.execute(
+        "SELECT * FROM special_requests WHERE company_id = ? ORDER BY id", (cid,)
+    ).fetchall()
+    conn.close()
+    return json_response(handler, [dict(r) for r in rows])
+
+
+def api_add_special_request(handler, cid):
+    conn = db()
+    comp = conn.execute("SELECT * FROM companies WHERE id = ?", (cid,)).fetchone()
+    if not comp:
+        conn.close()
+        return json_response(handler, {"error": "company not found"}, 404)
+    data = read_json_body(handler)
+    text = (data.get("text") or "").strip()
+    if not text:
+        conn.close()
+        return json_response(handler, {"error": "text is required"}, 400)
+    cur = conn.cursor()
+    cur.execute(
+        "INSERT INTO special_requests (company_id, text, created_at) VALUES (?, ?, ?)",
+        (cid, text, now_iso()),
+    )
+    rid = cur.lastrowid
+    conn.commit()
+    conn.close()
+    return json_response(handler, {"id": rid, "company_id": cid, "text": text}, 201)
+
+
+def api_delete_special_request(handler, rid):
+    conn = db()
+    row = conn.execute("SELECT * FROM special_requests WHERE id = ?", (rid,)).fetchone()
+    if not row:
+        conn.close()
+        return json_response(handler, {"error": "not found"}, 404)
+    conn.execute("DELETE FROM special_requests WHERE id = ?", (rid,))
+    conn.commit()
+    conn.close()
+    return json_response(handler, {"ok": True, "id": rid}, 200)
 
 
 # --- Development handlers --------------------------------------------------
@@ -3073,6 +3143,18 @@ class Handler(SimpleHTTPRequestHandler):
                 api_delete_project(self, pid); return True
             return False
 
+        if path.startswith("/api/special-requests/"):
+            rest = path[len("/api/special-requests/"):]
+            if rest.isdigit():
+                rid = int(rest)
+                if method == "GET":
+                    api_list_special_requests(self, rid); return True
+                if method == "POST":
+                    api_add_special_request(self, rid); return True
+                if method == "DELETE":
+                    api_delete_special_request(self, rid); return True
+            return False
+
         if path.startswith("/api/companies/"):
             rest = path[len("/api/companies/"):]
             if rest.isdigit():
@@ -3210,10 +3292,32 @@ class Handler(SimpleHTTPRequestHandler):
         pass  # quiet
 
 
+def _create_server():
+    """Bind on the first usable port from PORT + fallbacks.
+
+    Windows (Hyper-V/WSL NAT) dynamically reserves TCP ranges that shift on
+    every boot; a port can be refused with WinError 10013 "access denied" while
+    also looking free in netstat. Each return value reports the real port, so
+    callers never have to guess.
+    """
+    for port in (PORT, *PORT_FALLBACKS):
+        try:
+            server = ThreadingHTTPServer(("0.0.0.0", port), Handler)
+        except OSError:
+            continue  # port blocked (excluded range) or already in use
+        return server, server.server_address[1]
+    raise OSError("no usable port for FC server")
+
+
 def main():
     init_db()
-    server = ThreadingHTTPServer(("0.0.0.0", PORT), Handler)
-    print(f"FC server on http://localhost:{PORT}  (LAN: http://{os.environ.get('COMPUTERNAME','localhost')}:{PORT})")
+    server, actual_port = _create_server()
+    # Tell start.bat which port won, so it can open the right URL. data/ is
+    # gitignored runtime state, so this never pollutes the repo.
+    with open(os.path.join(BASE_DIR, "data", "port.txt"), "w") as f:
+        f.write(str(actual_port))
+    hostname = os.environ.get("COMPUTERNAME", "localhost")
+    print(f"FC server on http://localhost:{actual_port}  (LAN: http://{hostname}:{actual_port})")
     print(f"DB: {DB_PATH}")
     print("CTRL+C to stop.")
     try:

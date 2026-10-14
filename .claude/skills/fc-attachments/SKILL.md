@@ -88,7 +88,7 @@ Do **NOT** use `imageUrl` for documents, and do **NOT** pass bare `blob:` URLs t
 ## Debugging checklist (when user says "can't fetch attachment")
 1. Is the file actually on disk? `ls data/uploads/`. If missing → upload endpoint failed (check
    `buildDevelopmentPayload` was given `uploads/...` names, not `blob:` or orig filename).
-2. Is the DB column storing `uploads/...`? `curl localhost:8088/api/developments/<id>` and inspect
+2. Is the DB column storing `uploads/...`? `curl localhost:8099/api/developments/<id>` and inspect
    `image_names` / `doc_names`. Bare filenames or `blob:` = wrong payload.
 3. Does `GET /uploads/<rest>` return 200? 404 = path escaped sandbox (traversal guard) or wrong rel.
 4. Is the View using `assetUrl`? A `blob:`/sample-only resolver won't load `uploads/...`.
